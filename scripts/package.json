@@ -1,0 +1,12 @@
+{
+  "name": "traco-integrado-scripts",
+  "private": true,
+  "description": "Scripts administrativos do Traço Integrado (backup/restore do Firestore)",
+  "scripts": {
+    "backup": "node backup-firestore.js",
+    "restore": "node restore-firestore.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}
