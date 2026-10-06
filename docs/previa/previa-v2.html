@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Traço Integrado v2 — Prévia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Prévia visual da v2 — mesma identidade da v1 (cores, fontes, logo), acabamento elevado.
+   Dados fictícios. Nada aqui grava no Firestore. */
+:root{
+  --bg:#F2F0EA; --surface:#FFFFFF; --surface-2:#EAE7DD; --surface-3:#F7F6F1; --border:#D9D4C6; --border-strong:#C4BEAD;
+  --text:#22262A; --text-muted:#666B63; --text-faint:#8D9189;
+  --accent:#3A3A3A; --accent-strong:#111111; --accent-soft:#E9E9E7; --accent-contrast:#FFFFFF;
+  --good:#2E7D46; --good-soft:#DDEFE1; --warn:#9C6B0B; --warn-soft:#F3E7C9;
+  --bad:#AD3A2C; --bad-soft:#F5DEDA; --info:#2E5AAC; --info-soft:#DFE7F5;
+  --shadow-sm:0 1px 2px rgba(30,28,20,.06);
+  --shadow:0 1px 2px rgba(30,28,20,.06), 0 8px 24px -12px rgba(30,28,20,.22);
+  --radius:14px; --radius-sm:10px;
+  --font-display:'Big Shoulders Display','Arial Narrow',sans-serif;
+  --font-body:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+  --nav-h:68px; --top-h:60px; --side-w:248px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#121516; --surface:#1A1F21; --surface-2:#222A2D; --surface-3:#1E2427; --border:#323B3F; --border-strong:#46525A;
+  --text:#ECEBE4; --text-muted:#A0A7A1; --text-faint:#78807B;
+  --accent:#D6D6D6; --accent-strong:#FFFFFF; --accent-soft:#2C3133; --accent-contrast:#111111;
+  --good:#7BD197; --good-soft:#1C3226; --warn:#E6C15F; --warn-soft:#3A3219; --bad:#EE8F80; --bad-soft:#3D2320; --info:#8FB1F0; --info-soft:#1E2A40;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4); --shadow:0 1px 2px rgba(0,0,0,.45), 0 8px 24px -12px rgba(0,0,0,.7);
+}}
+:root[data-theme="dark"]{
+  --bg:#121516; --surface:#1A1F21; --surface-2:#222A2D; --surface-3:#1E2427; --border:#323B3F; --border-strong:#46525A;
+  --text:#ECEBE4; --text-muted:#A0A7A1; --text-faint:#78807B;
+  --accent:#D6D6D6; --accent-strong:#FFFFFF; --accent-soft:#2C3133; --accent-contrast:#111111;
+  --good:#7BD197; --good-soft:#1C3226; --warn:#E6C15F; --warn-soft:#3A3219; --bad:#EE8F80; --bad-soft:#3D2320; --info:#8FB1F0; --info-soft:#1E2A40;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4); --shadow:0 1px 2px rgba(0,0,0,.45), 0 8px 24px -12px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;color:inherit}
+[hidden]{display:none!important}
+.logo-dark{display:none}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .logo-light{display:none} :root:not([data-theme="light"]) .logo-dark{display:block} }
+:root[data-theme="dark"] .logo-light{display:none} :root[data-theme="dark"] .logo-dark{display:block}
+svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+/* ---------- faixa de prévia ---------- */
+.preview-ribbon{position:fixed;top:0;left:0;right:0;z-index:90;height:24px;display:flex;align-items:center;justify-content:center;gap:8px;
+  background:repeating-linear-gradient(135deg,#1b1b1b 0 10px,#262626 10px 20px);color:#f2f0ea;font:600 11px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase}
+
+/* ---------- shell ---------- */
+.app{min-height:100vh;padding-top:24px}
+.side{display:none}
+.top{position:sticky;top:24px;z-index:40;height:var(--top-h);display:flex;align-items:center;gap:10px;padding:0 14px;
+  background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--border)}
+.top .brand-m img{height:30px;width:auto;display:block}
+.obra-sel{display:flex;flex-direction:column;min-width:0;line-height:1.15;padding:6px 8px;border-radius:10px;border:none;background:none;text-align:left;cursor:pointer}
+.obra-sel .k{font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.obra-sel .v{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:4px}
+.top .spacer{flex:1}
+.icon-btn{position:relative;width:42px;height:42px;display:grid;place-items:center;border-radius:12px;border:1px solid transparent;background:none;cursor:pointer;color:var(--text)}
+.icon-btn:hover{background:var(--surface-2)}
+.badge-dot{position:absolute;top:7px;right:7px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--bad);color:#fff;font:700 10px/17px var(--font-body);text-align:center;border:2px solid var(--surface)}
+.sync{display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.sync .dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px var(--good-soft)}
+.sync.off .dot{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
+.sync .lbl-long{display:none}
+.search-trigger{display:none}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--accent-strong);color:var(--accent-contrast);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
+
+main{padding:16px 16px calc(var(--nav-h) + 96px);max-width:1180px;margin:0 auto}
+
+/* barra inferior (celular) */
+.bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:50;height:calc(var(--nav-h) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
+  display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border-top:1px solid var(--border)}
+.bn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:none;background:none;font-size:11.5px;font-weight:600;color:var(--text-muted);cursor:pointer;position:relative}
+.bn svg.i{width:24px;height:24px}
+.bn[aria-current="page"]{color:var(--accent-strong)}
+.bn[aria-current="page"]::before{content:"";position:absolute;top:0;left:28%;right:28%;height:3px;border-radius:0 0 3px 3px;background:var(--accent-strong)}
+.bn .badge-dot{top:6px;right:calc(50% - 22px)}
+.fab{position:fixed;right:16px;bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));z-index:45;height:58px;padding:0 22px 0 18px;border-radius:18px;border:none;
+  background:var(--accent-strong);color:var(--accent-contrast);display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;box-shadow:0 10px 24px -8px rgba(0,0,0,.45);cursor:pointer}
+
+/* desktop: sidebar */
+@media (min-width:960px){
+  .app{display:grid;grid-template-columns:var(--side-w) 1fr}
+  .side{display:flex;flex-direction:column;position:sticky;top:24px;height:calc(100vh - 24px);background:var(--surface);border-right:1px solid var(--border);padding:18px 14px}
+  .side .logo{padding:4px 10px 18px;border-bottom:1px solid var(--border);margin-bottom:14px}
+  .side .logo img{height:44px;width:auto}
+  .side .logo .prod{font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:.3px;margin-top:10px;color:var(--accent-strong)}
+  .side nav{display:flex;flex-direction:column;gap:2px}
+  .side .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint);font-weight:700;padding:14px 12px 6px}
+  .sn{display:flex;align-items:center;gap:11px;height:40px;padding:0 12px;border-radius:10px;border:none;background:none;font-size:14px;font-weight:600;color:var(--text-muted);cursor:pointer;text-align:left}
+  .sn:hover{background:var(--surface-2);color:var(--text)}
+  .sn[aria-current="page"]{background:var(--accent-strong);color:var(--accent-contrast)}
+  .sn .cnt{margin-left:auto;font:600 11px var(--font-mono);padding:2px 7px;border-radius:999px;background:var(--bad-soft);color:var(--bad)}
+  .sn[aria-current="page"] .cnt{background:rgba(255,255,255,.18);color:inherit}
+  .side .foot{margin-top:auto;padding:12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:13px}
+  .side .foot .who{line-height:1.2;min-width:0} .side .foot .who b{display:block} .side .foot .who span{color:var(--text-muted);font-size:12px}
+  .top{padding:0 24px}
+  .top .brand-m{display:none}
+  .search-trigger{display:flex;align-items:center;gap:10px;height:40px;width:min(420px,40vw);padding:0 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface-3);color:var(--text-muted);font-size:14px;cursor:pointer}
+  .search-trigger kbd{margin-left:auto;font:600 11px var(--font-mono);padding:2px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface)}
+  .sync .lbl-long{display:inline} .sync .lbl-short{display:none}
+  .bottom-nav,.fab-m{display:none}
+  .fab{position:static;height:42px;border-radius:12px;padding:0 16px;font-size:14px;box-shadow:none}
+  main{padding:28px 32px 64px}
+}
+.fab-d{display:none} @media (min-width:960px){ .fab-d{display:flex} }
+
+/* ---------- componentes ---------- */
+h1.page{font-family:var(--font-display);font-weight:800;font-size:30px;line-height:1.05;margin:4px 0 2px;letter-spacing:.2px;color:var(--accent-strong)}
+.page-sub{color:var(--text-muted);margin:0 0 18px;font-size:14px}
+.head-row{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.head-row .grow{flex:1;min-width:200px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.card-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.card-h h3{margin:0;font-size:15px;font-weight:700}
+.card-h .more{margin-left:auto;font-size:13px;font-weight:600;color:var(--text-muted);background:none;border:none;cursor:pointer}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--border-strong);background:var(--surface);font-size:14.5px;font-weight:600;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--accent-contrast)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.sm{height:36px;padding:0 12px;font-size:13px;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.good{background:var(--good-soft);color:var(--good)} .pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.info{background:var(--info-soft);color:var(--info)}
+.pill.neutral{background:var(--accent-soft);color:var(--text)}
+.chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;margin-bottom:14px}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;height:38px;padding:0 15px;border-radius:999px;border:1px solid var(--border);background:var(--surface);font-size:13.5px;font-weight:600;color:var(--text-muted);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--accent-contrast)}
+.chip .n{font-family:var(--font-mono);margin-left:4px;opacity:.7}
+
+/* banner offline */
+.offline{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-size:13.5px;font-weight:600;margin-bottom:16px;border:1px solid color-mix(in srgb,var(--warn) 25%,transparent)}
+.offline b{color:var(--text)} .offline .x{margin-left:auto;font-weight:600;font-size:12.5px;opacity:.85}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:18px}
+@media (min-width:760px){ .kpis{grid-template-columns:repeat(4,1fr);gap:14px} }
+.kpi{padding:14px 16px;position:relative;overflow:hidden;cursor:pointer;text-align:left;border:1px solid var(--border);background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.kpi .n{font:600 32px/1 var(--font-mono);letter-spacing:-.5px}
+.kpi .l{margin-top:8px;font-size:13px;font-weight:600}
+.kpi .d{font-size:12px;color:var(--text-muted);margin-top:2px}
+.kpi.bad .n{color:var(--bad)} .kpi.warn .n{color:var(--warn)} .kpi.info .n{color:var(--info)}
+.kpi::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--border)}
+.kpi.bad::after{background:var(--bad)} .kpi.warn::after{background:var(--warn)} .kpi.info::after{background:var(--info)} .kpi.good::after{background:var(--good)}
+
+.grid-home{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.grid-home>*{min-width:0}
+@media (min-width:960px){ .grid-home{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)} }
+.col{min-width:0}
+@media (max-width:959px){
+  .top{gap:4px;padding:0 8px 0 12px}
+  .top .spacer{display:none}
+  .obra-sel{flex:1}
+  #theme{display:none}
+  .icon-btn{width:40px}
+  .hide-m{display:none}
+}
+.list{display:flex;flex-direction:column}
+.li{display:flex;align-items:center;gap:12px;padding:13px 16px;border-top:1px solid var(--border);cursor:pointer;min-height:64px}
+.li:first-child{border-top:none}
+.li:hover{background:var(--surface-3)}
+.li .ico{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--surface-2);flex:none}
+.li .ico.bad{background:var(--bad-soft);color:var(--bad)} .li .ico.warn{background:var(--warn-soft);color:var(--warn)} .li .ico.info{background:var(--info-soft);color:var(--info)} .li .ico.good{background:var(--good-soft);color:var(--good)}
+.li .t{font-weight:600;font-size:14.5px} .li .s{font-size:12.5px;color:var(--text-muted)}
+.li .body{flex:1;min-width:0} .li .body .t,.li .body .s{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .r{text-align:right;font-size:12.5px;color:var(--text-muted);flex:none}
+.when{font:600 12px var(--font-mono);color:var(--text-muted)}
+
+.bars{display:flex;align-items:flex-end;gap:10px;height:150px;padding:18px 16px 8px}
+.bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.bar .v{width:100%;max-width:38px;border-radius:6px 6px 2px 2px;background:var(--accent);opacity:.85}
+.bar.cur .v{background:var(--accent-strong);opacity:1}
+.bar .m{font:600 11px var(--font-mono);color:var(--text-muted)}
+.bar .q{font:600 11px var(--font-mono)}
+
+/* ---------- ficha FVS ---------- */
+.crumbs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0 14px}
+.crumb{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:8px;background:var(--surface-2);font-size:13px;font-weight:600}
+.crumbs .sep{color:var(--text-faint)}
+.fvs-meta{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 16px;padding:14px 16px}
+@media (min-width:760px){ .fvs-meta{grid-template-columns:repeat(4,1fr)} }
+.fvs-meta .k{font-size:11.5px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.fvs-meta .v{font-weight:600;font-size:14px}
+.seg-el{display:flex;gap:8px;overflow-x:auto;padding:14px 16px;border-top:1px solid var(--border);scrollbar-width:none}
+.seg-el button{flex:none;height:40px;padding:0 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);font-weight:600;font-size:13.5px;cursor:pointer;display:flex;align-items:center;gap:8px}
+.seg-el button[aria-pressed="true"]{border-color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent-strong)}
+.seg-el .prog{font:600 11px var(--font-mono);color:var(--text-muted)}
+.cat{margin-top:14px}
+.cat-h{display:flex;align-items:center;gap:10px;padding:0 4px 8px}
+.cat-h h4{margin:0;font-size:12.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)}
+.cat-h .line{flex:1;height:1px;background:var(--border)}
+.item{padding:14px 16px;border-top:1px solid var(--border)}
+.item:first-child{border-top:none}
+.item .n{font-weight:600;font-size:15px}
+.item .m{font-size:13px;color:var(--text-muted);margin-top:2px}
+.item .tol{display:inline-block;margin-top:6px;font:500 12px var(--font-mono);padding:2px 8px;border-radius:6px;background:var(--surface-2);color:var(--text-muted)}
+.ans{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+@media (min-width:760px){ .item{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:center} .ans{margin-top:0} }
+.ans button{height:52px;border-radius:12px;border:1.5px solid var(--border);background:var(--surface);font-weight:700;font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;line-height:1.1}
+.ans button small{font-size:10px;font-weight:600;color:var(--text-muted)}
+.ans button svg.i{width:18px;height:18px}
+.ans button[data-v="P"][aria-pressed="true"]{background:var(--good);border-color:var(--good);color:#fff}
+.ans button[data-v="X"][aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:#fff}
+.ans button[data-v="V"][aria-pressed="true"]{background:var(--info);border-color:var(--info);color:#fff}
+.ans button[data-v="NA"][aria-pressed="true"]{background:var(--text-muted);border-color:var(--text-muted);color:var(--surface)}
+.ans button[aria-pressed="true"] small{color:inherit;opacity:.85}
+.reprov{grid-column:1/-1;margin-top:12px;padding:12px;border-radius:12px;background:var(--bad-soft);border:1px dashed color-mix(in srgb,var(--bad) 45%,transparent)}
+.reprov .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.reprov .lbl{font-size:12.5px;font-weight:700;color:var(--bad);display:flex;align-items:center;gap:6px}
+.photos{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.ph{width:84px;height:84px;border-radius:10px;position:relative;overflow:hidden;background:linear-gradient(135deg,#8c8a80,#5e5c55);flex:none}
+.ph .stamp{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;background:rgba(0,0,0,.6);color:#fff;font:500 8.5px/1.25 var(--font-mono)}
+.ph.add{background:var(--surface);border:1.5px dashed var(--bad);display:grid;place-items:center;color:var(--bad);cursor:pointer;font-size:11px;font-weight:700;text-align:center}
+.nc-auto{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;font-weight:600}
+.sign-grid{display:grid;gap:12px;padding:16px}
+@media (min-width:760px){ .sign-grid{grid-template-columns:1fr 1fr} }
+.sign{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.sign canvas{display:block;width:100%;height:130px;background:var(--surface-3);touch-action:none;cursor:crosshair}
+.sign .cap{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-top:1px solid var(--border);font-size:12.5px}
+.sign .cap b{display:block;font-size:13.5px}
+.sign .cap .when{font-size:11px}
+.savebar{position:sticky;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px);z-index:30;margin-top:16px;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 14px;border-radius:16px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow)}
+@media (min-width:960px){ .savebar{bottom:16px} }
+.savebar .st{flex:1;font-size:12.5px;color:var(--text-muted);display:flex;align-items:center;gap:8px;min-width:0}
+.savebar .st b{color:var(--text)}
+
+/* ---------- concreto ---------- */
+.tabs{display:flex;gap:4px;padding:4px;border-radius:12px;background:var(--surface-2);margin-bottom:16px;overflow-x:auto;scrollbar-width:none}
+.tabs button{flex:1;min-width:max-content;height:40px;padding:0 14px;border-radius:9px;border:none;background:none;font-weight:600;font-size:13.5px;color:var(--text-muted);cursor:pointer}
+.tabs button[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
+.bt-grid{display:grid;gap:12px}
+@media (min-width:760px){ .bt-grid{grid-template-columns:repeat(2,1fr)} }
+@media (min-width:1180px){ .bt-grid{grid-template-columns:repeat(3,1fr)} }
+.bt{padding:14px 16px}
+.bt-top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.bt-num{font-family:var(--font-display);font-weight:800;font-size:24px;line-height:1}
+.bt-top .nf{font:600 13px var(--font-mono);color:var(--text-muted)}
+.bt-top .pill{margin-left:auto}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px;font-size:13px}
+.kv .k{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.kv .v{font-weight:600}
+.kv .v.bad{color:var(--bad)}
+.timeline{margin-top:12px}
+.tl-bar{position:relative;height:10px;border-radius:6px;background:var(--surface-2);overflow:hidden}
+.tl-fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:var(--good)}
+.tl-fill.warn{background:var(--warn)} .tl-fill.bad{background:var(--bad)}
+.tl-limit{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text);opacity:.55}
+.tl-lbl{display:flex;justify-content:space-between;font:500 11.5px var(--font-mono);color:var(--text-muted);margin-top:6px}
+.alert-line{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:12.5px;font-weight:600;color:var(--bad);background:var(--bad-soft);padding:8px 10px;border-radius:9px}
+.bt.add{display:grid;place-items:center;min-height:180px;border-style:dashed;color:var(--text-muted);font-weight:600;cursor:pointer;background:transparent}
+.sum-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.sum{flex:1;min-width:130px;padding:12px 14px}
+.sum .k{font-size:11.5px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.sum .v{font:600 22px var(--font-mono);margin-top:4px}
+.sum .v small{font-size:13px;color:var(--text-muted)}
+
+.cp-row{display:grid;grid-template-columns:1fr;gap:10px;padding:14px 16px;border-top:1px solid var(--border)}
+.cp-row:first-child{border-top:none}
+@media (min-width:760px){ .cp-row{grid-template-columns:1.2fr 2fr .9fr;align-items:center} }
+.cp-ages{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.age{border:1px solid var(--border);border-radius:9px;padding:6px 8px;text-align:center}
+.age .d{font:600 10.5px var(--font-mono);color:var(--text-muted)}
+.age .mpa{font:600 15px var(--font-mono)}
+.age.ok{background:var(--good-soft);border-color:transparent} .age.ok .mpa{color:var(--good)}
+.age.due{background:var(--warn-soft);border-color:transparent} .age.due .mpa{color:var(--warn)}
+.age.fail{background:var(--bad-soft);border-color:transparent} .age.fail .mpa{color:var(--bad)}
+.spark{width:100%;height:46px}
+
+/* ---------- NCs ---------- */
+.kanban{display:grid;gap:12px}
+@media (min-width:960px){ .kanban{grid-template-columns:repeat(4,1fr);align-items:start} }
+.col-h{display:flex;align-items:center;gap:8px;padding:2px 4px 10px;font-size:13px;font-weight:700}
+.col-h .n{font:600 12px var(--font-mono);color:var(--text-muted)}
+.col-h .dot{width:9px;height:9px;border-radius:50%}
+.nc{padding:13px 14px;margin-bottom:10px;cursor:pointer;border-left:4px solid var(--border)}
+.nc.late{border-left-color:var(--bad)}
+.nc .code{font:600 12px var(--font-mono);color:var(--text-muted);display:flex;gap:8px;align-items:center}
+.nc .t{font-weight:600;font-size:14.5px;margin:4px 0 8px}
+.nc .meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--text-muted)}
+.nc .meta span{display:inline-flex;align-items:center;gap:4px}
+.nc .meta svg.i{width:14px;height:14px}
+.nc .due-late{color:var(--bad);font-weight:700}
+@media (max-width:959px){ .kanban .colwrap{display:none} .kanban .colwrap.show{display:block} }
+
+/* ---------- mais ---------- */
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media (min-width:760px){ .tiles{grid-template-columns:repeat(3,1fr)} }
+@media (min-width:1180px){ .tiles{grid-template-columns:repeat(4,1fr)} }
+.tile{padding:16px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:10px;min-height:132px}
+.tile .ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--surface-2)}
+.tile .t{font-weight:700;font-size:15px}
+.tile .d{font-size:12.5px;color:var(--text-muted);line-height:1.35}
+.tile .tag{align-self:flex-start;font:600 10.5px var(--font-mono);padding:2px 7px;border-radius:6px;background:var(--accent-soft);color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}
+
+/* ---------- paleta Ctrl+K ---------- */
+.palette-bg{position:fixed;inset:0;z-index:100;background:rgba(10,12,12,.45);display:flex;align-items:flex-start;justify-content:center;padding:12vh 14px 14px}
+.palette{width:100%;max-width:620px;background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);overflow:hidden}
+.palette input{width:100%;height:58px;border:none;border-bottom:1px solid var(--border);padding:0 18px 0 50px;font:500 16px var(--font-body);background:transparent;color:var(--text);outline:none}
+.palette .in{position:relative} .palette .in svg{position:absolute;left:17px;top:19px;color:var(--text-muted)}
+.palette .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint);font-weight:700;padding:12px 18px 4px}
+.palette .res{display:flex;align-items:center;gap:12px;padding:10px 18px;cursor:pointer;font-size:14px}
+.palette .res:hover,.palette .res.sel{background:var(--surface-2)}
+.palette .res .s{margin-left:auto;font-size:12px;color:var(--text-muted)}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + 90px);z-index:120;background:var(--accent-strong);color:var(--accent-contrast);padding:12px 18px;border-radius:12px;font-weight:600;font-size:14px;box-shadow:var(--shadow);display:flex;gap:10px;align-items:center;max-width:calc(100vw - 32px)}
+@media (min-width:960px){ .toast{bottom:28px} }
+.note{margin-top:22px;padding:14px 16px;border-radius:12px;border:1px dashed var(--border-strong);color:var(--text-muted);font-size:13px}
+.note b{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="preview-ribbon">Prévia v2 · dados fictícios · nada é gravado</div>
+
+<div class="app">
+  <!-- Sidebar (PC) -->
+  <aside class="side">
+    <div class="logo">
+      <img class="logo-light" src="sig-logo-light.png" alt="Belavista Consórcio">
+      <img class="logo-dark" src="sig-logo-dark.png" alt="Belavista Consórcio">
+      <div class="prod">Traço Integrado</div>
+    </div>
+    <nav id="side-nav">
+      <button class="sn" data-go="inicio"><svg class="i" data-i="home"></svg>Início</button>
+      <div class="grp">Qualidade</div>
+      <button class="sn" data-go="fvs"><svg class="i" data-i="check"></svg>Fichas FVS</button>
+      <button class="sn" data-go="ncs"><svg class="i" data-i="alert"></svg>Não conformidades<span class="cnt">4</span></button>
+      <button class="sn" data-go="mais"><svg class="i" data-i="pin"></svg>Pendências</button>
+      <div class="grp">Concreto</div>
+      <button class="sn" data-go="concreto"><svg class="i" data-i="truck"></svg>Rastreabilidade</button>
+      <button class="sn" data-go="concreto" data-tab="cps"><svg class="i" data-i="flask"></svg>Corpos de prova<span class="cnt">3</span></button>
+      <div class="grp">Obra</div>
+      <button class="sn" data-go="mais"><svg class="i" data-i="book"></svg>Diário de obra</button>
+      <button class="sn" data-go="mais"><svg class="i" data-i="grid"></svg>Avanço físico</button>
+      <button class="sn" data-go="mais"><svg class="i" data-i="chart"></svg>Relatórios</button>
+    </nav>
+    <div class="foot"><div class="avatar">MH</div><div class="who"><b>Matheus H.</b><span>Engenheiro · Admin</span></div></div>
+  </aside>
+
+  <div class="col">
+    <header class="top">
+      <span class="brand-m"><img class="logo-light" src="sig-logo-light.png" alt="Belavista Consórcio"><img class="logo-dark" src="sig-logo-dark.png" alt=""></span>
+      <button class="obra-sel" title="Trocar de obra"><span class="k">Obra</span><span class="v">Belavista Ipanema <svg class="i" data-i="chev" style="width:14px;height:14px"></svg></span></button>
+      <button class="search-trigger" id="open-palette"><svg class="i" data-i="search"></svg>Buscar ficha, NF, pavimento…<kbd>Ctrl K</kbd></button>
+      <span class="spacer"></span>
+      <button class="sync" id="sync" title="Toque para simular sem sinal"><span class="dot"></span><span class="lbl-short" id="sync-s">Online</span><span class="lbl-long" id="sync-l">Tudo sincronizado</span></button>
+      <button class="icon-btn" id="open-palette-m" aria-label="Buscar" style="display:var(--m-only,grid)"><svg class="i" data-i="search"></svg></button>
+      <button class="icon-btn" aria-label="Notificações"><svg class="i" data-i="bell"></svg><span class="badge-dot">5</span></button>
+      <button class="icon-btn" id="theme" aria-label="Tema claro/escuro"><svg class="i" data-i="moon"></svg></button>
+      <button class="btn primary fab fab-d" data-go="fvs-ficha"><svg class="i" data-i="plus"></svg>Nova FVS</button>
+    </header>
+
+    <main id="main">
+
+<!-- ===================== INÍCIO ===================== -->
+<section data-screen="inicio">
+  <div class="offline" id="offline-banner" hidden>
+    <svg class="i" data-i="cloudoff"></svg>
+    <div><b>Sem sinal.</b> 3 alterações guardadas neste aparelho — serão enviadas sozinhas quando a conexão voltar.</div>
+    <span class="x">Ver fila</span>
+  </div>
+  <div class="head-row">
+    <div class="grow">
+      <div class="when">TERÇA · 06 OUT 2026</div>
+      <h1 class="page">Bom dia, Matheus</h1>
+      <p class="page-sub" style="margin:0">Concretagem da laje do 6º pavimento hoje às 14h.</p>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <button class="kpi info" data-go="fvs"><div class="n">12</div><div class="l">FVS em aberto</div><div class="d">3 aguardando assinatura</div></button>
+    <button class="kpi bad" data-go="ncs"><div class="n">4</div><div class="l">NCs vencidas</div><div class="d">de 11 abertas</div></button>
+    <button class="kpi warn" data-go="concreto" data-tab="cps"><div class="n">3</div><div class="l">CPs a romper</div><div class="d">nos próximos 3 dias</div></button>
+    <button class="kpi good" data-go="concreto"><div class="n">186<small style="font-size:15px;color:var(--text-muted)"> m³</small></div><div class="l">Concretado em outubro</div><div class="d">+12% vs. setembro</div></button>
+  </div>
+
+  <div class="grid-home">
+    <div class="card">
+      <div class="card-h"><h3>Hoje na obra</h3><button class="more" data-go="mais">Diário de obra →</button></div>
+      <div class="list">
+        <div class="li" data-go="concreto"><div class="ico info"><svg class="i" data-i="truck"></svg></div><div class="body"><div class="t">Concretagem · Laje 6º Pav. Tipo (601)</div><div class="s">42 m³ previstos · fck 35 MPa · slump 12±2 · bomba lança</div></div><div class="r"><div class="when">14:00</div></div></div>
+        <div class="li" data-go="concreto" data-tab="cps"><div class="ico warn"><svg class="i" data-i="flask"></svg></div><div class="body"><div class="t">Romper 2 séries de 7 dias</div><div class="s">Série 0412 e 0413 · Pilares 5º Pav.</div></div><div class="r"><span class="pill warn">Hoje</span></div></div>
+        <div class="li" data-go="fvs-ficha"><div class="ico"><svg class="i" data-i="check"></svg></div><div class="body"><div class="t">FVS 04 · 004-033 aguarda sua assinatura</div><div class="s">Laje 6º Pav. · inspecionada por Ingrid S.</div></div><div class="r"><svg class="i" data-i="chevr"></svg></div></div>
+        <div class="li" data-go="ncs"><div class="ico bad"><svg class="i" data-i="alert"></svg></div><div class="body"><div class="t">NC-0139 vence hoje</div><div class="s">Falha de concretagem em viga V12 · FREIBA</div></div><div class="r"><span class="pill bad">Vence hoje</span></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Volume concretado por mês</h3><span class="when" style="margin-left:auto">m³</span></div>
+      <div class="bars" id="bars"></div>
+      <div style="padding:6px 16px 16px;display:flex;gap:16px;font-size:12.5px;color:var(--text-muted)">
+        <span><b class="mono" style="color:var(--text)">8,1%</b> betonadas com ocorrência</span>
+        <span><b class="mono" style="color:var(--text)">2h04</b> tempo médio usina→lançamento</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><b>O que esta prévia mostra:</b> navegação inferior no celular e lateral no PC, indicador de envio pendente (toque em “Online” para simular sem sinal), busca global (<b>Ctrl K</b>), modo escuro, ficha FVS com botões grandes, foto obrigatória no item reprovado, NC automática e assinatura, betonadas em cartões com alerta de 2h30 e controle de CPs.</div>
+</section>
+
+<!-- ===================== LISTA FVS ===================== -->
+<section data-screen="fvs" hidden>
+  <div class="head-row"><div class="grow"><h1 class="page">Fichas FVS</h1><p class="page-sub" style="margin:0">Belavista Ipanema · 214 fichas</p></div><button class="btn" style="display:none"></button></div>
+  <div class="chips">
+    <button class="chip" aria-pressed="true">Todas <span class="n">214</span></button>
+    <button class="chip" aria-pressed="false">Em aberto <span class="n">12</span></button>
+    <button class="chip" aria-pressed="false">Com NC <span class="n">7</span></button>
+    <button class="chip" aria-pressed="false">Aguardando assinatura <span class="n">3</span></button>
+    <button class="chip" aria-pressed="false">Fechadas <span class="n">195</span></button>
+  </div>
+  <div class="card list">
+    <div class="li" data-go="fvs-ficha"><div class="ico info"><svg class="i" data-i="check"></svg></div><div class="body"><div class="t">FVS 04 · 004-033 — Forma, Armação e Concretagem</div><div class="s">Torre A › 06 – Piso do 6º Pav. Tipo (601) › Laje</div></div><div class="r"><span class="pill info">Em aberto</span><div class="when" style="margin-top:4px">06/10</div></div></div>
+    <div class="li" data-go="fvs-ficha"><div class="ico bad"><svg class="i" data-i="alert"></svg></div><div class="body"><div class="t">FVS 04 · 004-032 — Forma, Armação e Concretagem</div><div class="s">Torre A › 05 – Piso do 5º Pav. Tipo (501) › Pilares P1–P14</div></div><div class="r"><span class="pill bad">1 NC aberta</span><div class="when" style="margin-top:4px">29/09</div></div></div>
+    <div class="li" data-go="fvs-ficha"><div class="ico good"><svg class="i" data-i="check"></svg></div><div class="body"><div class="t">FVS 11.1 · 011-004 — Impermeabilização rígida</div><div class="s">Torre A › 01 – Subsolo › Reservatório inferior</div></div><div class="r"><span class="pill good">Fechada</span><div class="when" style="margin-top:4px">26/09</div></div></div>
+    <div class="li" data-go="fvs-ficha"><div class="ico good"><svg class="i" data-i="check"></svg></div><div class="body"><div class="t">RVS 03.9 · 039-018 — Blocos</div><div class="s">Fundação › Blocos B21–B26</div></div><div class="r"><span class="pill good">Fechada</span><div class="when" style="margin-top:4px">18/09</div></div></div>
+  </div>
+</section>
+
+<!-- ===================== FICHA FVS ===================== -->
+<section data-screen="fvs-ficha" hidden>
+  <button class="btn ghost sm" data-go="fvs" style="margin-left:-8px"><svg class="i" data-i="chevl"></svg>Fichas</button>
+  <div class="head-row" style="margin-bottom:6px"><div class="grow">
+    <div class="when">FVS 04 · REV. 04 · Nº 004-033</div>
+    <h1 class="page">Forma, Armação e Concretagem</h1>
+  </div><span class="pill info">Em aberto</span></div>
+  <div class="crumbs"><span class="crumb"><svg class="i" data-i="building" style="width:15px;height:15px"></svg>Torre A</span><span class="sep">›</span><span class="crumb">06 – Piso do 6º Pav. Tipo (601)</span><span class="sep">›</span><span class="crumb">Laje + Vigas</span><button class="btn ghost sm"><svg class="i" data-i="qr" style="width:16px;height:16px"></svg>QR do local</button></div>
+
+  <div class="card">
+    <div class="fvs-meta">
+      <div><div class="k">Abertura</div><div class="v mono">03/10/2026</div></div>
+      <div><div class="k">Concretagem</div><div class="v mono">06/10/2026</div></div>
+      <div><div class="k">Inspeção</div><div class="v">Ingrid S.</div></div>
+      <div><div class="k">Rastreabilidade</div><div class="v"><a href="#" data-go="concreto" style="color:inherit">RC-041 ↗</a></div></div>
+    </div>
+    <div class="seg-el" id="seg-el">
+      <button aria-pressed="false">Pilares <span class="prog">—</span></button>
+      <button aria-pressed="true">Vigas <span class="prog">9/19</span></button>
+      <button aria-pressed="false">Laje <span class="prog">14/19</span></button>
+      <button aria-pressed="false">Paredes <span class="prog">—</span></button>
+    </div>
+  </div>
+
+  <div id="checklist"></div>
+
+  <div class="cat"><div class="cat-h"><h4>Assinaturas</h4><span class="line"></span></div></div>
+  <div class="card sign-grid">
+    <div class="sign"><canvas data-sign></canvas><div class="cap"><div><b>Ingrid S.</b>Estagiária de Engenharia · inspecionou</div><span class="when">06/10 09:42</span></div></div>
+    <div class="sign"><canvas data-sign></canvas><div class="cap"><div><b>Matheus H.</b>Engenheiro responsável</div><button class="btn sm" data-clear>Limpar</button></div></div>
+  </div>
+
+  <div class="savebar">
+    <div class="st"><svg class="i" data-i="device" style="width:18px;height:18px"></svg><span><b>Salvo</b> · 09:47<span class="hide-m"> — rascunho guardado neste aparelho e enviado ao servidor</span></span></div>
+    <button class="btn sm ghost" aria-label="Exportar"><svg class="i" data-i="file" style="width:18px;height:18px"></svg><span class="hide-m">Exportar</span></button>
+    <button class="btn sm primary" data-toast="Ficha salva e sincronizada">Salvar</button>
+  </div>
+</section>
+
+<!-- ===================== CONCRETO ===================== -->
+<section data-screen="concreto" hidden>
+  <div class="head-row"><div class="grow"><div class="when">RC-041 · FORM-15</div><h1 class="page">Laje 6º Pav. Tipo (601)</h1><p class="page-sub" style="margin:0">06/10/2026 · fck 35 MPa · slump 12 ± 2 cm · Concreteira Rio Norte</p></div><span class="pill info">Em andamento</span></div>
+  <div class="tabs" id="ctabs">
+    <button aria-pressed="true" data-ct="bt">Betonadas</button>
+    <button aria-pressed="false" data-ct="cps">Corpos de prova</button>
+    <button aria-pressed="false" data-ct="prog">Programação</button>
+  </div>
+
+  <div data-ctp="bt">
+    <div class="sum-strip">
+      <div class="card sum"><div class="k">Volume lançado</div><div class="v">24,0 <small>/ 42 m³</small></div></div>
+      <div class="card sum"><div class="k">Volume NF acum.</div><div class="v">24,0 <small>m³ ✓ confere</small></div></div>
+      <div class="card sum"><div class="k">Ocorrências</div><div class="v" style="color:var(--bad)">1</div></div>
+    </div>
+    <div class="bt-grid" id="bt-grid"></div>
+  </div>
+
+  <div data-ctp="cps" hidden>
+    <div class="sum-strip">
+      <div class="card sum"><div class="k">fck projeto</div><div class="v">35 <small>MPa</small></div></div>
+      <div class="card sum"><div class="k">fck,est (NBR 12655)</div><div class="v" style="color:var(--good)">37,8 <small>MPa</small></div></div>
+      <div class="card sum"><div class="k">Romper em 3 dias</div><div class="v" style="color:var(--warn)">3 <small>séries</small></div></div>
+    </div>
+    <div class="card" id="cp-list"></div>
+  </div>
+
+  <div data-ctp="prog" hidden>
+    <div class="card list">
+      <div class="li"><div class="ico info"><svg class="i" data-i="cal"></svg></div><div class="body"><div class="t">Laje 6º Pav. Tipo (601)</div><div class="s">42 m³ · fck 35 · slump 12±2 · bomba lança · equipe Jorge</div></div><div class="r"><div class="when">TER 06/10 14:00</div></div></div>
+      <div class="li"><div class="ico"><svg class="i" data-i="cal"></svg></div><div class="body"><div class="t">Pilares 7º Pav. Tipo (701)</div><div class="s">11 m³ · fck 40 · slump 14±2 · bomba estacionária</div></div><div class="r"><div class="when">SEX 09/10 07:30</div></div></div>
+      <div class="li"><div class="ico"><svg class="i" data-i="cal"></svg></div><div class="body"><div class="t">Rampa garagem (RMP)</div><div class="s">18 m³ · fck 30 · slump 10±2</div></div><div class="r"><div class="when">SEG 12/10 08:00</div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== NCs ===================== -->
+<section data-screen="ncs" hidden>
+  <div class="head-row"><div class="grow"><h1 class="page">Não conformidades</h1><p class="page-sub" style="margin:0">11 abertas · 4 vencidas · tempo médio de fechamento <b class="mono">6,2 dias</b></p></div><button class="btn sm"><svg class="i" data-i="share" style="width:18px;height:18px"></svg>Relatório</button></div>
+  <div class="chips" id="nc-tabs">
+    <button class="chip" aria-pressed="true" data-col="0">Aberta <span class="n">5</span></button>
+    <button class="chip" aria-pressed="false" data-col="1">Em tratamento <span class="n">4</span></button>
+    <button class="chip" aria-pressed="false" data-col="2">Aguardando verificação <span class="n">2</span></button>
+    <button class="chip" aria-pressed="false" data-col="3">Encerrada <span class="n">58</span></button>
+  </div>
+  <div class="kanban" id="kanban"></div>
+</section>
+
+<!-- ===================== MAIS ===================== -->
+<section data-screen="mais" hidden>
+  <h1 class="page">Módulos</h1><p class="page-sub">Tudo o que a v2 vai ter, organizado por área.</p>
+  <div class="tiles" id="tiles"></div>
+</section>
+
+    </main>
+  </div>
+</div>
+
+<!-- barra inferior (celular) -->
+<nav class="bottom-nav" id="bottom-nav">
+  <button class="bn" data-go="inicio"><svg class="i" data-i="home"></svg>Início</button>
+  <button class="bn" data-go="fvs"><svg class="i" data-i="check"></svg>FVS</button>
+  <button class="bn" data-go="concreto"><svg class="i" data-i="truck"></svg>Concreto</button>
+  <button class="bn" data-go="ncs"><svg class="i" data-i="alert"></svg>NCs<span class="badge-dot">4</span></button>
+  <button class="bn" data-go="mais"><svg class="i" data-i="dots"></svg>Mais</button>
+</nav>
+<button class="fab fab-m" data-go="fvs-ficha"><svg class="i" data-i="plus"></svg>Nova FVS</button>
+
+<div class="palette-bg" id="palette" hidden>
+  <div class="palette">
+    <div class="in"><svg class="i" data-i="search"></svg><input id="pal-in" placeholder="Buscar ficha, NF, betoneira, pavimento…" autocomplete="off"></div>
+    <div class="grp">Fichas</div>
+    <div class="res sel" data-go="fvs-ficha"><svg class="i" data-i="check"></svg>FVS 04 · 004-033 — Laje 6º Pav.<span class="s">Em aberto</span></div>
+    <div class="res" data-go="fvs-ficha"><svg class="i" data-i="check"></svg>FVS 04 · 004-032 — Pilares 5º Pav.<span class="s">1 NC</span></div>
+    <div class="grp">Concreto</div>
+    <div class="res" data-go="concreto"><svg class="i" data-i="truck"></svg>NF 48213 · BT 1 · Betoneira 112<span class="s">RC-041</span></div>
+    <div class="grp">Ações</div>
+    <div class="res" data-go="fvs-ficha"><svg class="i" data-i="plus"></svg>Nova ficha FVS<span class="s">N</span></div>
+    <div class="res" data-go="concreto"><svg class="i" data-i="plus"></svg>Nova rastreabilidade<span class="s">R</span></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+// Ícones (traço fino, desenhados à mão — sem biblioteca externa)
+var I={
+  home:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+  check:'<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  alert:'<path d="M12 3 2.5 20h19z"/><path d="M12 10v4.5"/><path d="M12 17.5v.01"/>',
+  truck:'<path d="M3 16V6h11v10"/><path d="M14 9h4l3 3.5V16h-7"/><circle cx="7" cy="17.5" r="2"/><circle cx="17" cy="17.5" r="2"/>',
+  flask:'<path d="M9 3h6"/><path d="M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/><path d="M7 15h10"/>',
+  pin:'<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  book:'<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v16H5.5A1.5 1.5 0 0 0 4 20.5z"/><path d="M4 20.5A1.5 1.5 0 0 0 5.5 22H20"/><path d="M8 7h8"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  chart:'<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M21 20H3"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  bell:'<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  moon:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>', chevr:'<path d="m9 6 6 6-6 6"/>', chevl:'<path d="m15 6-6 6 6 6"/>',
+  dots:'<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  cloudoff:'<path d="M7 18h10.5a4 4 0 0 0 1.2-7.8A6 6 0 0 0 8 8"/><path d="M5.5 9.5A4.5 4.5 0 0 0 7 18"/><path d="M3 3l18 18"/>',
+  camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  building:'<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2"/>',
+  qr:'<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M20 20h-6"/>',
+  device:'<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/>',
+  file:'<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h6"/>',
+  share:'<circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/>',
+  cal:'<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  layers:'<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  upload:'<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/>'
+};
+function paintIcons(root){ (root||document).querySelectorAll("svg.i[data-i]").forEach(function(s){ s.setAttribute("viewBox","0 0 24 24"); s.innerHTML=I[s.getAttribute("data-i")]||""; }); }
+
+// ---------- dados fictícios ----------
+var CHECK=[
+  {cat:"Montagem de fôrma",itens:[
+    {n:"Travamento",m:"Travamento e encaixe dos painéis, verificado visualmente.",v:"P"},
+    {n:"Nivelamento",m:"Nível do topo das fôrmas com nível a laser.",tol:"desvio máx. 5 mm",v:"P"},
+    {n:"Prumo",m:"Prumo de face.",tol:"desvio máx. 3 mm",v:"X"},
+    {n:"Escoramento",m:"Posição e quantidade conforme projeto.",v:""}]},
+  {cat:"Montagem de armadura",itens:[
+    {n:"Amarração e posicionamento",m:"Amarração firme, sem contato com as fôrmas.",v:"P"},
+    {n:"Armadura positiva",m:"Posicionamento, espaçamento, bitola e fixação.",v:"V"},
+    {n:"Armadura negativa",m:"Posicionamento, espaçamento, bitola e fixação.",v:""}]}
+];
+var BTS=[
+  {n:1,nf:"48213",bet:"112",lac:"77120",vol:"8,0",slump:"12",cps:"0418 · 4 CPs",min:104,agua:"0",pecas:"V601–V606"},
+  {n:2,nf:"48219",bet:"097",lac:"77131",vol:"8,0",slump:"13",cps:"0419 · 4 CPs",min:118,agua:"20",pecas:"Laje L1, L2"},
+  {n:3,nf:"48227",bet:"121",lac:"77140",vol:"8,0",slump:"15",cps:"0420 · 4 CPs",min:161,agua:"35",pecas:"Laje L3",prob:["Tempo usina→lançamento 2h41 (máx. 2h30)","Slump 15 cm fora de 12 ± 2"]}
+];
+var CPS=[
+  {s:"0412",loc:"Pilares P1–P14 · 5º Pav.",d:"29/09",fck:35,a:[["3d","—",""],["7d","Hoje","due"],["28d","27/10",""],["63d","01/12",""]],curve:[0,0,0]},
+  {s:"0405",loc:"Laje 5º Pav. (501)",d:"22/09",fck:35,a:[["3d","19,8","ok"],["7d","27,1","ok"],["28d","20/10",""],["63d","24/11",""]],curve:[19.8,27.1]},
+  {s:"0371",loc:"Laje 4º Pav. (401)",d:"01/09",fck:35,a:[["3d","20,4","ok"],["7d","28,0","ok"],["28d","38,6","ok"],["63d","03/11",""]],curve:[20.4,28,38.6]},
+  {s:"0366",loc:"Vigas 4º Pav. (401)",d:"29/08",fck:35,a:[["3d","17,1","ok"],["7d","24,2","ok"],["28d","32,9","fail"],["63d","31/10",""]],curve:[17.1,24.2,32.9],nc:true}
+];
+var NCS=[
+  [{c:"NC-0139",t:"Falha de concretagem (bicheira) na viga V12",o:"FVS 004-029",loc:"4º Pav.",emp:"FREIBA",due:"Vence hoje",late:true,g:"Alta"},
+   {c:"NC-0141",t:"Prumo de face fora da tolerância (5 mm)",o:"FVS 004-033",loc:"6º Pav.",emp:"Equipe própria",due:"em 3 dias",g:"Média"},
+   {c:"NC-0136",t:"Espaçadores ausentes na armadura negativa",o:"FVS 004-027",loc:"3º Pav.",emp:"FREIBA",due:"venceu há 4 dias",late:true,g:"Alta"}],
+  [{c:"NC-0133",t:"Resistência 28d abaixo do fck (32,9 MPa)",o:"CP série 0366",loc:"Vigas 4º Pav.",emp:"Concreteira Rio Norte",due:"venceu há 2 dias",late:true,g:"Crítica"},
+   {c:"NC-0130",t:"Água adicionada acima do permitido (35 L)",o:"RC-038",loc:"Laje 3º Pav.",emp:"Concreteira Rio Norte",due:"em 5 dias",g:"Média"}],
+  [{c:"NC-0128",t:"Reescoramento fora da posição de projeto",o:"FVS 004-025",loc:"2º Pav.",emp:"FREIBA",due:"verificar até 08/10",g:"Alta"}],
+  [{c:"NC-0121",t:"Tubulação elétrica sem vedação na laje",o:"Vistoria",loc:"1º Pav.",emp:"Elétrica Sul",due:"encerrada 30/09",g:"Baixa"}]
+];
+var COLS=[["Aberta","var(--bad)"],["Em tratamento","var(--warn)"],["Aguardando verificação","var(--info)"],["Encerrada","var(--good)"]];
+var TILES=[
+  ["book","Diário de obra (RDO)","Clima automático, efetivo, atividades, fotos e PDF com logo.","4.4"],
+  ["pin","Pendências na planta","Toque na planta do pavimento para criar pendência com foto e prazo.","4.5"],
+  ["grid","Avanço físico","Matriz serviço × pavimento atualizada pelas FVS fechadas.","4.6"],
+  ["chart","Painel gerencial","KPIs, gráficos e relatório semanal em PDF.","4.7"],
+  ["layers","Modelos de FVS","Editor de checklists: alvenaria, revestimento, fachada…","4.1"],
+  ["cal","Programação de concretagem","Calendário com peça, volume, fck, bomba e equipe.","4.3"],
+  ["qr","QR Code por local","Cole no pavimento e abra o histórico daquele local.","4.8"],
+  ["upload","Importar planilha","Carga inicial a partir de .xlsx.","4.8"],
+  ["user","Usuários e perfis","Admin, Engenheiro, Técnico, Encarregado, Visualizador.","2"],
+  ["trash","Lixeira","Itens excluídos ficam 30 dias e podem ser restaurados.","2"],
+  ["clock","Histórico (auditoria)","Quem alterou o quê e quando, em cada registro.","2"]
+];
+
+// ---------- render ----------
+function el(h){ var d=document.createElement("div"); d.innerHTML=h; return d.firstElementChild; }
+function renderChecklist(){
+  var host=document.getElementById("checklist"); host.innerHTML="";
+  CHECK.forEach(function(c,ci){
+    var wrap=el('<div class="cat"><div class="cat-h"><h4>'+c.cat+'</h4><span class="line"></span><span class="when">'+c.itens.filter(function(x){return x.v}).length+'/'+c.itens.length+'</span></div><div class="card"></div></div>');
+    var card=wrap.querySelector(".card");
+    c.itens.forEach(function(it,ii){
+      var b=function(v,lbl,sub,ic){ return '<button data-v="'+v+'" aria-pressed="'+(it.v===v)+'" data-ci="'+ci+'" data-ii="'+ii+'">'+(ic?'<svg class="i" data-i="'+ic+'"></svg>':lbl)+'<small>'+sub+'</small></button>'; };
+      var html='<div class="item"><div><div class="n">'+it.n+'</div><div class="m">'+it.m+'</div>'+(it.tol?'<span class="tol">'+it.tol+'</span>':'')+'</div>'
+        +'<div class="ans">'+b("NA","NA","Não aplica")+b("P","","Aprovado","check")+b("X","✕","Reprovado")+b("V","","Reinspec.","layers")+'</div>';
+      if(it.v==="X"){
+        html+='<div class="reprov"><div class="row"><span class="lbl"><svg class="i" data-i="camera" style="width:16px;height:16px"></svg>Foto obrigatória para item reprovado</span></div>'
+          +'<div class="photos"><div class="ph"><div class="stamp">06/10 09:31<br>Torre A · 601</div></div><label class="ph add"><span><svg class="i" data-i="camera"></svg><br>Câmera</span></label></div>'
+          +'<div class="nc-auto"><span class="pill bad">NC-0141 gerada automaticamente</span><span style="color:var(--text-muted);font-weight:500">prazo 09/10 · reinspeção vinculada</span></div></div>';
+      }
+      card.appendChild(el(html+'</div>'));
+    });
+    host.appendChild(wrap);
+  });
+  paintIcons(host);
+}
+function renderBTs(){
+  var g=document.getElementById("bt-grid"); g.innerHTML="";
+  BTS.forEach(function(b){
+    var pct=Math.min(100,b.min/180*100), lim=150/180*100, cls=b.min>150?"bad":(b.min>130?"warn":"");
+    var h=Math.floor(b.min/60)+"h"+String(b.min%60).padStart(2,"0");
+    g.appendChild(el('<div class="card bt"><div class="bt-top"><span class="bt-num">BT '+b.n+'</span><span class="nf">NF '+b.nf+'</span>'+(b.prob?'<span class="pill bad">Ocorrência</span>':'<span class="pill good">OK</span>')+'</div>'
+      +'<div class="kv"><div><div class="k">Betoneira</div><div class="v mono">'+b.bet+'</div></div><div><div class="k">Volume</div><div class="v mono">'+b.vol+' m³</div></div><div><div class="k">Slump</div><div class="v mono '+(b.prob?"bad":"")+'">'+b.slump+' cm</div></div>'
+      +'<div><div class="k">Lacre</div><div class="v mono">'+b.lac+'</div></div><div><div class="k">Água</div><div class="v mono '+(+b.agua>25?"bad":"")+'">'+b.agua+' L</div></div><div><div class="k">CPs</div><div class="v mono">'+b.cps+'</div></div></div>'
+      +'<div class="timeline"><div class="tl-bar"><div class="tl-fill '+cls+'" style="width:'+pct+'%"></div><div class="tl-limit" style="left:'+lim+'%"></div></div><div class="tl-lbl"><span>usina → lançamento <b style="color:var(--text)">'+h+'</b></span><span>limite 2h30</span></div></div>'
+      +'<div style="margin-top:10px;font-size:13px"><span style="color:var(--text-muted)">Peças:</span> <b>'+b.pecas+'</b></div>'
+      +(b.prob?b.prob.map(function(p){return '<div class="alert-line"><svg class="i" data-i="alert" style="width:16px;height:16px"></svg>'+p+'</div>';}).join(""):'')
+      +'</div>'));
+  });
+  g.appendChild(el('<button class="card bt add"><span><svg class="i" data-i="plus"></svg><br>Adicionar betonada</span></button>'));
+  paintIcons(g);
+}
+function spark(vals,fck){
+  var w=200,h=46,max=45, pts=[3,7,28].map(function(d,i){ return vals[i]==null?null:[ (i/2)*(w-12)+6, h-6-(vals[i]/max)*(h-12) ]; }).filter(Boolean);
+  var y=h-6-(fck/max)*(h-12);
+  return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><line x1="0" x2="'+w+'" y1="'+y+'" y2="'+y+'" stroke="var(--bad)" stroke-dasharray="4 4" stroke-width="1"/>'
+    +(pts.length>1?'<polyline points="'+pts.map(function(p){return p.join(",")}).join(" ")+'" fill="none" stroke="var(--text)" stroke-width="2"/>':'')
+    +pts.map(function(p){return '<circle cx="'+p[0]+'" cy="'+p[1]+'" r="3.5" fill="var(--surface)" stroke="var(--text)" stroke-width="2"/>';}).join("")+'</svg>';
+}
+function renderCPs(){
+  var h=document.getElementById("cp-list"); h.innerHTML="";
+  CPS.forEach(function(c){
+    h.appendChild(el('<div class="cp-row"><div><div style="font-weight:700">Série '+c.s+' <span class="when">· moldada '+c.d+'</span></div><div style="font-size:13px;color:var(--text-muted)">'+c.loc+' · fck '+c.fck+' MPa</div>'+(c.nc?'<span class="pill bad" style="margin-top:6px">NC-0133 aberta automaticamente</span>':'')+'</div>'
+      +'<div class="cp-ages">'+c.a.map(function(a){return '<div class="age '+a[2]+'"><div class="d">'+a[0]+'</div><div class="mpa">'+a[1]+'</div></div>';}).join("")+'</div>'
+      +'<div>'+spark(c.curve,c.fck)+'</div></div>'));
+  });
+}
+function renderKanban(){
+  var k=document.getElementById("kanban"); k.innerHTML="";
+  NCS.forEach(function(list,i){
+    var col=el('<div class="colwrap'+(i===0?" show":"")+'" data-colw="'+i+'"><div class="col-h"><span class="dot" style="background:'+COLS[i][1]+'"></span>'+COLS[i][0]+'<span class="n">'+list.length+'</span></div></div>');
+    list.forEach(function(n){
+      col.appendChild(el('<div class="card nc'+(n.late?" late":"")+'"><div class="code">'+n.c+'<span class="pill '+(n.g==="Crítica"||n.g==="Alta"?"bad":n.g==="Média"?"warn":"neutral")+'" style="height:20px;font-size:11px">'+n.g+'</span></div><div class="t">'+n.t+'</div>'
+        +'<div class="meta"><span><svg class="i" data-i="file"></svg>'+n.o+'</span><span><svg class="i" data-i="building"></svg>'+n.loc+'</span><span><svg class="i" data-i="user"></svg>'+n.emp+'</span><span class="'+(n.late?"due-late":"")+'"><svg class="i" data-i="clock"></svg>'+n.due+'</span></div></div>'));
+    });
+    k.appendChild(col);
+  });
+  paintIcons(k);
+}
+function renderTiles(){
+  var t=document.getElementById("tiles");
+  t.innerHTML=TILES.map(function(x){ return '<button class="card tile"><span class="ic"><svg class="i" data-i="'+x[0]+'"></svg></span><span class="t">'+x[1]+'</span><span class="d">'+x[2]+'</span><span class="tag">Fase '+x[3]+'</span></button>'; }).join("");
+  paintIcons(t);
+}
+function renderBars(){
+  var d=[["MAI",96],["JUN",132],["JUL",118],["AGO",151],["SET",166],["OUT",186]], max=200;
+  document.getElementById("bars").innerHTML=d.map(function(x,i){ return '<div class="bar'+(i===d.length-1?" cur":"")+'"><span class="q">'+x[1]+'</span><div class="v" style="height:'+(x[1]/max*100)+'%"></div><span class="m">'+x[0]+'</span></div>'; }).join("");
+}
+
+// ---------- navegação ----------
+function go(screen, tab){
+  document.querySelectorAll("[data-screen]").forEach(function(s){ s.hidden = s.getAttribute("data-screen")!==screen; });
+  var base = screen==="fvs-ficha" ? "fvs" : screen;
+  document.querySelectorAll(".bn,.sn").forEach(function(b){ b.setAttribute("aria-current", b.getAttribute("data-go")===base && (!b.dataset.tab || b.dataset.tab===tab) ? "page":"false"); });
+  if(tab) setCt(tab);
+  document.querySelector(".fab-m").hidden = (screen==="fvs-ficha");
+  window.scrollTo({top:0,behavior:"instant"});
+}
+function setCt(t){
+  document.querySelectorAll("#ctabs button").forEach(function(b){ b.setAttribute("aria-pressed", b.dataset.ct===t); });
+  document.querySelectorAll("[data-ctp]").forEach(function(p){ p.hidden = p.dataset.ctp!==t; });
+}
+document.addEventListener("click", function(e){
+  var g=e.target.closest("[data-go]"); if(g){ e.preventDefault(); closePalette(); go(g.dataset.go, g.dataset.tab); return; }
+  var ct=e.target.closest("#ctabs button"); if(ct){ setCt(ct.dataset.ct); return; }
+  var a=e.target.closest(".ans button"); if(a){ var it=CHECK[a.dataset.ci].itens[a.dataset.ii]; it.v = it.v===a.dataset.v ? "" : a.dataset.v; renderChecklist(); if(it.v==="X") toast("Item reprovado: tire a foto e a NC será aberta"); return; }
+  var se=e.target.closest("#seg-el button"); if(se){ document.querySelectorAll("#seg-el button").forEach(function(b){ b.setAttribute("aria-pressed", b===se); }); return; }
+  var nc=e.target.closest("#nc-tabs .chip"); if(nc){ document.querySelectorAll("#nc-tabs .chip").forEach(function(b){ b.setAttribute("aria-pressed", b===nc); }); document.querySelectorAll("[data-colw]").forEach(function(c){ c.classList.toggle("show", c.dataset.colw===nc.dataset.col); }); return; }
+  var ch=e.target.closest("[data-screen='fvs'] .chip"); if(ch){ ch.parentNode.querySelectorAll(".chip").forEach(function(b){ b.setAttribute("aria-pressed", b===ch); }); return; }
+  var t=e.target.closest("[data-toast]"); if(t){ toast(t.dataset.toast); return; }
+  var cl=e.target.closest("[data-clear]"); if(cl){ var c=cl.closest(".sign").querySelector("canvas"); c.getContext("2d").clearRect(0,0,c.width,c.height); return; }
+  if(e.target.id==="palette") closePalette();
+});
+
+// sincronização (simulação)
+var offline=false;
+document.getElementById("sync").addEventListener("click", function(){
+  offline=!offline;
+  this.classList.toggle("off", offline);
+  document.getElementById("sync-s").textContent = offline ? "3 pendentes" : "Online";
+  document.getElementById("sync-l").textContent = offline ? "Sem sinal · 3 alterações pendentes" : "Tudo sincronizado";
+  document.getElementById("offline-banner").hidden = !offline;
+  toast(offline ? "Modo sem sinal: você continua trabalhando normalmente" : "Conexão de volta — 3 alterações enviadas");
+});
+
+// tema
+document.getElementById("theme").addEventListener("click", function(){
+  var r=document.documentElement, cur=r.getAttribute("data-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  r.setAttribute("data-theme", cur==="dark"?"light":"dark");
+});
+
+// paleta Ctrl+K
+function openPalette(){ document.getElementById("palette").hidden=false; setTimeout(function(){ document.getElementById("pal-in").focus(); },10); }
+function closePalette(){ document.getElementById("palette").hidden=true; }
+document.getElementById("open-palette").addEventListener("click", openPalette);
+document.getElementById("open-palette-m").addEventListener("click", openPalette);
+document.addEventListener("keydown", function(e){
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); openPalette(); }
+  if(e.key==="Escape") closePalette();
+});
+var mq=matchMedia("(min-width:960px)"); function mqf(){ document.getElementById("open-palette-m").style.display = mq.matches?"none":"grid"; } mq.addEventListener("change",mqf); mqf();
+
+// toast
+var tt; function toast(msg){ var t=document.getElementById("toast"); t.textContent=msg; t.hidden=false; clearTimeout(tt); tt=setTimeout(function(){ t.hidden=true; },2600); }
+
+// assinatura (canvas)
+function setupSign(c, demo){
+  var ctx=c.getContext("2d"), drawing=false, dpr=window.devicePixelRatio||1;
+  function size(){ var r=c.getBoundingClientRect(); if(!r.width) return; c.width=r.width*dpr; c.height=r.height*dpr; ctx.scale(dpr,dpr); ctx.lineWidth=2.2; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle=getComputedStyle(document.body).color; if(demo) demoSig(r); }
+  function demoSig(r){ ctx.beginPath(); var x0=r.width*.18,y=r.height*.6; ctx.moveTo(x0,y); for(var i=0;i<=60;i++){ var x=x0+i*(r.width*.6/60); ctx.lineTo(x, y-Math.sin(i/4)*14-Math.cos(i/9)*8); } ctx.stroke(); }
+  function pos(e){ var r=c.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+  c.addEventListener("pointerdown", function(e){ drawing=true; c.setPointerCapture(e.pointerId); var p=pos(e); ctx.beginPath(); ctx.moveTo(p[0],p[1]); });
+  c.addEventListener("pointermove", function(e){ if(!drawing) return; var p=pos(e); ctx.lineTo(p[0],p[1]); ctx.stroke(); });
+  c.addEventListener("pointerup", function(){ drawing=false; });
+  new MutationObserver(function(){ if(!c.closest("[hidden]") && !c.width) size(); }).observe(document.querySelector("[data-screen='fvs-ficha']"),{attributes:true});
+}
+document.querySelectorAll("[data-sign]").forEach(function(c,i){ setupSign(c, i===0); });
+
+paintIcons(); renderChecklist(); renderBTs(); renderCPs(); renderKanban(); renderTiles(); renderBars(); go("inicio");
+</script>
+</body>
+</html>
