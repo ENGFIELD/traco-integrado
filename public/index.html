@@ -814,6 +814,12 @@
 firebase.initializeApp(firebaseConfig);
 var auth = firebase.auth();
 var dbf = firebase.firestore();
+// Rodando no próprio PC (http://localhost): usa os Firebase Emulators com uma
+// CÓPIA dos dados, nunca o banco real. No site publicado isto não se aplica.
+if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
+  auth.useEmulator("http://127.0.0.1:9099");
+  dbf.useEmulator("127.0.0.1", 8080);
+}
 </script>
 <script>
 (function(){
@@ -1199,7 +1205,13 @@ var dbf = firebase.firestore();
   var DEFAULT_OBRA = "Consórcio de Construção Belavista Ipanema";
   var TEMPO_MAX_MIN = 150; // 2:30h, conforme FORM-15
 
-  function todayISO(){ var d=new Date(); return d.toISOString().slice(0,10); }
+  // Data de hoje no fuso do aparelho (Rio, UTC-3). Antes usava toISOString(),
+  // que é UTC — entre 21h e 0h devolvia o dia seguinte.
+  function todayISO(){
+    var d=new Date();
+    function p2(n){ return n<10 ? "0"+n : ""+n; }
+    return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate());
+  }
   function nowISO(){ return new Date().toISOString(); }
   function escapeHtml(s){
     return String(s==null?"":s).replace(/[&<>"']/g, function(c){
@@ -2919,6 +2931,14 @@ var dbf = firebase.firestore();
   }
 
   /* ---------------- auth + db bootstrap ---------------- */
+  // Selo do topo reflete a conexão real do aparelho (antes ficava sempre
+  // "sincronizado" depois do login, mesmo sem sinal).
+  function atualizarIndicadorConexao(){
+    if(navigator.onLine===false) setSync("off","sem conexão");
+    else setSync("on","sincronizado");
+  }
+  window.addEventListener("online", atualizarIndicadorConexao);
+  window.addEventListener("offline", atualizarIndicadorConexao);
   function setSync(state,text){
     var el=document.getElementById("sync-indicator");
     el.className="sync "+state;
@@ -2940,17 +2960,21 @@ var dbf = firebase.firestore();
   function subscribeCollections(){
     if(unsubFvs) unsubFvs();
     if(unsubRast) unsubRast();
-    unsubFvs = fvsCol.orderBy("dataConcretagem","desc").limit(500).onSnapshot(function(snap){
+    if(unsubCt) unsubCt();
+    // Sem orderBy/limit: o Firestore esconde de uma consulta com orderBy os
+    // documentos que não têm o campo ordenado, e o limit(500) cortava os mais
+    // antigos sem aviso. A ordenação já é feita na tela (buildRows).
+    unsubFvs = fvsCol.onSnapshot(function(snap){
       fvsMap = new Map();
       snap.docs.forEach(function(d){ fvsMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
-    unsubRast = rastCol.orderBy("data","desc").limit(500).onSnapshot(function(snap){
+    unsubRast = rastCol.onSnapshot(function(snap){
       rastMap = new Map();
       snap.docs.forEach(function(d){ rastMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
-    unsubCt = ctCol.limit(2000).onSnapshot(function(snap){
+    unsubCt = ctCol.onSnapshot(function(snap){
       ctMap = new Map();
       snap.docs.forEach(function(d){ ctMap.set(d.id, d.data()); });
       render();
@@ -2967,9 +2991,11 @@ var dbf = firebase.firestore();
     document.getElementById("app-root").hidden = false;
     document.getElementById("user-name").textContent = user.displayName || user.email || "";
     currentUserEmail = user.email || "";
-    setSync("on","sincronizado");
+    atualizarIndicadorConexao();
     subscribeCollections();
     render();
+    // Dá tempo das fichas chegarem do servidor antes de oferecer o rascunho.
+    setTimeout(oferecerRascunhoPendente, 2500);
   }
   function showAuth(){
     document.getElementById("app-root").hidden = true;
@@ -3137,11 +3163,81 @@ var dbf = firebase.firestore();
       + '<div class="hint" style="margin-top:6px;">Opcional: adicione um pavimento para cada andar que esta ficha também cobre. Todos aparecem no filtro de pavimentos do painel.</div>';
   }
 
-  function openModal(type, id, tipoKey){
+  /* ---------------- proteção do rascunho (v1.1) ----------------
+     Tudo o que é digitado numa ficha fica guardado também no próprio
+     aparelho (localStorage) até o servidor confirmar o salvamento. Assim,
+     fechar a ficha sem querer, o app travar ou o sinal cair no subsolo não
+     apaga o que foi preenchido: ao reabrir, o sistema oferece recuperar. */
+  var RASCUNHO_KEY = "traco-integrado-rascunho";
+  var salvando = false;
+  var ignorarPop = false;
+  var MSG_SAIR_SEM_SALVAR = "Há alterações não salvas nesta ficha. Sair mesmo assim?\n\n"
+    + "(Elas continuam guardadas neste aparelho e podem ser recuperadas ao abrir a ficha de novo.)";
+  function rascunhoChave(type, id){ return type+":"+(id||"novo"); }
+  function lerRascunho(){
+    try{ return JSON.parse(localStorage.getItem(RASCUNHO_KEY)||"null"); }catch(ex){ return null; }
+  }
+  function guardarRascunho(){
+    if(!draft || !draft.chave) return;
+    try{
+      localStorage.setItem(RASCUNHO_KEY, JSON.stringify({
+        chave: draft.chave, type: draft.type, id: draft.id, data: draft.data, em: nowISO()
+      }));
+    }catch(ex){}
+  }
+  function limparRascunho(chave){
+    var r = lerRascunho();
+    if(r && (!chave || r.chave===chave)){ try{ localStorage.removeItem(RASCUNHO_KEY); }catch(ex){} }
+  }
+  function draftAlterado(){
+    return !!draft && typeof draft.orig==="string" && JSON.stringify(draft.data)!==draft.orig;
+  }
+  // Fechar pedido pelo usuário (✕, toque fora, Esc, botão Voltar do celular):
+  // pergunta antes de sair se houver algo não salvo.
+  function tentarFecharModal(){
+    if(salvando) return false;
+    if(draftAlterado() && !confirm(MSG_SAIR_SEM_SALVAR)) return false;
+    closeModal();
+    return true;
+  }
+  // Botão "Voltar" do Android / gesto de voltar do iPhone: com a ficha aberta,
+  // fecha a ficha em vez de sair do app.
+  function marcarHistoricoModal(){
+    try{ if(!(history.state && history.state.tiModal)) history.pushState({tiModal:1}, ""); }catch(ex){}
+  }
+  window.addEventListener("popstate", function(){
+    var aberto = !document.getElementById("overlay").hidden;
+    if(ignorarPop){ ignorarPop=false; if(aberto) marcarHistoricoModal(); return; }
+    if(!aberto) return;
+    if(salvando || (draftAlterado() && !confirm(MSG_SAIR_SEM_SALVAR))){
+      try{ history.pushState({tiModal:1}, ""); }catch(ex){}
+      return;
+    }
+    closeModal(true);
+  });
+  // Ao entrar no sistema: se ficou alguma ficha não salva neste aparelho
+  // (app fechado, bateria acabou, sem sinal), oferece reabrir.
+  function oferecerRascunhoPendente(){
+    var r = lerRascunho();
+    if(!r || !r.data || !document.getElementById("overlay").hidden) return;
+    var nome = r.type==="fvs"
+      ? "a ficha FVS "+(r.data.numero||"(sem número)")
+      : "a rastreabilidade "+(r.data.numero||"(sem número)");
+    if(confirm("Este aparelho tem alterações não salvas n"+nome+" (de "+fmtDateTimeBR(r.em)+").\n\nAbrir agora para revisar e salvar?")){
+      openModal(r.type, r.id, r.data.tipo, {restaurar:true});
+    }
+  }
+
+  function openModal(type, id, tipoKey, opts){
+    opts = opts || {};
     ncAnexoErro = {};
     var data;
-    if(id && type==="fvs") data = JSON.parse(JSON.stringify(fvsMap.get(id)));
-    else if(id && type==="rast") data = JSON.parse(JSON.stringify(rastMap.get(id)));
+    var base = id ? (type==="fvs" ? fvsMap.get(id) : rastMap.get(id)) : null;
+    var rasc = lerRascunho();
+    var chave = rascunhoChave(type, id);
+    if(opts.restaurar && rasc && rasc.type===type && (rasc.id||null)===(id||null)) chave = rasc.chave;
+    if(base) data = JSON.parse(JSON.stringify(base));
+    else if(opts.restaurar && rasc && rasc.data) data = JSON.parse(JSON.stringify(rasc.data));
     else data = type==="fvs" ? blankFvs(tipoKey) : blankRast();
     if(!data.checklist) data.checklist={};
     if(!data.elementos) data.elementos={};
@@ -3156,9 +3252,26 @@ var dbf = firebase.firestore();
     // sempre, sem perder a não conformidade que já estava registrada.
     if(type==="fvs" && !Array.isArray(data.naoConformidades)) data.naoConformidades = fichaNaoConformidades(data);
     if(!data.pavimentos) data.pavimentos=[]; // fichas antigas, de antes do multi-pavimento — fallback usa local/blocoPav
-    draft = { type:type, id:id||null, data:data };
+    draft = { type:type, id:id||null, data:data, orig:JSON.stringify(data), chave:chave };
+    // Ficha que só existe no rascunho (nunca chegou ao servidor): conta como
+    // alterada, para pedir confirmação antes de fechar sem salvar.
+    if(opts.restaurar && !base) draft.orig = "{}";
+    // Rascunho guardado neste aparelho para esta mesma ficha, diferente do
+    // que está no servidor: oferece recuperar (ou aplica direto, se veio de
+    // oferecerRascunhoPendente).
+    if(rasc && rasc.chave===chave && rasc.type===type && rasc.data){
+      var rascJson = JSON.stringify(rasc.data);
+      if(rascJson!==draft.orig){
+        if(opts.restaurar || confirm("Este aparelho tem alterações desta ficha que não foram salvas (de "+fmtDateTimeBR(rasc.em)+").\n\nRecuperar essas alterações?")){
+          draft.data = JSON.parse(rascJson);
+        } else {
+          limparRascunho(chave);
+        }
+      }
+    }
     document.getElementById("overlay").hidden=false;
     document.body.style.overflow="hidden";
+    marcarHistoricoModal();
     renderModal();
   }
   // Tela de escolha do tipo de FVS, mostrada antes de abrir uma ficha nova (não
@@ -3182,7 +3295,7 @@ var dbf = firebase.firestore();
             + '</button>';
         }).join("")
       + '</div></div>';
-    m.querySelector("#modal-close").addEventListener("click", closeModal);
+    m.querySelector("#modal-close").addEventListener("click", tentarFecharModal);
     m.querySelectorAll("[data-tipo-choice]").forEach(function(btn){
       btn.addEventListener("click", function(){
         var tipoKey = btn.getAttribute("data-tipo-choice");
@@ -3192,18 +3305,24 @@ var dbf = firebase.firestore();
     });
     document.getElementById("overlay").hidden=false;
     document.body.style.overflow="hidden";
+    marcarHistoricoModal();
   }
-  function closeModal(){
+  // fromPop=true quando o fechamento veio do botão Voltar (o histórico já voltou).
+  function closeModal(fromPop){
     draft=null;
     mapaEstado=null;
     document.getElementById("overlay").hidden=true;
     document.body.style.overflow="";
+    if(fromPop!==true){
+      try{ if(history.state && history.state.tiModal){ ignorarPop=true; history.back(); } }catch(ex){}
+    }
   }
 
   function renderModal(){
     var m=document.getElementById("modal");
     m.innerHTML = draft.type==="fvs" ? fvsModalHtml(draft.data, draft.id) : rastModalHtml(draft.data, draft.id);
     wireModalEvents();
+    if(draftAlterado()) guardarRascunho();
   }
 
   function statusBadgeFvs(d){ return pill(fvsStatus(d)); }
@@ -4596,7 +4715,7 @@ var dbf = firebase.firestore();
   /* ---------------- modal events ---------------- */
   function wireModalEvents(){
     var m=document.getElementById("modal");
-    m.querySelector("#modal-close").addEventListener("click", closeModal);
+    m.querySelector("#modal-close").addEventListener("click", tentarFecharModal);
 
     m.querySelectorAll("[data-field]").forEach(function(el){
       el.addEventListener("input", function(){ draft.data[el.getAttribute("data-field")] = el.value; });
@@ -4766,7 +4885,7 @@ var dbf = firebase.firestore();
       var unlinkRast=m.querySelector("#unlink-rast");
       if(unlinkRast) unlinkRast.addEventListener("click", async function(){ await removeLink("fvs", draft.id, draft.data.rastreabilidadeId); });
       var openLinked=m.querySelector("#open-linked-rast");
-      if(openLinked) openLinked.addEventListener("click", function(){ var rid=draft.data.rastreabilidadeId; closeModal(); openModal("rast", rid); });
+      if(openLinked) openLinked.addEventListener("click", function(){ var rid=draft.data.rastreabilidadeId; if(!tentarFecharModal()) return; openModal("rast", rid); });
     } else {
       m.querySelectorAll("[data-line-field]").forEach(function(el){
         el.addEventListener("input", function(){
@@ -4807,23 +4926,45 @@ var dbf = firebase.firestore();
       var unlinkFvs=m.querySelector("#unlink-fvs");
       if(unlinkFvs) unlinkFvs.addEventListener("click", async function(){ await removeLink("rast", draft.id, draft.data.fvsId); });
       var openLinkedF=m.querySelector("#open-linked-fvs");
-      if(openLinkedF) openLinkedF.addEventListener("click", function(){ var fid=draft.data.fvsId; closeModal(); openModal("fvs", fid); });
+      if(openLinkedF) openLinkedF.addEventListener("click", function(){ var fid=draft.data.fvsId; if(!tentarFecharModal()) return; openModal("fvs", fid); });
     }
 
     m.querySelector("#btn-save").addEventListener("click", function(){ saveDraft(false); });
     m.querySelector("#btn-export").addEventListener("click", function(){
       if(draft.type==="fvs") exportFvsXlsx(draft.data); else exportRastXlsx(draft.data);
     });
-    m.querySelector("#btn-toggle-close").addEventListener("click", function(){
-      draft.data.fechado = !draft.data.fechado;
-      if(draft.data.fechado && !draft.data.dataFechamento) draft.data.dataFechamento = todayISO();
-      saveDraft(true);
+    m.querySelector("#btn-toggle-close").addEventListener("click", async function(){
+      if(salvando) return;
+      var d = draft;
+      var antesFechado = d.data.fechado, antesData = d.data.dataFechamento;
+      d.data.fechado = !d.data.fechado;
+      if(d.data.fechado && !d.data.dataFechamento) d.data.dataFechamento = todayISO();
+      var ok = await saveDraft(true);
+      // Não salvou: desfaz a troca aberta/fechada para a tela não mentir.
+      if(!ok && draft===d){ d.data.fechado = antesFechado; d.data.dataFechamento = antesData; renderModal(); }
     });
     var delBtn=m.querySelector("#btn-delete");
     if(delBtn && draft.id) delBtn.addEventListener("click", async function(){
       if(!confirm("Excluir definitivamente este registro?")) return;
-      var col = draft.type==="fvs" ? fvsCol : rastCol;
-      if(col) await col.doc(draft.id).delete();
+      var d = draft;
+      var col = d.type==="fvs" ? fvsCol : rastCol;
+      try{
+        await col.doc(d.id).delete();
+      }catch(ex){
+        console.error(ex);
+        alert("Não foi possível excluir: "+(ex && ex.message ? ex.message : "erro desconhecido")+".");
+        return;
+      }
+      // Limpa o vínculo do outro lado, para a ficha/rastreabilidade parceira
+      // não ficar apontando para um registro que não existe mais.
+      try{
+        if(d.type==="fvs" && d.data.rastreabilidadeId && rastMap.has(d.data.rastreabilidadeId)){
+          await rastCol.doc(d.data.rastreabilidadeId).update({ fvsId:null, updatedAt: nowISO() });
+        } else if(d.type==="rast" && d.data.fvsId && fvsMap.has(d.data.fvsId)){
+          await fvsCol.doc(d.data.fvsId).update({ rastreabilidadeId:null, updatedAt: nowISO() });
+        }
+      }catch(ex){ console.error("exclusão: falha ao limpar vínculo", ex); }
+      limparRascunho(d.chave);
       closeModal();
     });
   }
@@ -5283,43 +5424,94 @@ var dbf = firebase.firestore();
     }, "image/png");
   }
 
+  // Trava os botões do rodapé enquanto envia — evita o duplo toque que
+  // criava duas fichas iguais.
+  function setBotoesSalvando(ativo){
+    var m = document.getElementById("modal");
+    if(!m) return;
+    ["#btn-save","#btn-toggle-close","#btn-delete"].forEach(function(sel){
+      var b = m.querySelector(sel);
+      if(!b) return;
+      if(ativo){ b.dataset.txt = b.textContent; b.disabled = true; if(sel==="#btn-save") b.textContent = "Salvando…"; }
+      else { b.disabled = (sel==="#btn-delete" && !draft.id); if(b.dataset.txt) b.textContent = b.dataset.txt; }
+    });
+  }
+  // Salva a ficha aberta. Devolve true se salvou (ou se ficou na fila por
+  // falta de sinal) e false se deu erro — nunca mais falha em silêncio.
   async function saveDraft(keepOpen){
-    draft.data.updatedAt = nowISO();
-    draft.data.updatedByEmail = currentUserEmail || draft.data.updatedByEmail || "";
-    var col = draft.type==="fvs" ? fvsCol : rastCol;
-    if(draft.id){
-      await col.doc(draft.id).set(draft.data);
-    } else {
-      var ref = await col.add(draft.data);
-      draft.id = ref.id;
+    if(!draft || salvando) return false;
+    salvando = true;
+    var d = draft;
+    d.data.updatedAt = nowISO();
+    d.data.updatedByEmail = currentUserEmail || d.data.updatedByEmail || "";
+    var col = d.type==="fvs" ? fvsCol : rastCol;
+    // O id é gerado antes de enviar: se a pessoa tocar de novo, ou se o envio
+    // ficar na fila sem sinal, continua sendo a MESMA ficha (sem duplicar).
+    if(!d.id) d.id = col.doc().id;
+    guardarRascunho(); // cópia no aparelho até o servidor confirmar
+    var chave = d.chave;
+    setBotoesSalvando(true);
+    var envio = col.doc(d.id).set(JSON.parse(JSON.stringify(d.data)));
+    var resultado;
+    try{
+      resultado = await Promise.race([
+        envio.then(function(){ return "ok"; }),
+        new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })
+      ]);
+    }catch(ex){
+      console.error("saveDraft", ex);
+      salvando = false;
+      if(draft===d) setBotoesSalvando(false);
+      var msg = (ex && ex.code==="permission-denied")
+        ? "sem permissão para gravar (sua sessão pode ter expirado — saia e entre de novo)"
+        : (ex && ex.message ? ex.message : "erro desconhecido");
+      alert("Não foi possível salvar: "+msg+".\n\nO que você preencheu continua guardado neste aparelho.");
+      return false;
     }
-    if(!keepOpen) closeModal(); else renderModal();
+    if(resultado==="ok"){
+      limparRascunho(chave);
+    } else {
+      // Sem resposta do servidor em 10s (subsolo, sinal fraco): o Firestore
+      // mantém o envio na fila e manda sozinho quando a conexão voltar.
+      envio.then(function(){ limparRascunho(chave); }).catch(function(ex){ console.error("envio pendente falhou", ex); });
+      alert("Sem conexão com o servidor no momento.\n\nA ficha ficou guardada neste aparelho e será enviada automaticamente quando o sinal voltar. Se fechar o app antes disso, ao abrir de novo o sistema oferece recuperar.");
+    }
+    salvando = false;
+    if(draft===d){
+      d.orig = JSON.stringify(d.data);
+      if(!keepOpen) closeModal(); else renderModal();
+    }
+    return true;
   }
 
   async function persistLink(fromType, fromId, otherId){
-    if(fromType==="fvs"){
-      draft.data.rastreabilidadeId = otherId;
-      await saveDraft(true);
-      await rastCol.doc(otherId).update({ fvsId: draft.id, updatedAt: nowISO() });
-    } else {
-      draft.data.fvsId = otherId;
-      await saveDraft(true);
-      await fvsCol.doc(otherId).update({ rastreabilidadeId: draft.id, updatedAt: nowISO() });
-    }
+    try{
+      if(fromType==="fvs"){
+        draft.data.rastreabilidadeId = otherId;
+        if(!await saveDraft(true)) return;
+        await rastCol.doc(otherId).update({ fvsId: draft.id, updatedAt: nowISO() });
+      } else {
+        draft.data.fvsId = otherId;
+        if(!await saveDraft(true)) return;
+        await fvsCol.doc(otherId).update({ rastreabilidadeId: draft.id, updatedAt: nowISO() });
+      }
+    }catch(ex){ console.error(ex); alert("Não foi possível concluir o vínculo: "+(ex&&ex.message?ex.message:"erro desconhecido")+"."); }
   }
   async function removeLink(fromType, fromId, otherId){
-    if(fromType==="fvs"){
-      draft.data.rastreabilidadeId=null;
-      await saveDraft(true);
-      if(otherId) await rastCol.doc(otherId).update({ fvsId:null, updatedAt: nowISO() });
-    } else {
-      draft.data.fvsId=null;
-      await saveDraft(true);
-      if(otherId) await fvsCol.doc(otherId).update({ rastreabilidadeId:null, updatedAt: nowISO() });
-    }
+    try{
+      if(fromType==="fvs"){
+        draft.data.rastreabilidadeId=null;
+        if(!await saveDraft(true)) return;
+        if(otherId) await rastCol.doc(otherId).update({ fvsId:null, updatedAt: nowISO() });
+      } else {
+        draft.data.fvsId=null;
+        if(!await saveDraft(true)) return;
+        if(otherId) await fvsCol.doc(otherId).update({ rastreabilidadeId:null, updatedAt: nowISO() });
+      }
+    }catch(ex){ console.error(ex); alert("Não foi possível desfazer o vínculo: "+(ex&&ex.message?ex.message:"erro desconhecido")+"."); }
   }
   async function generateLinked(fromType){
-    if(!draft.id) await saveDraft(true);
+    if(!draft.id && !await saveDraft(true)) return;
     if(fromType==="fvs"){
       var f=draft.data;
       var nr = blankRast();
@@ -5402,8 +5594,21 @@ var dbf = firebase.firestore();
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
     document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
-    document.getElementById("overlay").addEventListener("click", function(e){ if(e.target.id==="overlay") closeModal(); });
-    document.addEventListener("keydown", function(e){ if(e.key==="Escape" && !document.getElementById("overlay").hidden) closeModal(); });
+    document.getElementById("overlay").addEventListener("click", function(e){ if(e.target.id==="overlay") tentarFecharModal(); });
+    document.addEventListener("keydown", function(e){ if(e.key==="Escape" && !document.getElementById("overlay").hidden) tentarFecharModal(); });
+    // Guarda o rascunho no aparelho enquanto a pessoa digita (meio segundo
+    // depois da última tecla), não só quando a tela é redesenhada.
+    var timerRascunho = null;
+    function agendarRascunho(){
+      clearTimeout(timerRascunho);
+      timerRascunho = setTimeout(function(){ if(draftAlterado()) guardarRascunho(); }, 500);
+    }
+    document.getElementById("modal").addEventListener("input", agendarRascunho);
+    document.getElementById("modal").addEventListener("change", agendarRascunho);
+    // Fechar a aba/app com ficha não salva: o navegador pede confirmação.
+    window.addEventListener("beforeunload", function(e){
+      if(draftAlterado() || salvando){ guardarRascunho(); e.preventDefault(); e.returnValue = ""; }
+    });
 
     document.getElementById("f-search").addEventListener("input", function(e){ filters.search=e.target.value; render(); });
     document.getElementById("f-from").addEventListener("change", function(e){ filters.from=e.target.value; render(); });
@@ -5494,6 +5699,6 @@ var dbf = firebase.firestore();
     });
   })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-09-23d</div>
+<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-10-07 v1.1</div>
 </body>
 </html>
