@@ -11,6 +11,9 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
+import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
+import { initBusca } from "./ui/busca.js";
+import { pintarIcones } from "./ui/icones.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -852,6 +855,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(viewDash && !viewDash.hidden) renderViewDashboard();
     var viewPlantas = document.getElementById("view-plantas");
     if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
+    // Bolinhas vermelhas do menu (v1.3)
+    definirContador("nc", todasNaoConformidades().filter(function(i){ return !i.concluida; }).length);
+    definirContador("ct", ctRowsArray().filter(ctTemPendencia).length);
   }
 
   /* ---------------- navegação entre telas ---------------- */
@@ -867,9 +873,10 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       var el = document.getElementById(VIEW_IDS[k]);
       if(el) el.hidden = (k!==nome);
     });
-    document.querySelectorAll(".nav-btn[data-view]").forEach(function(b){
+    document.querySelectorAll(".nav-btn[data-view], .ti-bn[data-view]").forEach(function(b){
       b.setAttribute("aria-current", b.getAttribute("data-view")===nome ? "page" : "false");
     });
+    window.scrollTo(0, 0);
     if(nome==="dashboard") renderViewDashboard();
     else if(nome==="pavimento") renderViewPavimento();
     else if(nome==="nc") renderViewNc();
@@ -894,41 +901,101 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     var rastPendentes = 0;
     rastMap.forEach(function(r){ if(rastStatus(r).key==="pendente") rastPendentes++; });
 
+    // v1.3: Início no formato da prévia aprovada — números que levam direto
+    // à tela certa e listas do que precisa de atenção hoje.
     var kpiCards = [
-      { n:fvsAbertas, l:"Fichas FVS em aberto", t:"aberto", d:"Fichas de verificação de serviço lançadas e ainda não fechadas." },
-      { n:ncAbertas, l:"Não conformidades em aberto", t:"nc", d:"Itens registrados como não conformes nas fichas, ainda pendentes de correção." },
-      { n:ctPendentes, l:"Traços com resultado pendente", t:"pendente", d:"Corpos de prova com data de ensaio (7/14/28/63 dias) já vencida sem resultado lançado." },
-      { n:rastPendentes, l:"Rastreabilidades com pendência", t:"pendente", d:"Concretagens que passaram do tempo máximo usina → lançamento sem ação corretiva registrada." }
+      { n:fvsAbertas, l:"FVS em aberto", t:"info", d:totalFvs+" fichas no total", ir:"board", sit:"aberto" },
+      { n:ncAbertas, l:"NCs em aberto", t:"nc", d:todasNc.length+" registradas", ir:"nc" },
+      { n:ctPendentes, l:"Resultados de CP pendentes", t:"pendente", d:"data de rompimento já passou", ir:"ct", pend:true },
+      { n:rastPendentes, l:"Concretagens com pendência", t:rastPendentes?"pendente":"ok", d:"acima de 2h30 sem ação corretiva", ir:"board", sit:"pendente" }
     ];
     var kpisHtml = '<div class="dash-kpis">' + kpiCards.map(function(c){
-      return '<div class="dash-kpi-card tone-'+c.t+'"><div class="n">'+c.n+'</div><div class="l">'+escapeHtml(c.l)+'</div><div class="d">'+escapeHtml(c.d)+'</div></div>';
+      return '<button type="button" class="dash-kpi-card tone-'+c.t+'" data-goto-view="'+c.ir+'"'+(c.sit?' data-sit-ir="'+c.sit+'"':'')+(c.pend?' data-ct-pend="1"':'')+'>'
+        + '<div class="n">'+c.n+'</div><div class="l">'+escapeHtml(c.l)+'</div><div class="d">'+escapeHtml(c.d)+'</div></button>';
     }).join("") + '</div>';
 
-    var modCards = [
-      { view:"board", t:"Fichas & Rastreabilidade", d:"Lista geral de fichas FVS e controles de rastreabilidade, com filtros e vínculo automático entre eles.", badge:(totalFvs+totalRast)+" registro(s)" },
-      { view:"pavimento", t:"FVS por Pavimento", d:"Fichas agrupadas por pavimento/unidade, para acompanhar o avanço físico da obra.", badge:totalFvs+" ficha(s)" },
-      { view:"nc", t:"Não Conformidades", d:"Todas as não conformidades das fichas em um só lugar, com geração de relatório em Word.", badge:ncAbertas+" em aberto" },
-      { view:"ct", t:"Controle Tecnológico do Concreto", d:"Resultados de ensaio dos corpos de prova, importados direto da planilha do laboratório.", badge:ctPendentes+" pendente(s)" }
-    ];
-    var modsHtml = '<div class="dash-section-title">Áreas do sistema</div>'
-      + '<div class="dash-modulos">' + modCards.map(function(m){
-          return '<button type="button" class="dash-modulo-card" data-goto-view="'+m.view+'">'
-            + '<div class="t">'+escapeHtml(m.t)+'</div>'
-            + '<div class="d">'+escapeHtml(m.d)+'</div>'
-            + '<div class="badge">'+escapeHtml(m.badge)+'</div>'
-          + '</button>';
-        }).join("") + '</div>';
+    function li(attrs, icone, tom, titulo, sub, dir, dirTom){
+      return '<div class="dash-li" '+attrs+'><span class="ic '+(tom||"")+'"><svg class="ti-i" data-i="'+icone+'"></svg></span>'
+        + '<span class="tx"><b>'+escapeHtml(titulo)+'</b><small>'+escapeHtml(sub||"")+'</small></span>'
+        + (dir?'<span class="dir '+(dirTom||"")+'">'+escapeHtml(dir)+'</span>':'')+'</div>';
+    }
+    function cartao(titulo, irPara, rotuloIr, itensHtml, vazio){
+      return '<div class="dash-card"><div class="dash-card-h"><h3>'+escapeHtml(titulo)+'</h3>'
+        + '<button type="button" class="mais" data-goto-view="'+irPara+'">'+escapeHtml(rotuloIr)+' →</button></div>'
+        + (itensHtml || '<div class="dash-vazio">'+escapeHtml(vazio)+'</div>') + '</div>';
+    }
+    // NCs abertas há mais tempo
+    var ncLista = todasNc.filter(function(i){ return !i.concluida; })
+      .sort(function(a,b){ return (b.diasAberto||0)-(a.diasAberto||0); }).slice(0,5).map(function(i){
+        return li('data-abrir-fvs="'+escapeHtml(i.fichaId)+'"', "alert", "bad", i.descricao||"(sem descrição)",
+          (i.ficha.codigo||"FVS")+" "+(i.ficha.numero||"s/ nº")+" · "+(i.pavimentos[0]||i.ficha.local||""),
+          (i.diasAberto!=null? i.diasAberto+" dia(s)" : ""), (i.diasAberto>7?"bad":""));
+      }).join("");
+    // Corpos de prova com resultado atrasado
+    var ctLista = ctRowsArray().filter(ctTemPendencia).slice(0,5).map(function(r){
+      var idades = ctIdadesPendentes(r).map(function(x){ return x.key+"d"; }).join(", ");
+      return li('data-goto-view="ct" data-ct-pend="1"', "flask", "warn", (r.local||"(sem local)"),
+        "NF "+r.notaRemessa+" · "+(r.concreteira||"")+" · concretado "+fmtDateBR(r.dataConcretagem), "falta "+idades, "bad");
+    }).join("");
+    // FVS em aberto mais recentes
+    var fvsLista = [];
+    fvsMap.forEach(function(f, id){ if(fvsStatus(f).key==="aberto") fvsLista.push({id:id, f:f}); });
+    fvsLista = fvsLista.sort(function(a,b){ return (b.f.dataConcretagem||b.f.dataAbertura||"").localeCompare(a.f.dataConcretagem||a.f.dataAbertura||""); })
+      .slice(0,5).map(function(x){
+        var st = fvsStatus(x.f);
+        return li('data-abrir-fvs="'+escapeHtml(x.id)+'"', "check", st.nc?"bad":"info",
+          (x.f.codigo||"FVS")+" · "+(x.f.numero||"s/ nº")+" — "+(x.f.descricao||""),
+          (fvsPavimentosList(x.f)[0]||x.f.local||"sem local"), fmtDateBR(x.f.dataConcretagem||x.f.dataAbertura));
+      }).join("");
+    // Últimas concretagens
+    var rastLista = [];
+    rastMap.forEach(function(r, id){ rastLista.push({id:id, r:r}); });
+    rastLista = rastLista.sort(function(a,b){ return (b.r.data||"").localeCompare(a.r.data||""); }).slice(0,4).map(function(x){
+      var st = rastStatus(x.r), vol = 0;
+      (x.r.linhas||[]).forEach(function(l){ var v = parseFloat(String(l.volBetoneira||"").replace(",", ".")); if(!isNaN(v)) vol += v; });
+      return li('data-abrir-rast="'+escapeHtml(x.id)+'"', "truck", st.key==="pendente"?"warn":"",
+        "Rastr. "+(x.r.numero||"s/ nº")+" — "+(x.r.blocoPav||(x.r.pavimentos||[])[0]||""),
+        (x.r.linhas||[]).length+" betonada(s)"+(vol? " · "+String(Math.round(vol*10)/10).replace(".", ",")+" m³":""), fmtDateBR(x.r.data));
+    }).join("");
+
+    var agora = new Date();
+    var dataTxt = agora.toLocaleDateString("pt-BR", { weekday:"long", day:"2-digit", month:"long" });
+    var h = agora.getHours(), saud = h<12 ? "Bom dia" : (h<18 ? "Boa tarde" : "Boa noite");
+    var primeiroNome = (currentUserEmail.split("@")[0].split(/[._-]/)[0]||"");
+    primeiroNome = primeiroNome ? primeiroNome.charAt(0).toUpperCase()+primeiroNome.slice(1) : "";
 
     container.innerHTML =
       '<div class="dash-header">'
-        + '<h2>Painel geral</h2>'
-        + '<p class="dash-sub">Visão geral do canteiro — '+escapeHtml(DEFAULT_OBRA)+'. Use os cartões abaixo para entrar em cada área do sistema.</p>'
+        + '<div class="dash-data">'+escapeHtml(dataTxt)+'</div>'
+        + '<h2>'+saud+(primeiroNome?", "+escapeHtml(primeiroNome):"")+'</h2>'
+        + '<p class="dash-sub">'+escapeHtml(DEFAULT_OBRA)+'</p>'
       + '</div>'
       + kpisHtml
-      + modsHtml;
+      + '<div class="dash-grid">'
+        + cartao("Não conformidades abertas há mais tempo", "nc", "Todas", ncLista, "Nenhuma NC em aberto. 👍")
+        + cartao("Corpos de prova com resultado atrasado", "ct", "Controle tecnológico", ctLista, "Nenhum resultado atrasado.")
+        + cartao("Fichas FVS em aberto", "board", "Todas as fichas", fvsLista, "Nenhuma ficha em aberto.")
+        + cartao("Últimas concretagens", "board", "Rastreabilidades", rastLista, "Nenhuma rastreabilidade lançada ainda.")
+      + '</div>';
+    pintarIcones(container);
 
     container.querySelectorAll("[data-goto-view]").forEach(function(btn){
-      btn.addEventListener("click", function(){ switchView(btn.getAttribute("data-goto-view")); });
+      btn.addEventListener("click", function(){
+        var sit = btn.getAttribute("data-sit-ir");
+        if(sit){
+          filters.sit = sit;
+          document.querySelectorAll("#f-situacao .chip").forEach(function(c){ c.setAttribute("aria-pressed", c.getAttribute("data-sit")===sit ? "true":"false"); });
+          render();
+        }
+        if(btn.getAttribute("data-ct-pend")) filtrosCt.somentePendentes = true;
+        switchView(btn.getAttribute("data-goto-view"));
+      });
+    });
+    container.querySelectorAll("[data-abrir-fvs]").forEach(function(el){
+      el.addEventListener("click", function(){ openModal("fvs", el.getAttribute("data-abrir-fvs")); });
+    });
+    container.querySelectorAll("[data-abrir-rast]").forEach(function(el){
+      el.addEventListener("click", function(){ openModal("rast", el.getAttribute("data-abrir-rast")); });
     });
   }
 
@@ -2198,6 +2265,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     document.getElementById("app-root").hidden = false;
     document.getElementById("user-name").textContent = user.displayName || user.email || "";
     currentUserEmail = user.email || "";
+    definirUsuario(currentUserEmail);
     atualizarIndicadorConexao();
     subscribeCollections();
     render();
@@ -2565,6 +2633,14 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   function renderModal(){
     var m=document.getElementById("modal");
     m.innerHTML = draft.type==="fvs" ? fvsModalHtml(draft.data, draft.id) : rastModalHtml(draft.data, draft.id);
+    // v1.3: no celular cada betonada vira um cartão — cada campo leva o nome
+    // da coluna como rótulo (layout.css usa data-label).
+    m.querySelectorAll("table.lines").forEach(function(t){
+      var cab = Array.prototype.map.call(t.querySelectorAll("thead th"), function(th){ return th.textContent.trim(); });
+      t.querySelectorAll("tbody tr").forEach(function(tr){
+        Array.prototype.forEach.call(tr.children, function(td, i){ td.setAttribute("data-label", cab[i]||""); });
+      });
+    });
     wireModalEvents();
     if(draftAlterado()) guardarRascunho();
   }
@@ -2577,9 +2653,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // saber o que cada sigla dos botões (NA/P/X/V) significa.
   var LEGENDA_FVS_HTML = '<div class="legenda-fvs">'
     + '<span class="legenda-item"><span class="legenda-badge badge-na">NA</span>Não aplicável</span>'
-    + '<span class="legenda-item"><span class="legenda-badge badge-p sym-wingdings">P</span>Aprovado</span>'
-    + '<span class="legenda-item"><span class="legenda-badge badge-x">X</span>Reprovado</span>'
-    + '<span class="legenda-item"><span class="legenda-badge badge-v sym-wingdings">V</span>Reinspecionado e aprovado</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-p">✓</span>Aprovado</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-x">✕</span>Reprovado</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-v">↻✓</span>Reinspecionado e aprovado</span>'
     + '</div>';
 
   // Botão de um item do checklist marcado para um grupo específico (elemento
@@ -2588,9 +2664,15 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // legenda impressa no modelo oficial) para virar símbolo; em computadores
   // sem essa fonte instalada, o navegador simplesmente volta a mostrar a
   // letra normal.
+  // v1.3: símbolos Unicode (funcionam em iPhone/Android) no lugar da fonte
+  // Wingdings, que só existe no Windows — no celular aparecia a letra crua.
+  // O valor gravado continua "P"/"X"/"V"/"NA" (exports Excel inalterados).
+  var SEG_SIMBOLO = { NA:"NA", P:"✓", X:"✕", V:"↻✓" };
+  var SEG_NOME = { NA:"Não aplica", P:"Aprovado", X:"Reprovado", V:"Reinspec." };
   function segBtn(key, grupoKey, val, label, v){
-    var symClass = (val==="P"||val==="V") ? " sym-wingdings" : "";
-    return '<button type="button" class="'+symClass.trim()+'" data-check="'+key+'" data-elemento="'+grupoKey+'" data-v="'+val+'" aria-pressed="'+(v===val)+'">'+label+'</button>';
+    return '<button type="button" data-check="'+key+'" data-elemento="'+grupoKey+'" data-v="'+val+'" aria-pressed="'+(v===val)+'"'
+      + ' title="'+SEG_NOME[val]+'" aria-label="'+SEG_NOME[val]+'">'
+      + '<span class="seg-sim">'+SEG_SIMBOLO[val]+'</span><small class="seg-nome">'+SEG_NOME[val]+'</small></button>';
   }
 
   function anyChecklistReprovado(checklist){
@@ -4892,7 +4974,62 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     });
   }
 
+  /* ---------------- v1.3: casca nova (menu, barra inferior, busca) ---------------- */
+  function wireLayoutNovo(){
+    initLayout();
+    document.querySelectorAll(".ti-bn[data-view]").forEach(function(b){
+      b.addEventListener("click", function(){ switchView(b.getAttribute("data-view")); });
+    });
+    // Itens da busca global: telas, ações, fichas, rastreabilidades e traços.
+    initBusca({ itens: function(){
+      var out = [];
+      function tela(t, view, icone){ out.push({ grupo:"Telas", titulo:t, icone:icone, busca:t, abrir:function(){ switchView(view); } }); }
+      tela("Início", "dashboard", "home");
+      tela("Fichas & Rastreabilidade", "board", "check");
+      tela("FVS por pavimento", "pavimento", "layers");
+      tela("Não conformidades", "nc", "alert");
+      tela("Controle tecnológico do concreto", "ct", "flask");
+      tela("Plantas", "plantas", "map");
+      out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
+      out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
+      var fichas = [];
+      fvsMap.forEach(function(f, id){ fichas.push({ id:id, f:f }); });
+      fichas.sort(function(a,b){ return (b.f.dataConcretagem||b.f.dataAbertura||"").localeCompare(a.f.dataConcretagem||a.f.dataAbertura||""); });
+      fichas.forEach(function(x){
+        var f = x.f, pavs = fvsPavimentosList(f);
+        out.push({ grupo:"Fichas FVS", icone:"check",
+          titulo:(f.codigo||"FVS")+" · "+(f.numero||"s/ nº")+" — "+(f.descricao||""),
+          sub:(pavs.join(", ")||f.local||"")+" · "+fvsStatus(f).label, dir:fmtDateBR(f.dataConcretagem||f.dataAbertura),
+          busca:[f.codigo, f.numero, f.descricao, f.local, pavs.join(" "), (f.unidades||[]).join(" "), f.inspecionadoPor, f.engenheiro,
+            fichaNaoConformidades(f).map(function(n){ return n.descricao; }).join(" ")].join(" "),
+          abrir:function(){ openModal("fvs", x.id); } });
+      });
+      var rasts = [];
+      rastMap.forEach(function(r, id){ rasts.push({ id:id, r:r }); });
+      rasts.sort(function(a,b){ return (b.r.data||"").localeCompare(a.r.data||""); });
+      rasts.forEach(function(x){
+        var r = x.r, linhas = r.linhas||[];
+        out.push({ grupo:"Rastreabilidades", icone:"truck",
+          titulo:"Rastr. "+(r.numero||"s/ nº")+" — "+(r.blocoPav||(r.pavimentos||[])[0]||""),
+          sub:linhas.length+" betonada(s) · NF "+linhas.map(function(l){ return l.notaFiscal; }).filter(Boolean).slice(0,3).join(", "),
+          dir:fmtDateBR(r.data),
+          busca:[r.numero, r.blocoPav, (r.pavimentos||[]).join(" "), r.projetoReferencia, r.fckSolicitado,
+            linhas.map(function(l){ return [l.notaFiscal, l.betoneira, l.lacre, l.fornecedor, l.nSerieCP, l.pecas].join(" "); }).join(" ")].join(" "),
+          abrir:function(){ openModal("rast", x.id); } });
+      });
+      ctRowsArray().forEach(function(c){
+        out.push({ grupo:"Controle tecnológico", icone:"flask",
+          titulo:(c.local||"(sem local)")+" — NF "+c.notaRemessa, sub:(c.concreteira||"")+" · fck "+(c.fck||"—")+" MPa",
+          dir:fmtDateBR(c.dataConcretagem),
+          busca:[c.local, c.notaRemessa, c.concreteira, c.laboratorio, "fck "+c.fck].join(" "),
+          abrir:function(){ filtrosCt.busca = String(c.notaRemessa); switchView("ct"); } });
+      });
+      return out;
+    } });
+  }
+
   document.addEventListener("DOMContentLoaded", function(){
+    wireLayoutNovo();
     wireGlobal();
     wireAuth();
     boot();

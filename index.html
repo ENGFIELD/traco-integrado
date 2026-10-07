@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Traço Integrado — SIG</title>
 <!-- PWA: permite instalar como app no celular (ícone SIG na tela de início, abre em tela cheia) -->
 <link rel="manifest" href="manifest.json">
@@ -44,43 +44,55 @@
   </div>
 </div>
 
-<div id="app-root" hidden>
-<div class="wrap">
-  <header class="top">
-    <div class="masthead-strip"></div>
-    <div class="top-inner">
-      <div class="brand">
-        <img class="logo-light" src="/img/sig-logo-light-44319802.png" alt="SIG">
-        <img class="logo-dark" src="/img/sig-logo-dark-de7ddf67.png" alt="SIG">
-        <div class="names">
-          <span class="mark">Traço Integrado</span>
-          <span class="sub" id="obra-label">Consórcio de Construção Belavista Ipanema</span>
-        </div>
-      </div>
-      <span class="sync off" id="sync-indicator"><span class="dot"></span><span id="sync-text">conectando…</span></span>
-      <div class="user-chip">
-        <span class="name" id="user-name"></span>
-        <button class="btn ghost icon-only" id="theme-toggle" title="Alternar tema claro/escuro">◐</button>
-        <button class="btn ghost" id="btn-install-app" hidden title="Instalar como app no celular/computador">Instalar app</button>
-        <button class="btn ghost" id="btn-logout">Sair</button>
+<div id="app-root" class="ti-app" hidden>
+
+  <!-- Menu lateral: fixo no PC; no celular vira gaveta aberta pelo "Mais". -->
+  <aside class="ti-side" id="ti-side" aria-label="Menu">
+    <div class="ti-side-logo">
+      <img class="logo-light" src="/img/sig-logo-light-44319802.png" alt="Belavista Consórcio">
+      <img class="logo-dark" src="/img/sig-logo-dark-de7ddf67.png" alt="Belavista Consórcio">
+      <div class="ti-prod">Traço Integrado</div>
+    </div>
+    <div class="ti-side-novo">
+      <button class="btn primary" id="btn-new-fvs"><svg class="ti-i" data-i="plus"></svg>Nova ficha FVS</button>
+      <button class="btn" id="btn-new-rast"><svg class="ti-i" data-i="truck"></svg>Nova rastreabilidade</button>
+    </div>
+    <nav class="ti-nav" aria-label="Navegação principal">
+      <button class="nav-btn" id="btn-nav-dashboard" data-view="dashboard" aria-current="page"><svg class="ti-i" data-i="home"></svg>Início</button>
+      <div class="ti-grp">Qualidade</div>
+      <button class="nav-btn" id="btn-nav-board" data-view="board" aria-current="false"><svg class="ti-i" data-i="check"></svg>Fichas &amp; Rastreabilidade</button>
+      <button class="nav-btn" id="btn-view-pavimento" data-view="pavimento" aria-current="false"><svg class="ti-i" data-i="layers"></svg>FVS por pavimento</button>
+      <button class="nav-btn" id="btn-nav-nc" data-view="nc" aria-current="false"><svg class="ti-i" data-i="alert"></svg>Não conformidades<span class="ti-cnt" data-cnt="nc" hidden></span></button>
+      <div class="ti-grp">Concreto</div>
+      <button class="nav-btn" id="btn-view-ct" data-view="ct" aria-current="false"><svg class="ti-i" data-i="flask"></svg>Controle tecnológico<span class="ti-cnt" data-cnt="ct" hidden></span></button>
+      <button class="nav-btn" id="btn-view-plantas" data-view="plantas" aria-current="false"><svg class="ti-i" data-i="map"></svg>Plantas</button>
+    </nav>
+    <div class="ti-side-foot">
+      <div class="ti-user"><span class="ti-avatar" id="ti-avatar">·</span><span class="ti-user-txt"><b id="user-name"></b><small id="ti-user-sub">Belavista Ipanema</small></span></div>
+      <div class="ti-side-acoes">
+        <button class="btn ghost" id="theme-toggle" title="Alternar tema claro/escuro"><svg class="ti-i" data-i="moon"></svg>Tema</button>
+        <button class="btn ghost" id="btn-install-app" hidden title="Instalar como app no celular/computador"><svg class="ti-i" data-i="device"></svg>Instalar app</button>
+        <button class="btn ghost" id="btn-logout"><svg class="ti-i" data-i="sair"></svg>Sair</button>
       </div>
     </div>
-    <nav class="main-nav" aria-label="Navegação principal">
-      <div class="nav-tabs" role="tablist">
-        <button class="nav-btn" id="btn-nav-dashboard" data-view="dashboard" aria-current="page">Painel</button>
-        <button class="nav-btn" id="btn-nav-board" data-view="board" aria-current="false">Fichas &amp; Rastreabilidade</button>
-        <button class="nav-btn" id="btn-view-pavimento" data-view="pavimento" aria-current="false">FVS por Pavimento</button>
-        <button class="nav-btn" id="btn-nav-nc" data-view="nc" aria-current="false">Não Conformidades</button>
-        <button class="nav-btn" id="btn-view-ct" data-view="ct" aria-current="false">Controle Tecnológico</button>
-        <button class="nav-btn" id="btn-view-plantas" data-view="plantas" aria-current="false">Plantas</button>
-      </div>
-      <div class="nav-actions">
-        <button class="btn" id="btn-new-rast">+ Rastreabilidade</button>
-        <button class="btn primary" id="btn-new-fvs">+ Ficha FVS</button>
-      </div>
-    </nav>
-  </header>
+  </aside>
+  <div class="ti-side-fundo" id="ti-side-fundo" hidden></div>
 
+  <div class="ti-col">
+    <header class="ti-top">
+      <span class="ti-top-logo">
+        <img class="logo-light" src="/img/sig-logo-light-44319802.png" alt="Belavista Consórcio">
+        <img class="logo-dark" src="/img/sig-logo-dark-de7ddf67.png" alt="">
+      </span>
+      <div class="ti-obra"><span class="k">Obra</span><span class="v" id="obra-label">Consórcio de Construção Belavista Ipanema</span></div>
+      <button class="ti-busca" type="button" data-abrir-busca><svg class="ti-i" data-i="search"></svg><span>Buscar ficha, NF, betoneira, pavimento…</span><kbd>Ctrl K</kbd></button>
+      <span class="ti-esp"></span>
+      <span class="sync off" id="sync-indicator"><span class="dot"></span><span id="sync-text">conectando…</span></span>
+      <button class="ti-icone ti-so-cel" type="button" data-abrir-busca aria-label="Buscar"><svg class="ti-i" data-i="search"></svg></button>
+      <button class="btn primary ti-so-pc" type="button" data-clicar="btn-new-fvs"><svg class="ti-i" data-i="plus"></svg>Nova FVS</button>
+    </header>
+
+    <main class="wrap" id="ti-main">
   <div id="view-dashboard"></div>
 
   <div id="view-board" hidden>
@@ -125,7 +137,26 @@
   <div id="view-ct" hidden></div>
 
   <div id="view-plantas" hidden></div>
-</div>
+    </main>
+  </div>
+
+  <!-- Barra inferior (celular) -->
+  <nav class="ti-bottom" aria-label="Navegação rápida">
+    <button class="ti-bn" data-view="dashboard"><svg class="ti-i" data-i="home"></svg>Início</button>
+    <button class="ti-bn" data-view="board"><svg class="ti-i" data-i="check"></svg>Fichas</button>
+    <button class="ti-bn" data-view="ct"><svg class="ti-i" data-i="flask"></svg>Concreto<span class="ti-cnt" data-cnt="ct" hidden></span></button>
+    <button class="ti-bn" data-view="nc"><svg class="ti-i" data-i="alert"></svg>NCs<span class="ti-cnt" data-cnt="nc" hidden></span></button>
+    <button class="ti-bn" data-abrir-menu><svg class="ti-i" data-i="menu"></svg>Mais</button>
+  </nav>
+  <button class="ti-fab" type="button" data-abrir-novo><svg class="ti-i" data-i="plus"></svg>Novo</button>
+  <div class="ti-folha" id="ti-folha-novo" hidden>
+    <div class="ti-folha-caixa">
+      <div class="ti-folha-tit">Criar novo</div>
+      <button class="btn primary" data-clicar="btn-new-fvs"><svg class="ti-i" data-i="check"></svg>Ficha FVS</button>
+      <button class="btn" data-clicar="btn-new-rast"><svg class="ti-i" data-i="truck"></svg>Rastreabilidade de concreto</button>
+      <button class="btn ghost" data-fechar-folha>Cancelar</button>
+    </div>
+  </div>
 
 <div class="overlay" id="overlay" hidden>
   <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
@@ -135,6 +166,6 @@
 <!-- Chaves públicas do Firebase (arquivo separado de propósito, ver comentário dentro dele). -->
 <script src="/firebase-config.js"></script>
 <script type="module" src="/src/main.js"></script>
-<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-10-07 v1.2</div>
+<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-10-07 v1.3</div>
 </body>
 </html>
