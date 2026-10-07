@@ -1,0 +1,40 @@
+rules_version = '2';
+
+// Regras de segurança do Firestore para o "Traço Integrado".
+// Cópia EXATA das regras publicadas em 23/09/2026 (trazidas para o
+// repositório em 07/10/2026 para versionamento e testes no emulador).
+// A evolução por perfil de acesso (Admin/Engenheiro/Técnico/...) está
+// planejada para a Fase 2 — ver docs/DIAGNOSTICO.md, seção 3.
+//
+// Regra geral: só quem faz login (e-mail/senha, criado manualmente no Firebase
+// Authentication) pode ler ou escrever qualquer dado.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Fichas FVS
+    match /fvs/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Controles de rastreabilidade de concreto (FORM-15)
+    match /rastreabilidade/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Resultados de ensaio dos corpos de prova (Controle Tecnológico do Concreto)
+    match /controleTecnologico/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Biblioteca de plantas de forma
+    match /plantas/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Bloqueia qualquer outra coleção não prevista acima por padrão.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

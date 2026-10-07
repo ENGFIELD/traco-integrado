@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "emuladores",
+      "runtimeExecutable": "firebase",
+      "runtimeArgs": ["emulators:start", "--only", "auth,firestore,hosting", "--project", "traco-integrado-sig"],
+      "port": 5000
+    },
+    {
+      "name": "previa-v2",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "http-server", "docs/previa", "-p", "5180", "-c-1", "--silent"],
+      "port": 5180
+    }
+  ]
+}

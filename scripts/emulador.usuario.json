@@ -1,0 +1,6 @@
+﻿{
+    "email":  "teste@traco.local",
+    "nome":  "Usuário de Teste (emulador)",
+    "observacao":  "Conta que só existe no Firebase Auth Emulator local. Não é conta real.",
+    "senha":  "irZr2uU4UtgbGXpQ"
+}
