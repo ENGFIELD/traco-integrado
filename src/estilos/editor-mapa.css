@@ -1,0 +1,66 @@
+/* Editor de mapeamento em tela cheia — ver src/modulos/rastreabilidade/editor-mapa.js */
+html.edmapa-aberto, html.edmapa-aberto body { overflow: hidden; }
+
+.edmapa {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; flex-direction: column;
+  background: #2b2f31; color: #fff;
+  font-family: var(--font-body);
+  -webkit-user-select: none; user-select: none;
+}
+.edmapa-topo {
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
+  background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border);
+}
+.edmapa-titulo { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edmapa-salvo { font-size: 12.5px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.edmapa-salvo.ok { color: var(--good); }
+.edmapa-salvo.erro { color: var(--bad); }
+
+.edmapa-palco { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: grab; }
+.edmapa-palco:active { cursor: grabbing; }
+.edmapa-mundo { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 10px 40px rgba(0,0,0,.5); }
+.edmapa-mundo canvas, .edmapa-mundo svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.edmapa-mundo canvas { background: #fff; }
+.edmapa-carregando { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 600; color: #ddd; padding: 20px; text-align: center; }
+
+.edmapa-zoom { position: absolute; right: 12px; top: calc(70px + env(safe-area-inset-top)); display: flex; flex-direction: column; gap: 8px; z-index: 2; }
+
+.edmapa-btn {
+  min-height: 44px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: 600 14.5px var(--font-body); cursor: pointer; white-space: nowrap;
+}
+.edmapa-btn:disabled { opacity: .45; cursor: default; }
+.edmapa-btn.primario { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--accent-contrast); }
+.edmapa-btn.grande { flex: 1; min-height: 52px; font-size: 16px; }
+.edmapa-btn.redondo { width: 48px; height: 48px; padding: 0; border-radius: 50%; font-size: 22px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+
+.edmapa-base {
+  background: var(--surface); color: var(--text); border-top: 1px solid var(--border);
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 10px; max-height: 42vh; overflow-y: auto;
+}
+.edmapa-linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edmapa-linha .edmapa-btn.primario { margin-left: auto; }
+.edmapa-cont { font: 600 13px var(--font-mono); color: var(--text-muted); }
+.edmapa-dica { font-size: 13px; color: var(--text-muted); }
+.edmapa-dica b { color: var(--text); }
+
+.edmapa-bts { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.edmapa-bt {
+  min-height: 60px; border-radius: 12px; border: 2px solid var(--cor); background: var(--surface);
+  color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer;
+  font-family: var(--font-body);
+}
+.edmapa-bt b { font-size: 16px; color: var(--cor); }
+.edmapa-bt small { font-size: 11.5px; color: var(--text-muted); }
+
+.edmapa-areas { display: flex; flex-wrap: wrap; gap: 8px; }
+.edmapa-chip {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 4px 0 12px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); font-size: 13.5px; font-weight: 600;
+}
+.edmapa-chip i { width: 12px; height: 12px; border-radius: 3px; background: var(--cor); }
+.edmapa-chip button { width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--bad); font-size: 15px; cursor: pointer; }

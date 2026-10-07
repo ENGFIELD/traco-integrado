@@ -10,6 +10,7 @@ import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
+import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -2245,6 +2246,33 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // Mapeamento de concretagem: a planta de forma (PDF) anexada a esta
   // rastreabilidade, mais as áreas demarcadas nela (cada uma ligada a uma
   // sequência/BT das "Betonadas" acima) — ver mapeamentoFieldHtml().
+  // O Firestore NÃO aceita lista dentro de lista. As áreas do mapeamento
+  // guardavam os pontos como [[x,y],[x,y]...] — por isso toda rastreabilidade
+  // com área demarcada era recusada ao salvar (desde a v1.0). No banco os
+  // pontos passam a ser [{x,y},...]; na memória continuam [x,y] para não mexer
+  // no código de desenho/exportação.
+  function paraFirestore(data){
+    var mp = data && data.mapeamento;
+    if(mp && Array.isArray(mp.areas)){
+      mp.areas = mp.areas.map(function(a){
+        return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
+          return Array.isArray(p) ? { x:p[0], y:p[1] } : p;
+        }) });
+      });
+    }
+    return data;
+  }
+  function doFirestore(data){
+    var mp = data && data.mapeamento;
+    if(mp && Array.isArray(mp.areas)){
+      mp.areas = mp.areas.map(function(a){
+        return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
+          return Array.isArray(p) ? p : [p.x, p.y];
+        }) });
+      });
+    }
+    return data;
+  }
   function blankMapeamento(){
     return { plantaUrl:"", plantaNome:"", pagina:1, tipo:"pdf", areas:[] };
   }
@@ -2416,6 +2444,12 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     var aberto = !document.getElementById("overlay").hidden;
     if(ignorarPop){ ignorarPop=false; if(aberto) marcarHistoricoModal(); return; }
     if(!aberto) return;
+    // Editor de mapa em tela cheia aberto: o Voltar fecha só o editor.
+    if(window.__edmapaFechar){
+      window.__edmapaFechar();
+      try{ history.pushState({tiModal:1}, ""); }catch(ex){}
+      return;
+    }
     if(salvando || (draftAlterado() && !confirm(MSG_SAIR_SEM_SALVAR))){
       try{ history.pushState({tiModal:1}, ""); }catch(ex){}
       return;
@@ -2450,6 +2484,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(!data.elementos) data.elementos={};
     if(!data.linhas) data.linhas=[blankLinha(1)];
     if(type==="rast" && !data.mapeamento) data.mapeamento=blankMapeamento();
+    if(type==="rast") data = doFirestore(data);
     if(type==="fvs" && !data.tipo) data.tipo="fvs04"; // fichas antigas, de antes dos novos tipos
     if(type==="fvs" && !data.unidades) data.unidades=[];
     // Fichas de FVS antigas (antes da lista de não conformidades) chegam aqui
@@ -2856,29 +2891,16 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + '<a class="btn ghost small" href="'+escapeHtml(mp.plantaUrl)+'" target="_blank" rel="noopener">Abrir planta</a>'
         + '<button type="button" class="btn ghost small" id="mapa-exportar-png">Exportar (PNG)</button>'
         + '<label class="btn ghost small nc-anexo-add-label">Trocar planta<input type="file" accept="application/pdf" hidden id="input-planta"></label>'
+        + '<button type="button" class="btn ghost small danger" id="mapa-remover-planta">Remover planta</button>'
       + '</div>'
-      + '<div class="mapa-toolbar">'
-        + '<button type="button" class="btn ghost small" id="mapa-zoom-out">−</button>'
-        + '<span id="mapa-zoom-label" class="hint" style="margin:0;">100%</span>'
-        + '<button type="button" class="btn ghost small" id="mapa-zoom-in">+</button>'
-        + '<button type="button" class="btn primary small" id="mapa-add-area" style="margin-left:auto;">+ Nova área</button>'
-      + '</div>'
-      + '<div class="mapa-scroll"><div class="mapa-stage" id="mapa-stage">'
+      // v1.2: a demarcação acontece no editor em tela cheia (editor-mapa.js);
+      // aqui fica só a prévia — tocar nela também abre o editor.
+      + '<button type="button" class="btn primary" id="mapa-abrir-editor" style="width:100%;justify-content:center;min-height:48px;margin-bottom:8px;">'
+        + 'Demarcar áreas na planta (tela cheia)</button>'
+      + '<div class="mapa-scroll" id="mapa-previa" style="cursor:zoom-in;" title="Toque para abrir o editor em tela cheia"><div class="mapa-stage" id="mapa-stage">'
         + '<canvas id="mapa-canvas" width="0" height="0"></canvas>'
         + '<svg id="mapa-svg" preserveAspectRatio="none"></svg>'
       + '</div></div>'
-      + '<div class="mapa-toolbar" id="mapa-draw-bar" hidden>'
-        + '<span class="hint" style="margin:0;">Toque nos cantos da área concretada (mínimo 3 pontos).</span>'
-        + '<button type="button" class="btn ghost small" id="mapa-undo-ponto">Desfazer ponto</button>'
-        + '<button type="button" class="btn ghost small" id="mapa-cancelar-area">Cancelar</button>'
-        + '<button type="button" class="btn primary small" id="mapa-fechar-area" disabled>Fechar área</button>'
-      + '</div>'
-      + '<div class="mapa-toolbar" id="mapa-seq-picker" hidden>'
-        + '<label for="mapa-seq-select" style="margin:0;">Essa área é do BT:</label>'
-        + '<select id="mapa-seq-select"></select>'
-        + '<button type="button" class="btn ghost small" id="mapa-seq-cancelar">Cancelar</button>'
-        + '<button type="button" class="btn primary small" id="mapa-seq-confirmar">Confirmar área</button>'
-      + '</div>'
       + '<div class="hint" id="mapa-status" style="min-height:14px;"></div>'
       + '<div id="mapa-legenda-host">'+mapaLegendaHtml(d)+'</div>';
   }
@@ -4245,6 +4267,32 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     var btnExportarPng = m.querySelector("#mapa-exportar-png");
     if(btnExportarPng) btnExportarPng.addEventListener("click", function(){ exportarMapeamentoPng(m); });
 
+    // Remover a planta desta rastreabilidade (e as áreas marcadas nela).
+    var btnRemoverPlanta = m.querySelector("#mapa-remover-planta");
+    if(btnRemoverPlanta) btnRemoverPlanta.addEventListener("click", function(){
+      var n = (mp.areas||[]).length;
+      if(!confirm("Remover a planta desta rastreabilidade?"+(n ? "\n\nAs "+n+" área(s) demarcadas nela também serão removidas." : "")+"\n\nA alteração só vale depois de Salvar.")) return;
+      draft.data.mapeamento = blankMapeamento();
+      renderModal();
+    });
+
+    // Editor em tela cheia: zoom de verdade, arrastar, e salva cada área na hora.
+    function abrirEditor(){
+      var d = draft;
+      abrirEditorMapa({
+        mapeamento: d.data.mapeamento,
+        linhas: function(){ return d.data.linhas || []; },
+        cor: mapaCorSequencia,
+        titulo: "Mapeamento — Rastr. "+(d.data.numero || "(sem número)"),
+        salvar: async function(){ return draft===d ? await saveDraft(true) : false; },
+        aoFechar: function(){ if(draft===d) renderModal(); }
+      });
+    }
+    var btnEditor = m.querySelector("#mapa-abrir-editor");
+    if(btnEditor) btnEditor.addEventListener("click", abrirEditor);
+    var previa = m.querySelector("#mapa-previa");
+    if(previa) previa.addEventListener("click", abrirEditor);
+
     var btnZoomOut = m.querySelector("#mapa-zoom-out");
     var btnZoomIn = m.querySelector("#mapa-zoom-in");
     if(btnZoomOut) btnZoomOut.addEventListener("click", function(){ aplicarZoomMapa(m, (mapaEstado?mapaEstado.zoomPct:100)-25); });
@@ -4662,7 +4710,10 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     guardarRascunho(); // cópia no aparelho até o servidor confirmar
     var chave = d.chave;
     setBotoesSalvando(true);
-    var envio = col.doc(d.id).set(JSON.parse(JSON.stringify(d.data)));
+    // Promise.resolve().then: se o Firestore recusar os dados na hora (erro
+    // síncrono), vira uma falha tratada abaixo — antes travava o "Salvando…".
+    var payload = paraFirestore(JSON.parse(JSON.stringify(d.data)));
+    var envio = Promise.resolve().then(function(){ return col.doc(d.id).set(payload); });
     var resultado;
     try{
       resultado = await Promise.race([
