@@ -305,9 +305,26 @@
   }
   .mapa-legenda-item span:nth-child(2){ flex:1; }
   .mapa-cor{ width:14px; height:14px; border-radius:4px; flex-shrink:0; display:inline-block; }
+  .mapa-legenda-texto{ display:flex; flex-direction:column; line-height:1.35; gap:0; }
+  .mapa-legenda-bt{ font-weight:700; }
+  .mapa-legenda-nf{ font-size:11px; color:var(--text-muted); }
   .mapa-rm-area{
     border:none; background:transparent; color:var(--bad); cursor:pointer; font-size:13px; padding:2px 4px;
   }
+
+  /* ---------- biblioteca de plantas ---------- */
+  .planta-grupo-titulo{
+    font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted);
+    margin:16px 0 6px;
+  }
+  .planta-lista{ display:flex; flex-direction:column; gap:8px; }
+  .planta-item{
+    display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border);
+    border-radius:var(--radius-sm); background:var(--surface); flex-wrap:wrap;
+  }
+  .planta-item .nome{ font-weight:600; flex:1 1 200px; }
+  .planta-item .pav{ font-size:11.5px; color:var(--text-muted); }
+  .planta-item .acoes{ display:flex; gap:6px; margin-left:auto; }
 
   .row-actions{ display:flex; gap:6px; justify-content:flex-end; }
   .icon-btn{
@@ -487,7 +504,16 @@
     padding:16px 20px; display:flex; align-items:center; gap:12px; z-index:2;
   }
   .modal-head h2{ font-family:var(--font-display); font-size:22px; margin:0; flex:1; font-weight:700; }
-  .modal-body{ padding:18px 20px 28px; }
+  /* padding inferior generoso (bem maior que o conteúdo normalmente
+     precisaria): o rodapé do modal (.modal-foot) é "sticky" — quando o
+     conteúdo do formulário é mais curto que a altura visível do modal (ex.:
+     poucos campos preenchidos, poucas betonadas), o rodapé "cola" sobre a
+     parte de baixo do conteúdo em vez de ficar só depois dele, e um toque
+     ali (por exemplo, no canto de baixo da planta na ferramenta de
+     mapeamento) acaba caindo em "Salvar"/"Cancelar" por engano.
+     Essa reserva de espaço garante que sempre existe uma folga abaixo do
+     último campo, do tamanho do rodapé, pra isso nunca se sobrepor. */
+  .modal-body{ padding:18px 20px calc(28px + 62px); }
   .modal-foot{
     position:sticky; bottom:0; background:var(--surface); border-top:1px solid var(--border);
     padding:14px 20px; display:flex; gap:10px; justify-content:space-between; flex-wrap:wrap;
@@ -705,6 +731,7 @@
         <button class="nav-btn" id="btn-view-pavimento" data-view="pavimento" aria-current="false">FVS por Pavimento</button>
         <button class="nav-btn" id="btn-nav-nc" data-view="nc" aria-current="false">Não Conformidades</button>
         <button class="nav-btn" id="btn-view-ct" data-view="ct" aria-current="false">Controle Tecnológico</button>
+        <button class="nav-btn" id="btn-view-plantas" data-view="plantas" aria-current="false">Plantas</button>
       </div>
       <div class="nav-actions">
         <button class="btn" id="btn-new-rast">+ Rastreabilidade</button>
@@ -755,6 +782,8 @@
   <div id="view-pavimento" hidden></div>
   <div id="view-nc" hidden></div>
   <div id="view-ct" hidden></div>
+
+  <div id="view-plantas" hidden></div>
 </div>
 
 <div class="overlay" id="overlay" hidden>
@@ -1226,11 +1255,17 @@ var dbf = firebase.firestore();
   var fvsCol = dbf.collection("fvs");
   var rastCol = dbf.collection("rastreabilidade");
   var ctCol = dbf.collection("controleTecnologico");
-  var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map();
+  // Biblioteca de plantas de forma: cada planta é cadastrada uma única vez
+  // aqui (comprimida, ver comprimirPlantaEmImagem) e depois só é escolhida
+  // numa lista dentro de cada rastreabilidade (ver mapeamentoFieldHtml) —
+  // em vez de subir um PDF pesado de novo a cada ficha, economizando a cota
+  // do Cloudinary discutida com o Matheus.
+  var plantasCol = dbf.collection("plantas");
+  var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
   var draft=null;
-  var unsubFvs=null, unsubRast=null, unsubCt=null;
+  var unsubFvs=null, unsubRast=null, unsubCt=null, unsubPlantas=null;
   // Estado transitório da ferramenta de mapeamento (planta + desenho) do
   // modal de rastreabilidade aberto no momento — não é dado da ficha, só o
   // progresso da ferramenta enquanto o modal está na tela (ver
@@ -1598,6 +1633,8 @@ var dbf = firebase.firestore();
     if(viewCt && !viewCt.hidden) renderViewCt();
     var viewDash = document.getElementById("view-dashboard");
     if(viewDash && !viewDash.hidden) renderViewDashboard();
+    var viewPlantas = document.getElementById("view-plantas");
+    if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
   }
 
   /* ---------------- navegação entre telas ---------------- */
@@ -1607,7 +1644,7 @@ var dbf = firebase.firestore();
   // alcançáveis passando por dentro de outra (ex.: Não Conformidades antes
   // só abria de dentro de "FVS por Pavimento") — agora qualquer tela pode
   // ser aberta a partir de qualquer outra, inclusive pelo menu do topo.
-  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct" };
+  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -1620,6 +1657,7 @@ var dbf = firebase.firestore();
     else if(nome==="pavimento") renderViewPavimento();
     else if(nome==="nc") renderViewNc();
     else if(nome==="ct") renderViewCt();
+    else if(nome==="plantas") renderViewPlantas();
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -2354,6 +2392,115 @@ var dbf = firebase.firestore();
   function showViewCt(){ switchView("ct"); }
   function hideViewCt(){ switchView("dashboard"); }
 
+  /* ---------------- biblioteca de plantas de forma ---------------- */
+  // Tela de cadastro/gestão das plantas reaproveitadas pela ferramenta de
+  // mapeamento de concretagem (ver bibliotecaAdicionarPlanta,
+  // mapeamentoFieldHtml e mapaPlantasOrdenadas). Cada planta é cadastrada
+  // uma única vez aqui — comprimida automaticamente — e depois só é
+  // escolhida numa lista dentro de cada rastreabilidade, sem reenviar o PDF.
+  function showViewPlantas(){ switchView("plantas"); }
+  function hideViewPlantas(){ switchView("dashboard"); }
+  function plantasOrdenadasPorPavimento(){
+    var todas = [];
+    plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
+    todas.forEach(function(p){ p._rank = pavimentoRank(p.pavimento); });
+    todas.sort(function(a,b){
+      if(a._rank !== b._rank) return a._rank - b._rank;
+      return (a.nome||"").localeCompare(b.nome||"");
+    });
+    return todas;
+  }
+  function renderViewPlantas(){
+    var container = document.getElementById("view-plantas");
+    if(!container) return;
+    var lista = plantasOrdenadasPorPavimento();
+
+    var uploadHtml = '<div class="ct-upload-bar" id="planta-upload-bar">'
+      + '<div class="info"><div class="t">Cadastrar planta de forma (PDF) na biblioteca</div>'
+        + '<div class="s">A planta é comprimida automaticamente ao cadastrar, pra ocupar bem menos espaço — depois fica disponível pra escolher em qualquer rastreabilidade, sem precisar reenviar o PDF de novo.</div>'
+        + '<div class="hint" id="planta-upload-msg"></div>'
+      + '</div>'
+      + '<input type="text" id="planta-nova-pavimento" placeholder="Pavimento (ex.: 5º Pavimento Tipo)" style="max-width:220px;">'
+      + '<button class="btn primary" id="planta-btn-cadastrar" type="button">Cadastrar planta…</button>'
+      + '<input type="file" id="planta-file-input" accept="application/pdf" hidden>'
+    + '</div>';
+
+    var resumoHtml = '<div class="pav-resumo-grid">'
+      + '<div class="pav-resumo-card"><div class="n">'+lista.length+'</div><div class="l">Plantas cadastradas</div></div>'
+    + '</div>';
+
+    var listaHtml;
+    if(lista.length===0){
+      listaHtml = '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
+    }else{
+      var porGrupo = [];
+      var grupoAtual = null;
+      lista.forEach(function(p){
+        var titulo = p.pavimento || "Sem pavimento definido";
+        if(!grupoAtual || grupoAtual.titulo!==titulo){
+          grupoAtual = { titulo:titulo, itens:[] };
+          porGrupo.push(grupoAtual);
+        }
+        grupoAtual.itens.push(p);
+      });
+      listaHtml = porGrupo.map(function(g){
+        return '<div class="planta-grupo-titulo">'+escapeHtml(g.titulo)+'</div>'
+          + '<div class="planta-lista">'
+          + g.itens.map(function(p){
+              return '<div class="planta-item">'
+                + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
+                + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
+                + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
+                + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
+              + '</div>';
+            }).join("")
+          + '</div>';
+      }).join("");
+    }
+
+    container.innerHTML =
+      '<div class="pav-header">'
+        + '<button class="btn" id="btn-voltar-plantas">← Voltar</button>'
+        + '<h2>Biblioteca de plantas</h2>'
+        + '<span class="pav-total">'+lista.length+' planta(s)</span>'
+      + '</div>'
+      + '<p class="view-desc">Plantas de forma cadastradas uma única vez aqui, pra escolher (sem reenviar) na ferramenta de mapeamento de concretagem de qualquer rastreabilidade.</p>'
+      + uploadHtml
+      + resumoHtml
+      + listaHtml;
+
+    document.getElementById("btn-voltar-plantas").addEventListener("click", hideViewPlantas);
+    var fileInput = document.getElementById("planta-file-input");
+    var msgEl = document.getElementById("planta-upload-msg");
+    document.getElementById("planta-btn-cadastrar").addEventListener("click", function(){ fileInput.click(); });
+    fileInput.addEventListener("change", async function(e){
+      var f = e.target.files && e.target.files[0];
+      fileInput.value = "";
+      if(!f) return;
+      if(!cloudinaryConfigurado()){
+        if(msgEl) msgEl.textContent = "Envio de plantas ainda não configurado neste sistema (falta ligar a conta do Cloudinary).";
+        return;
+      }
+      var pavInput = document.getElementById("planta-nova-pavimento");
+      var pavimento = pavInput ? pavInput.value : "";
+      if(msgEl) msgEl.textContent = "Comprimindo e enviando "+f.name+"…";
+      try{
+        await bibliotecaAdicionarPlanta(f, pavimento);
+        renderViewPlantas();
+      }catch(ex){
+        console.error(ex);
+        if(msgEl) msgEl.textContent = "Não foi possível cadastrar "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
+      }
+    });
+    container.querySelectorAll("[data-rm-planta]").forEach(function(btn){
+      btn.addEventListener("click", async function(){
+        var id = btn.getAttribute("data-rm-planta");
+        if(!confirm("Remover esta planta da biblioteca? Rastreabilidades que já escolheram ela continuam com a planta normalmente, só não vai mais aparecer pra escolher em fichas novas.")) return;
+        try{ await plantasCol.doc(id).delete(); renderViewPlantas(); }catch(ex){ console.error(ex); alert("Não foi possível remover: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
+      });
+    });
+  }
+
   /* ---------------- relatório de não conformidades em .docx (Word) ---------------- */
   // Gera um .docx de verdade (não um .rtf) manipulando o XML do Office Open
   // XML diretamente via JSZip — a mesma técnica já usada pra exportação em
@@ -2808,6 +2955,12 @@ var dbf = firebase.firestore();
       snap.docs.forEach(function(d){ ctMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    if(unsubPlantas) unsubPlantas();
+    unsubPlantas = plantasCol.onSnapshot(function(snap){
+      plantasMap = new Map();
+      snap.docs.forEach(function(d){ plantasMap.set(d.id, d.data()); });
+      render();
+    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
   }
   function showApp(user){
     document.getElementById("auth-screen").hidden = true;
@@ -2861,7 +3014,7 @@ var dbf = firebase.firestore();
   // rastreabilidade, mais as áreas demarcadas nela (cada uma ligada a uma
   // sequência/BT das "Betonadas" acima) — ver mapeamentoFieldHtml().
   function blankMapeamento(){
-    return { plantaUrl:"", plantaNome:"", pagina:1, areas:[] };
+    return { plantaUrl:"", plantaNome:"", pagina:1, tipo:"pdf", areas:[] };
   }
   // Paleta de cores fixa pra distinguir visualmente cada sequência (BT)
   // demarcada na planta — cicla se houver mais sequências do que cores.
@@ -2870,12 +3023,13 @@ var dbf = firebase.firestore();
     var n = parseInt(seq,10); if(isNaN(n) || n<1) n=1;
     return MAPA_CORES[(n-1) % MAPA_CORES.length];
   }
-  // Envia a planta (PDF) direto pro Cloudinary, igual ao envio de anexos de
-  // não conformidade — mesma conta, mesmo preset (ver comentário de
-  // CLOUDINARY_CLOUD_NAME no topo do arquivo).
-  async function rastUploadPlanta(file){
+  // Envia um arquivo (PDF anexado manualmente, ou o blob de imagem já
+  // comprimido de uma planta da biblioteca) direto pro Cloudinary, igual ao
+  // envio de anexos de não conformidade — mesma conta, mesmo preset (ver
+  // comentário de CLOUDINARY_CLOUD_NAME no topo do arquivo).
+  async function uploadParaCloudinary(arquivoOuBlob, nomeArquivo){
     var fd = new FormData();
-    fd.append("file", file);
+    fd.append("file", arquivoOuBlob, nomeArquivo);
     fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
     var endpoint = "https://api.cloudinary.com/v1_1/"+encodeURIComponent(CLOUDINARY_CLOUD_NAME)+"/auto/upload";
     var resp = await fetch(endpoint, { method:"POST", body:fd });
@@ -2885,7 +3039,81 @@ var dbf = firebase.firestore();
       var msg = (data && data.error && data.error.message) ? data.error.message : ("erro HTTP "+resp.status);
       throw new Error(msg);
     }
-    return { url: data.secure_url, nome: file.name||"planta.pdf" };
+    return data.secure_url;
+  }
+  // Anexo manual de planta (PDF) só pra esta rastreabilidade — usado quando o
+  // usuário escolhe "Anexar PDF só pra esta ficha" em vez de escolher uma
+  // planta já cadastrada na biblioteca (ver mapeamentoFieldHtml). Guarda o
+  // PDF original, sem comprimir — como não é reaproveitado em outras
+  // fichas, não pesa tanto na cota quanto duplicar a mesma planta repetida.
+  async function rastUploadPlanta(file){
+    var url = await uploadParaCloudinary(file, file.name||"planta.pdf");
+    return { url: url, nome: file.name||"planta.pdf" };
+  }
+  // Renderiza a página 1 do PDF (via pdf.js) num canvas e devolve esse
+  // desenho como um JPEG — usado só ao CADASTRAR uma planta na biblioteca
+  // (ver bibliotecaAdicionarPlanta). Como essa mesma planta é reaproveitada
+  // por várias rastreabilidades (em vez de reenviar o PDF de novo em cada
+  // uma), vale a pena comprimir aqui: o PDF vetorial original de obra costuma
+  // pesar 2-5MB, e essa versão rasterizada fica bem mais leve, mas ainda
+  // nítida o bastante pro zoom de até 400% da ferramenta de mapeamento.
+  async function comprimirPlantaEmImagem(file){
+    if(!window.pdfjsLib) throw new Error("a biblioteca pdf.js não carregou (verifique a internet)");
+    var arrayBuffer = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({ data:arrayBuffer }).promise;
+    var page = await pdf.getPage(1);
+    var viewportBase = page.getViewport({ scale:1 });
+    var alvoPx = 2400; // largura-alvo (px): nítido até 400% de zoom, sem ficar tão pesado quanto o PDF vetorial original
+    var escala = Math.min(4, alvoPx/viewportBase.width);
+    var viewport = page.getViewport({ scale:escala });
+    var canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,canvas.width,canvas.height); // fundo branco (o PDF pode ter fundo transparente)
+    await page.render({ canvasContext:ctx, viewport:viewport }).promise;
+    var blob = await new Promise(function(resolve){ canvas.toBlob(resolve, "image/jpeg", 0.82); });
+    if(!blob) throw new Error("não foi possível gerar a versão comprimida da planta");
+    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height };
+  }
+  // Cadastra uma planta na biblioteca: comprime (ver comprimirPlantaEmImagem
+  // acima), envia a imagem já leve pro Cloudinary e grava o registro em
+  // /plantas — a partir daí ela aparece pra escolher em qualquer
+  // rastreabilidade (ver mapeamentoFieldHtml / mapaPlantasOrdenadas).
+  async function bibliotecaAdicionarPlanta(file, pavimento){
+    var comp = await comprimirPlantaEmImagem(file);
+    var nomeBase = (file.name||"planta").replace(/\.pdf$/i, "");
+    var url = await uploadParaCloudinary(comp.blob, nomeBase+".jpg");
+    await plantasCol.add({
+      nome: nomeBase,
+      pavimento: (pavimento||"").trim(),
+      url: url,
+      tipo: "imagem",
+      larguraPx: comp.larguraPx,
+      alturaPx: comp.alturaPx,
+      criadoEm: nowISO(),
+      criadoPor: currentUserEmail
+    });
+  }
+  // Ordena as plantas da biblioteca pra exibição num <select>: as que batem
+  // com o(s) pavimento(s) já marcados nesta ficha (chips de pavimentos, ver
+  // pavimentosFieldHtml) aparecem primeiro, o resto continua disponível
+  // embaixo — nunca escondido, só priorizado, já que o reconhecimento do
+  // pavimento (pavimentoRank) é por texto livre e pode não bater sempre.
+  function mapaPlantasOrdenadas(pavimentosRecord){
+    var ranksRecord = (pavimentosRecord||[]).map(pavimentoRank);
+    var todas = [];
+    plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
+    todas.forEach(function(p){
+      p._rank = pavimentoRank(p.pavimento);
+      p._match = p._rank!==9999 && ranksRecord.indexOf(p._rank)!==-1;
+    });
+    todas.sort(function(a,b){
+      if(a._match !== b._match) return a._match ? -1 : 1;
+      if(a._rank !== b._rank) return a._rank - b._rank;
+      return (a.nome||"").localeCompare(b.nome||"");
+    });
+    return todas;
   }
   function blankLinha(seq){
     return { seq:seq, notaFiscal:"", betoneira:"", lacre:"", volBetoneira:"", volAcumulado:"",
@@ -3162,7 +3390,7 @@ var dbf = firebase.firestore();
       var gasto = diffMin(l.saidaUsina, l.lancFinal);
       var over = gasto!=null && gasto>TEMPO_MAX_MIN;
       return '<tr data-line="'+idx+'">'
-        + td(inp("seq",idx,l.seq,"number","width:44px"))
+        + td(inp("seq",idx,l.seq,"number","width:60px"))
         + td(inp("notaFiscal",idx,l.notaFiscal,"text"))
         + td(inp("betoneira",idx,l.betoneira,"text"))
         + td(inp("lacre",idx,l.lacre,"text"))
@@ -3225,7 +3453,7 @@ var dbf = firebase.firestore();
         + '</tr></thead><tbody id="linhas-body">'+linhasHtml+'</tbody></table></div>'
         + '<button type="button" class="btn ghost" id="add-line" style="margin-top:10px;">+ Adicionar betonada</button>'
         + '</fieldset>'
-      + '<fieldset><legend>Mapeamento da concretagem <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— demarque na planta onde cada sequência (BT) foi lançada</span></legend>'
+      + '<fieldset><legend>Mapeamento da concretagem <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— demarque na planta onde cada BT foi lançado</span></legend>'
         + mapeamentoFieldHtml(d)
         + '</fieldset>'
       + '<fieldset><legend>Coleta e observações</legend><div class="grid2">'
@@ -3253,8 +3481,10 @@ var dbf = firebase.firestore();
   // recriar o modal inteiro) depois de fechar/remover uma área.
   function mapaLegendaLinhaHtml(a, ai, linhasFicha){
     var linha = (linhasFicha||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
-    var rotulo = "Sequência "+escapeHtml(a.linhaSeq) + (linha && linha.notaFiscal ? " · NF "+escapeHtml(linha.notaFiscal) : "");
-    return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+a.cor+';"></span><span>'+rotulo+'</span>'
+    return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+a.cor+';"></span>'
+      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+'</span>'
+        + (linha && linha.notaFiscal ? '<span class="mapa-legenda-nf">NF '+escapeHtml(linha.notaFiscal)+'</span>' : '')
+      + '</span>'
       + '<button type="button" class="mapa-rm-area" data-rm-area="'+ai+'" title="Remover área">✕</button></div>';
   }
   function mapaLegendaHtml(d){
@@ -3271,9 +3501,22 @@ var dbf = firebase.firestore();
   function mapeamentoFieldHtml(d){
     var mp = d.mapeamento || blankMapeamento();
     if(!mp.plantaUrl){
-      return '<div class="hint">Anexe a planta de forma (PDF) deste pavimento pra poder demarcar na tela onde o concreto foi lançado nesta rastreabilidade.</div>'
+      var lista = mapaPlantasOrdenadas(d.pavimentos);
+      var pickerHtml = lista.length
+        ? '<div class="mapa-toolbar">'
+            + '<select id="mapa-planta-select" style="flex:1;min-width:180px;">'
+              + '<option value="">Selecione uma planta da biblioteca…</option>'
+              + lista.map(function(p){
+                  return '<option value="'+escapeHtml(p.id)+'">'+escapeHtml(p.nome)+(p.pavimento?" — "+escapeHtml(p.pavimento):"")+'</option>';
+                }).join("")
+            + '</select>'
+            + '<button type="button" class="btn primary small" id="mapa-planta-usar">Usar esta planta</button>'
+          + '</div>'
+        : '<div class="hint">Nenhuma planta cadastrada ainda na biblioteca — cadastre em "Plantas" no menu de navegação (assim ela fica disponível pra escolher em qualquer rastreabilidade), ou anexe um PDF só pra esta ficha abaixo.</div>';
+      return '<div class="hint">Escolha a planta de forma deste pavimento pra poder demarcar na tela onde o concreto foi lançado nesta rastreabilidade.</div>'
+        + pickerHtml
         + '<div class="nc-anexo-add-bar" style="margin-top:8px;">'
-          + '<label class="btn ghost nc-anexo-add-label">+ Anexar planta (PDF)'
+          + '<label class="btn ghost nc-anexo-add-label">+ Anexar um PDF só pra esta ficha'
             + '<input type="file" accept="application/pdf" hidden id="input-planta">'
           + '</label>'
           + '<span class="nc-anexo-status" id="status-planta"></span>'
@@ -3283,6 +3526,7 @@ var dbf = firebase.firestore();
       + '<div class="mapa-toolbar">'
         + '<span class="hint" style="margin:0;flex:1;min-width:120px;">'+escapeHtml(mp.plantaNome)+'</span>'
         + '<a class="btn ghost small" href="'+escapeHtml(mp.plantaUrl)+'" target="_blank" rel="noopener">Abrir planta</a>'
+        + '<button type="button" class="btn ghost small" id="mapa-exportar-png">Exportar (PNG)</button>'
         + '<label class="btn ghost small nc-anexo-add-label">Trocar planta<input type="file" accept="application/pdf" hidden id="input-planta"></label>'
       + '</div>'
       + '<div class="mapa-toolbar">'
@@ -3302,7 +3546,7 @@ var dbf = firebase.firestore();
         + '<button type="button" class="btn primary small" id="mapa-fechar-area" disabled>Fechar área</button>'
       + '</div>'
       + '<div class="mapa-toolbar" id="mapa-seq-picker" hidden>'
-        + '<label for="mapa-seq-select" style="margin:0;">Essa área é da sequência (BT):</label>'
+        + '<label for="mapa-seq-select" style="margin:0;">Essa área é do BT:</label>'
         + '<select id="mapa-seq-select"></select>'
         + '<button type="button" class="btn ghost small" id="mapa-seq-cancelar">Cancelar</button>'
         + '<button type="button" class="btn primary small" id="mapa-seq-confirmar">Confirmar área</button>'
@@ -4618,6 +4862,7 @@ var dbf = firebase.firestore();
         var planta = await rastUploadPlanta(file);
         mp.plantaUrl = planta.url;
         mp.plantaNome = planta.nome;
+        mp.tipo = "pdf";
         mp.pagina = 1;
         mp.areas = [];
         renderModal();
@@ -4627,9 +4872,27 @@ var dbf = firebase.firestore();
       }
     });
 
+    var btnUsarPlanta = m.querySelector("#mapa-planta-usar");
+    if(btnUsarPlanta) btnUsarPlanta.addEventListener("click", function(){
+      var sel = m.querySelector("#mapa-planta-select");
+      var id = sel ? sel.value : "";
+      if(!id){ alert("Selecione uma planta da lista."); return; }
+      var p = plantasMap.get(id);
+      if(!p) return;
+      mp.plantaUrl = p.url;
+      mp.plantaNome = p.nome;
+      mp.tipo = p.tipo || "imagem";
+      mp.pagina = 1;
+      mp.areas = [];
+      renderModal();
+    });
+
     if(!mp.plantaUrl) return; // sem planta ainda, nada mais a fazer aqui
 
     carregarPlantaNoCanvas(m);
+
+    var btnExportarPng = m.querySelector("#mapa-exportar-png");
+    if(btnExportarPng) btnExportarPng.addEventListener("click", function(){ exportarMapeamentoPng(m); });
 
     var btnZoomOut = m.querySelector("#mapa-zoom-out");
     var btnZoomIn = m.querySelector("#mapa-zoom-in");
@@ -4649,10 +4912,36 @@ var dbf = firebase.firestore();
       redesenharSvg(m);
     });
 
+    // Toque num dedo só, em modo de desenho: marca um ponto do polígono.
+    // Dois dedos ao mesmo tempo: em vez de marcar ponto, funciona como
+    // "pinça" pra dar zoom (afastar/aproximar os dedos), já que o toque
+    // nativo de pinça do navegador fica desligado aqui (touch-action:none
+    // em .svg-ativo) pra não brigar com o toque de marcar pontos.
     var svgEl = m.querySelector("#mapa-svg");
+    var mapaPointers = {};
+    var mapaPinchDistIni = null, mapaPinchZoomIni = null;
+    function mapaPinchIds(){ return Object.keys(mapaPointers); }
+    function mapaPinchAtualizar(){
+      var ids = mapaPinchIds();
+      if(ids.length!==2 || mapaPinchDistIni==null) return;
+      var p1 = mapaPointers[ids[0]], p2 = mapaPointers[ids[1]];
+      var distAtual = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+      if(!distAtual || !mapaPinchDistIni) return;
+      var novoPct = Math.round((mapaPinchZoomIni * (distAtual/mapaPinchDistIni)) / 5) * 5;
+      aplicarZoomMapa(m, novoPct);
+    }
     if(svgEl) svgEl.addEventListener("pointerdown", function(ev){
       if(!mapaEstado || !mapaEstado.desenhando) return;
       ev.preventDefault();
+      mapaPointers[ev.pointerId] = { x:ev.clientX, y:ev.clientY };
+      var ids = mapaPinchIds();
+      if(ids.length===2){
+        var p1 = mapaPointers[ids[0]], p2 = mapaPointers[ids[1]];
+        mapaPinchDistIni = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        mapaPinchZoomIni = mapaEstado.zoomPct;
+        return; // começou uma pinça de 2 dedos — não conta como toque de ponto
+      }
+      if(ids.length>2) return; // mais de 2 dedos ao mesmo tempo: ignora
       var rect = svgEl.getBoundingClientRect();
       if(!rect.width || !rect.height) return;
       var xNorm = Math.min(1, Math.max(0, (ev.clientX-rect.left)/rect.width));
@@ -4661,6 +4950,20 @@ var dbf = firebase.firestore();
       atualizarBotaoFechar(m);
       redesenharSvg(m);
     });
+    if(svgEl) svgEl.addEventListener("pointermove", function(ev){
+      if(!mapaPointers[ev.pointerId]) return;
+      mapaPointers[ev.pointerId] = { x:ev.clientX, y:ev.clientY };
+      mapaPinchAtualizar();
+    });
+    function mapaPinchSoltar(ev){
+      delete mapaPointers[ev.pointerId];
+      if(mapaPinchIds().length<2){ mapaPinchDistIni=null; mapaPinchZoomIni=null; }
+    }
+    if(svgEl){
+      svgEl.addEventListener("pointerup", mapaPinchSoltar);
+      svgEl.addEventListener("pointercancel", mapaPinchSoltar);
+      svgEl.addEventListener("pointerleave", mapaPinchSoltar);
+    }
 
     var btnUndo = m.querySelector("#mapa-undo-ponto");
     if(btnUndo) btnUndo.addEventListener("click", function(){
@@ -4686,7 +4989,7 @@ var dbf = firebase.firestore();
       if(!mapaEstado || mapaEstado.pontosAtual.length<3) return;
       var sel = m.querySelector("#mapa-seq-select");
       var seq = sel ? sel.value : "";
-      if(!seq){ alert("Selecione a sequência (BT) dessa área."); return; }
+      if(!seq){ alert("Selecione o BT dessa área."); return; }
       if(!mp.areas) mp.areas=[];
       mp.areas.push({ pontos: mapaEstado.pontosAtual.slice(), linhaSeq: seq, cor: mapaCorSequencia(seq) });
       m.querySelector("#mapa-seq-picker").hidden = true;
@@ -4697,10 +5000,15 @@ var dbf = firebase.firestore();
     wireLegendaAreas(m);
   }
 
-  // Carrega a planta (PDF) da rastreabilidade aberta e desenha a página no
-  // <canvas>, ajustando o <svg> por cima pra ocupar exatamente a mesma área
-  // (mesma proporção largura/altura) — assim os pontos normalizados (0..1)
-  // caem sempre no lugar certo, em qualquer zoom. Reinicia mapaEstado.
+  // Carrega a planta da rastreabilidade aberta e desenha no <canvas>,
+  // ajustando o <svg> por cima pra ocupar exatamente a mesma área (mesma
+  // proporção largura/altura) — assim os pontos normalizados (0..1) caem
+  // sempre no lugar certo, em qualquer zoom. Reinicia mapaEstado.
+  // Duas origens possíveis (ver mp.tipo): "imagem" é uma planta escolhida da
+  // biblioteca (já vem comprimida como JPEG, ver comprimirPlantaEmImagem —
+  // só precisa desenhar a imagem, sem pdf.js); "pdf" é um PDF anexado manual
+  // só pra esta ficha (segue usando pdf.js pra renderizar a página, como
+  // sempre foi).
   async function carregarPlantaNoCanvas(m){
     var mp = draft.data.mapeamento;
     var canvas = m.querySelector("#mapa-canvas");
@@ -4708,6 +5016,32 @@ var dbf = firebase.firestore();
     var stage = m.querySelector("#mapa-stage");
     var statusEl = m.querySelector("#mapa-status");
     if(!canvas || !svgEl || !stage || !mp || !mp.plantaUrl) return;
+    if(mp.tipo==="imagem"){
+      try{
+        if(statusEl) statusEl.textContent = "Carregando planta…";
+        var img = await new Promise(function(resolve, reject){
+          var im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = function(){ resolve(im); };
+          im.onerror = function(){ reject(new Error("falha ao carregar a imagem da planta")); };
+          im.src = mp.plantaUrl;
+        });
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        var ctxImg = canvas.getContext("2d");
+        ctxImg.drawImage(img, 0, 0);
+        svgEl.setAttribute("viewBox", "0 0 "+canvas.width+" "+canvas.height);
+        stage.style.aspectRatio = canvas.width+" / "+canvas.height;
+        mapaEstado = { zoomPct:100, desenhando:false, pontosAtual:[] };
+        aplicarZoomMapa(m, 100);
+        redesenharSvg(m);
+        if(statusEl) statusEl.textContent = "";
+      }catch(ex){
+        console.error("mapeamento: falha ao carregar a planta (imagem)", ex);
+        if(statusEl) statusEl.textContent = "Não foi possível carregar a planta pra desenhar aqui (o arquivo pode ser aberto normalmente pelo link \"Abrir planta\" acima).";
+      }
+      return;
+    }
     if(!window.pdfjsLib){
       if(statusEl) statusEl.textContent = "Não foi possível carregar o desenhador de plantas (biblioteca pdf.js não carregou — verifique a internet). O link \"Abrir planta\" acima continua funcionando normalmente.";
       return;
@@ -4766,7 +5100,7 @@ var dbf = firebase.firestore();
     var sel = m.querySelector("#mapa-seq-select");
     if(sel){
       sel.innerHTML = (draft.data.linhas||[]).map(function(l){
-        var rotulo = "Sequência "+escapeHtml(l.seq) + (l.notaFiscal?" — NF "+escapeHtml(l.notaFiscal):"");
+        var rotulo = "BT "+escapeHtml(l.seq) + (l.notaFiscal?" — NF "+escapeHtml(l.notaFiscal):"");
         return '<option value="'+escapeHtml(l.seq)+'">'+rotulo+'</option>';
       }).join("");
     }
@@ -4800,7 +5134,7 @@ var dbf = firebase.firestore();
       var cx = a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length*vw;
       var cy = a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length*vh;
       var fontSize = Math.max(16, vw*0.022);
-      var texto = "Seq "+a.linhaSeq;
+      var texto = "BT "+a.linhaSeq;
       var rot = document.createElementNS(ns, "rect");
       var rw = texto.length*fontSize*0.62, rh = fontSize*1.5;
       rot.setAttribute("x", cx-rw/2); rot.setAttribute("y", cy-rh/2);
@@ -4851,6 +5185,102 @@ var dbf = firebase.firestore();
         redesenharSvg(m);
       };
     });
+  }
+
+  // Exporta o mapeamento atual (a planta já renderizada no <canvas> + as
+  // áreas marcadas + a legenda) como uma imagem PNG pra baixar — pra poder
+  // mandar por WhatsApp/e-mail ou imprimir depois de terminar as marcações.
+  // Redesenha a planta e cada área direto num <canvas> novo (mesma lógica de
+  // redesenharSvg, só que em 2D canvas em vez de SVG) e acrescenta um
+  // cabeçalho com o nº da rastreabilidade + a legenda embaixo.
+  function exportarMapeamentoPng(m){
+    var mp = draft.data.mapeamento;
+    var canvasBase = m.querySelector("#mapa-canvas");
+    var statusEl = m.querySelector("#mapa-status");
+    if(!canvasBase || !canvasBase.width || !mp || !mp.plantaUrl){
+      if(statusEl) statusEl.textContent = "Carregue a planta antes de exportar.";
+      return;
+    }
+    var areas = mp.areas || [];
+    var vw = canvasBase.width, vh = canvasBase.height;
+    var padMargem = 24, padTopo = 74, linhaLegenda = 28;
+    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + 20) : 36;
+    var out = document.createElement("canvas");
+    out.width = vw + padMargem*2;
+    out.height = padTopo + vh + alturaLegenda + padMargem;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, out.width, out.height);
+
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillText("Mapeamento da concretagem — Rastreabilidade "+(draft.data.numero||"(sem número)"), padMargem, 30);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "#666666";
+    ctx.fillText("Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"), padMargem, 52);
+
+    try{
+      ctx.drawImage(canvasBase, padMargem, padTopo);
+    }catch(ex){
+      console.error("exportarMapeamentoPng: falha ao desenhar a planta", ex);
+      if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem (falha ao ler a planta). Tente de novo depois de recarregar a página.";
+      return;
+    }
+
+    areas.forEach(function(a){
+      if(!a.pontos || a.pontos.length<3) return;
+      ctx.beginPath();
+      a.pontos.forEach(function(p, i){
+        var x = padMargem + p[0]*vw, y = padTopo + p[1]*vh;
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.closePath();
+      ctx.globalAlpha = 0.32; ctx.fillStyle = a.cor; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = a.cor; ctx.lineWidth = Math.max(2, vw*0.003); ctx.stroke();
+
+      var cx = padMargem + (a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length)*vw;
+      var cy = padTopo + (a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length)*vh;
+      var fontSize = Math.max(16, vw*0.022);
+      var texto = "BT "+a.linhaSeq;
+      ctx.font = "bold "+fontSize+"px sans-serif";
+      var rw = ctx.measureText(texto).width + fontSize, rh = fontSize*1.5;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillRect(cx-rw/2, cy-rh/2, rw, rh);
+      ctx.fillStyle = a.cor;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(texto, cx, cy);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    });
+
+    var yLeg = padTopo + vh + 28;
+    if(areas.length===0){
+      ctx.fillStyle = "#666666"; ctx.font = "13px sans-serif";
+      ctx.fillText("Nenhuma área demarcada.", padMargem, yLeg);
+    }else{
+      areas.forEach(function(a, ai){
+        var linha = (draft.data.linhas||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
+        var y = yLeg + ai*linhaLegenda;
+        ctx.fillStyle = a.cor;
+        ctx.fillRect(padMargem, y-13, 14, 14);
+        ctx.fillStyle = "#1a1a1a"; ctx.font = "bold 13px sans-serif";
+        ctx.fillText("BT "+a.linhaSeq + (linha && linha.notaFiscal ? "   ·   NF "+linha.notaFiscal : ""), padMargem+22, y-2);
+      });
+    }
+
+    out.toBlob(function(blob){
+      if(!blob){
+        if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem pra exportar.";
+        return;
+      }
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = "mapeamento_"+(draft.data.numero||"rastreabilidade").replace(/[^a-zA-Z0-9_-]+/g,"_")+".png";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    }, "image/png");
   }
 
   async function saveDraft(keepOpen){
@@ -4968,6 +5398,7 @@ var dbf = firebase.firestore();
     document.getElementById("btn-new-rast").addEventListener("click", function(){ openModal("rast", null); });
     document.getElementById("btn-view-pavimento").addEventListener("click", function(){ showViewPavimento(); });
     document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
+    document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
     document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
@@ -5063,6 +5494,6 @@ var dbf = firebase.firestore();
     });
   })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-09-23b</div>
+<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-09-23d</div>
 </body>
 </html>
