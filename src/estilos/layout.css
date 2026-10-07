@@ -266,6 +266,12 @@ legend { font-size: 16px; }
   table.lines .rm-line { width: var(--toque); height: var(--toque); border-radius: 12px; background: var(--bad-soft); font-size: 16px; }
 }
 
+/* número automático da FVS (v1.4) */
+.num-auto { min-height: var(--toque); display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--border-strong); }
+.num-auto b { font: 700 17px var(--font-mono); }
+.num-auto span { color: var(--text-muted); font-size: 13.5px; font-style: italic; }
+.num-auto small { margin-left: auto; color: var(--text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* login */
 .auth-card { border-radius: 18px; padding: 30px 24px; }
 .auth-card input { min-height: 48px; font-size: 16px; }

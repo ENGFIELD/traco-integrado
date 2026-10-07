@@ -426,6 +426,27 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
     });
   }
+  // v1.4: a rastreabilidade é identificada por DATA + PAVIMENTO (o antigo
+  // "Nº do controle" era só a data digitada, ex. 280926; o campo continua
+  // guardado no banco, mas não aparece mais).
+  function rastRotulo(r){
+    r = r || {};
+    var d = r.data ? fmtDateBR(r.data) : "sem data";
+    var loc = r.blocoPav || (r.pavimentos||[])[0] || "";
+    return d + (loc ? " · "+loc : "");
+  }
+  // v1.4: número automático da FVS — sequência por código de ficha
+  // (FVS 04: 001, 002…; FVS-03.9: 001…). Gerado ao salvar a ficha pela 1ª vez.
+  function proximoNumeroFvs(codigo, ignorarId){
+    var maior = 0;
+    fvsMap.forEach(function(f, id){
+      if(id===ignorarId || (f.codigo||"")!==(codigo||"")) return;
+      var n = /^\d{1,5}$/.test(String(f.numero||"").trim()) ? parseInt(f.numero,10) : (f.numeroSeq||0);
+      if(n>maior) maior = n;
+    });
+    var prox = maior+1;
+    return { numero: (prox<1000 ? ("00"+prox).slice(-3) : String(prox)), seq: prox };
+  }
   function fmtDateBR(iso){
     if(!iso) return "—";
     var p = iso.split("-"); if(p.length!==3) return iso;
@@ -760,7 +781,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         ? '<div class="rec"><span class="num">'+escapeHtml(f.codigo||"FVS")+' · '+escapeHtml(f.numero||"s/ nº")+'</span><span class="meta">'+pill(fvsStatus(f))+'</span></div>'
         : '<div class="rec empty"><span class="num">Sem ficha FVS</span></div>';
       var rastCell = r
-        ? '<div class="rec"><span class="num">Rastr. '+escapeHtml(r.numero||"s/ nº")+'</span><span class="meta">'+pill(rastStatus(r))+'</span></div>'
+        ? '<div class="rec"><span class="num">Concretagem '+escapeHtml(fmtDateBR(r.data))+'</span><span class="meta">'+pill(rastStatus(r))+'</span></div>'
         : '<div class="rec empty"><span class="num">Sem rastreabilidade</span></div>';
       var obra = (f && f.obra) || (r && r.obra) || DEFAULT_OBRA;
       var local = row.local;
@@ -954,7 +975,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       var st = rastStatus(x.r), vol = 0;
       (x.r.linhas||[]).forEach(function(l){ var v = parseFloat(String(l.volBetoneira||"").replace(",", ".")); if(!isNaN(v)) vol += v; });
       return li('data-abrir-rast="'+escapeHtml(x.id)+'"', "truck", st.key==="pendente"?"warn":"",
-        "Rastr. "+(x.r.numero||"s/ nº")+" — "+(x.r.blocoPav||(x.r.pavimentos||[])[0]||""),
+        "Concretagem — "+(x.r.blocoPav||(x.r.pavimentos||[])[0]||"sem local"),
         (x.r.linhas||[]).length+" betonada(s)"+(vol? " · "+String(Math.round(vol*10)/10).replace(".", ",")+" m³":""), fmtDateBR(x.r.data));
     }).join("");
 
@@ -1375,7 +1396,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     var achados = [];
     rastMap.forEach(function(r, id){
       var bateu = (r.linhas||[]).some(function(l){ return ctNormalizaNota(l.notaFiscal)===alvo; });
-      if(bateu) achados.push({ id:id, numero:r.numero||"s/ nº" });
+      if(bateu) achados.push({ id:id, numero:fmtDateBR(r.data) });
     });
     return achados;
   }
@@ -2531,7 +2552,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(!r || !r.data || !document.getElementById("overlay").hidden) return;
     var nome = r.type==="fvs"
       ? "a ficha FVS "+(r.data.numero||"(sem número)")
-      : "a rastreabilidade "+(r.data.numero||"(sem número)");
+      : "a rastreabilidade de "+rastRotulo(r.data);
     if(confirm("Este aparelho tem alterações não salvas n"+nome+" (de "+fmtDateTimeBR(r.em)+").\n\nAbrir agora para revisar e salvar?")){
       openModal(r.type, r.id, r.data.tipo, {restaurar:true});
     }
@@ -2778,7 +2799,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
 
     var linkHtml;
     if(linked){
-      linkHtml = '<div class="link-card linked"><div class="info"><div class="t">Rastreabilidade '+escapeHtml(linked.numero||"s/ nº")+'</div>'
+      linkHtml = '<div class="link-card linked"><div class="info"><div class="t">Rastreabilidade de '+escapeHtml(rastRotulo(linked))+'</div>'
         + '<div class="s">'+escapeHtml(fmtDateBR(linked.data))+' · '+statusBadgeRast(linked)+'</div></div>'
         + '<button class="btn" id="open-linked-rast">Abrir</button>'
         + '<button class="btn ghost danger" id="unlink-rast">Desvincular</button></div>';
@@ -2786,7 +2807,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       linkHtml = '<div class="link-card"><div class="info"><div class="t">Nenhuma rastreabilidade vinculada</div><div class="s">Vincule um controle existente ou gere um novo já conectado a esta ficha.</div></div>'
         + '<div class="picker">'
         + '<select id="link-picker"><option value="">Selecionar existente…</option>'
-        + unlinkedRast.map(function(x){ return '<option value="'+x.id+'">'+escapeHtml(fmtDateBR(x.r.data))+' · Rastr. '+escapeHtml(x.r.numero||"s/ nº")+'</option>'; }).join("")
+        + unlinkedRast.map(function(x){ return '<option value="'+x.id+'">'+escapeHtml(rastRotulo(x.r))+'</option>'; }).join("")
         + '</select>'
         + '<button class="btn" id="do-link-rast">Vincular</button>'
         + '<button class="btn primary" id="gen-rast">+ Gerar nova</button>'
@@ -2799,7 +2820,11 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       + (anyReprovado && (d.naoConformidades||[]).length===0 ? '<div class="banner">Há item(ns) marcado(s) como reprovado (X). Considere registrar uma não conformidade abaixo.</div>' : '')
       + '<fieldset><legend>Identificação</legend><div class="grid3">'
         + field("Código FVS","codigo",d.codigo,"text")
-        + field("Nº da ficha","numero",d.numero,"text","ex.: 004-032")
+        // v1.4: número automático (não editável), gerado ao salvar
+        + '<div class="field"><label>Nº da ficha</label><div class="num-auto">'
+          + (d.numero ? '<b>'+escapeHtml(d.numero)+'</b>' : '<span>gerado ao salvar</span>')
+          + (d.numeroAnterior ? '<small>antes: '+escapeHtml(d.numeroAnterior)+'</small>' : '')
+        + '</div></div>'
         + field("Descrição do serviço","descricao",d.descricao,"text")
         + '</div><div class="grid2">'+field("Obra","obra",d.obra,"text")+field("Local / elemento","local",d.local,"text","ex.: 5º Pav. — Laje")+'</div></fieldset>'
       + '<fieldset><legend>Pavimentos desta ficha</legend>'+pavimentosFieldHtml(d)+'</fieldset>'
@@ -2880,9 +2905,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       + '<div class="modal-head"><h2 id="modal-title">'+(id?"Editar rastreabilidade":"Nova rastreabilidade")+'</h2>'+statusBadgeRast(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
       + '<div class="modal-body">'
       + '<div class="banner" id="rast-overrun-banner" style="'+(anyOverrun?"":"display:none;")+'">Uma ou mais betonadas excederam o tempo máximo de lançamento (2h30 — NBR 12655). Registre a ação corretiva ao final.</div>'
-      + '<fieldset><legend>Identificação</legend><div class="grid3">'
-        + field("Nº do controle","numero",d.numero,"text","ex.: RC-018")
-        + field("Data","data",d.data,"date")
+      + '<fieldset><legend>Identificação</legend><div class="grid2">'
+        // v1.4: sem "Nº do controle" — a ficha é identificada por data + pavimento
+        + field("Data da concretagem","data",d.data,"date")
         + field("Bloco / Pavimento","blocoPav",d.blocoPav,"text")
         + '</div><div class="grid3">'
         + field("Obra","obra",d.obra,"text")
@@ -3991,7 +4016,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         return zip.generateAsync({type:"blob"});
       });
     }).then(function(blob){
-      triggerDownload(blob, "Rastreabilidade_"+safeName(d.numero)+"_"+(d.data||"sem_data")+".xlsx");
+      triggerDownload(blob, "Rastreabilidade_"+(d.data||"sem_data")+"_"+safeName(d.blocoPav||"").slice(0,30)+".xlsx");
     }).catch(function(err){
       console.error("Falha ao exportar Rastreabilidade:", err);
       alert("Não foi possível gerar o Excel de Rastreabilidade. Tente novamente.");
@@ -4365,7 +4390,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         mapeamento: d.data.mapeamento,
         linhas: function(){ return d.data.linhas || []; },
         cor: mapaCorSequencia,
-        titulo: "Mapeamento — Rastr. "+(d.data.numero || "(sem número)"),
+        titulo: "Mapeamento — "+rastRotulo(d.data),
         salvar: async function(){ return draft===d ? await saveDraft(true) : false; },
         aoFechar: function(){ if(draft===d) renderModal(); }
       });
@@ -4696,7 +4721,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
 
     ctx.fillStyle = "#1a1a1a";
     ctx.font = "bold 20px sans-serif";
-    ctx.fillText("Mapeamento da concretagem — Rastreabilidade "+(draft.data.numero||"(sem número)"), padMargem, 30);
+    ctx.fillText("Mapeamento da concretagem — "+rastRotulo(draft.data), padMargem, 30);
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "#666666";
     ctx.fillText("Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"), padMargem, 52);
@@ -4757,7 +4782,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       var url = URL.createObjectURL(blob);
       var link = document.createElement("a");
       link.href = url;
-      link.download = "mapeamento_"+(draft.data.numero||"rastreabilidade").replace(/[^a-zA-Z0-9_-]+/g,"_")+".png";
+      link.download = "mapeamento_"+(draft.data.data||"sem_data")+"_"+safeName(draft.data.blocoPav||"").slice(0,30)+".png";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -4789,6 +4814,11 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     // O id é gerado antes de enviar: se a pessoa tocar de novo, ou se o envio
     // ficar na fila sem sinal, continua sendo a MESMA ficha (sem duplicar).
     if(!d.id) d.id = col.doc().id;
+    // v1.4: FVS sem número ganha o próximo da sequência do seu código.
+    if(d.type==="fvs" && !String(d.data.numero||"").trim()){
+      var pn = proximoNumeroFvs(d.data.codigo, d.id);
+      d.data.numero = pn.numero; d.data.numeroSeq = pn.seq; d.data.numeroAuto = true;
+    }
     guardarRascunho(); // cópia no aparelho até o servidor confirmar
     var chave = d.chave;
     setBotoesSalvando(true);
@@ -4874,6 +4904,8 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         var nf = blankFvs(tipoKey);
         nf.obra=r.obra; nf.local=r.blocoPav; nf.dataConcretagem=r.data; nf.dataAbertura=r.data;
         nf.rastreabilidadeId = rastId;
+        var pn2 = proximoNumeroFvs(nf.codigo, null);
+        nf.numero = pn2.numero; nf.numeroSeq = pn2.seq; nf.numeroAuto = true;
         var ref2 = await fvsCol.add(nf);
         if(draft && draft.id===rastId){
           draft.data.fvsId = ref2.id;
@@ -5010,7 +5042,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       rasts.forEach(function(x){
         var r = x.r, linhas = r.linhas||[];
         out.push({ grupo:"Rastreabilidades", icone:"truck",
-          titulo:"Rastr. "+(r.numero||"s/ nº")+" — "+(r.blocoPav||(r.pavimentos||[])[0]||""),
+          titulo:"Concretagem "+rastRotulo(r),
           sub:linhas.length+" betonada(s) · NF "+linhas.map(function(l){ return l.notaFiscal; }).filter(Boolean).slice(0,3).join(", "),
           dir:fmtDateBR(r.data),
           busca:[r.numero, r.blocoPav, (r.pavimentos||[]).join(" "), r.projetoReferencia, r.fckSolicitado,
