@@ -1,0 +1,14 @@
+{
+  "obra": {
+    "id": "belavista-ipanema",
+    "nome": "Consórcio de Construção Belavista Ipanema",
+    "empresa": "SIG Engenharia",
+    "cidade": "Rio de Janeiro"
+  },
+  "equipe": [
+    { "email": "matheus.alves@sig.eng.br",  "nome": "Matheus Alves",  "cargo": "Estagiário / Desenvolvedor do sistema", "papel": "admin",        "adminGlobal": true },
+    { "email": "suellen.alves@sig.eng.br",  "nome": "Suellen Alves",  "cargo": "Engenheira Civil",                      "papel": "admin",        "adminGlobal": true },
+    { "email": "alice.soares@sig.eng.br",   "nome": "Alice Soares",   "cargo": "Estagiária",                            "papel": "tecnico",      "adminGlobal": false },
+    { "email": "jessica.araujo@sig.eng.br", "nome": "Jéssica Araújo", "cargo": "Analista de Qualidade",                 "papel": "visualizador", "adminGlobal": false }
+  ]
+}

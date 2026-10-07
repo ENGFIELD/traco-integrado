@@ -1,0 +1,181 @@
+rules_version = '2';
+
+// =============================================================================
+// Regras de segurança da v2 do Traço Integrado (multi-obra + perfis).
+// Etapa 2.2 — usadas SÓ nos testes do emulador até a virada (etapa 2.6).
+// Em produção continua valendo firestore.rules (v1) até lá.
+//
+// Contrato (docs/PLANO_V2.md, seções 3 e 4):
+//  - Papel por obra em usuarios/{uid}.obras[obraId]:
+//      admin | engenheiro | tecnico | encarregado | visualizador
+//  - Ninguém apaga dados: "excluir" = marcar excluidoEm (lixeira, 30 dias).
+//  - Toda gravação de dados leva junto (mesmo lote) um registro em
+//    obras/{obraId}/auditoria/{id}; sem ele, a gravação é recusada.
+//  - atualizadoEm/criadoEm = horário do SERVIDOR; atualizadoPor = quem grava.
+//  - versao = anterior + 1 (bloqueia sobrescrita silenciosa entre duas pessoas).
+//  - Ficha fechada só muda com Engenheiro/Admin; só eles fecham e reabrem.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- utilidades ----------------
+    function logado() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function caminhoUsuario(u) { return /databases/$(database)/documents/usuarios/$(u); }
+    function perfil() { return get(caminhoUsuario(uid())).data; }
+    function temPerfil() { return logado() && exists(caminhoUsuario(uid())); }
+    function ativo() { return temPerfil() && perfil().get('ativo', false) == true; }
+    function adminGlobal() { return ativo() && perfil().get('adminGlobal', false) == true; }
+
+    // papel na obra (ou null)
+    function papel(o) { return ativo() ? perfil().get('obras', {}).get(o, null) : null; }
+    function membro(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico', 'encarregado', 'visualizador']; }
+    function gestor(o) { return papel(o) in ['admin', 'engenheiro']; }           // fecha, reabre, restaura
+    function editorTecnico(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico']; } // FVS, rastr., CT, plantas
+    function adminObra(o) { return papel(o) == 'admin'; }
+
+    // ---------------- metadados obrigatórios em toda gravação ----------------
+    function novo() { return request.resource.data; }
+    function antigo() { return resource.data; }
+    function mudou(campo) { return novo().get(campo, null) != antigo().get(campo, null); }
+
+    function autoriaCriacao(o) {
+      return novo().obraId == o
+        && novo().schema == 2
+        && novo().versao == 1
+        && novo().criadoEm == request.time
+        && novo().atualizadoEm == request.time
+        && novo().criadoPor.uid == uid()
+        && novo().atualizadoPor.uid == uid()
+        && novo().get('excluidoEm', null) == null;
+    }
+    function autoriaEdicao(o) {
+      return novo().obraId == o
+        && novo().schema == 2
+        && novo().versao == antigo().versao + 1
+        && novo().atualizadoEm == request.time
+        && novo().atualizadoPor.uid == uid()
+        && !mudou('criadoEm') && !mudou('criadoPor');
+    }
+
+    // Auditoria no MESMO lote: o documento aponta para o registro que está
+    // sendo criado junto, e o registro aponta de volta para este documento.
+    function auditoriaOk(o, col, id) {
+      let audId = novo().get('ultimaAuditoria', '');
+      let caminho = /databases/$(database)/documents/obras/$(o)/auditoria/$(audId);
+      return audId is string && audId.size() > 0
+        && (resource == null || audId != antigo().get('ultimaAuditoria', ''))
+        && existsAfter(caminho)
+        && getAfter(caminho).data.colecao == col
+        && getAfter(caminho).data.docId == id
+        && getAfter(caminho).data.por.uid == uid();
+    }
+
+    // Lixeira: mexer em excluidoEm.
+    function excluindo() { return antigo().get('excluidoEm', null) == null && novo().get('excluidoEm', null) != null; }
+    function restaurando() { return antigo().get('excluidoEm', null) != null && novo().get('excluidoEm', null) == null; }
+    function lixeiraOk(o) {
+      return !mudou('excluidoEm')
+        || (excluindo() && novo().excluidoEm == request.time && novo().excluidoPor.uid == uid()
+            && (gestor(o) || (papel(o) == 'tecnico' && antigo().criadoPor.uid == uid() && antigo().get('fechado', false) == false)))
+        || (restaurando() && gestor(o));
+    }
+    // Item na lixeira só pode ser restaurado (nada mais muda junto).
+    function naLixeiraOk() {
+      return antigo().get('excluidoEm', null) == null
+        || novo().diff(antigo()).affectedKeys().hasOnly(['excluidoEm', 'excluidoPor', 'versao', 'atualizadoEm', 'atualizadoPor', 'ultimaAuditoria']);
+    }
+
+    // Fechar/reabrir e mexer em ficha fechada: só gestor.
+    function fechamentoOk(o) {
+      return (!mudou('fechado') || gestor(o))
+        && (antigo().get('fechado', false) == false || gestor(o));
+    }
+
+    // Tamanhos razoáveis (proteção contra lixo/abuso; o limite do Firestore é 1 MB).
+    function textoOk(campo, max) { return !(campo in novo()) || novo()[campo] == null || (novo()[campo] is string && novo()[campo].size() <= max); }
+    function camposBasicosOk() {
+      return textoOk('numero', 60) && textoOk('obra', 200) && textoOk('local', 500)
+        && textoOk('observacoes', 5000) && textoOk('acoesCorretivas', 5000);
+    }
+
+    // ---------------- usuários ----------------
+    match /usuarios/{u} {
+      // a própria pessoa, ou qualquer membro ativo (para mostrar nomes da equipe)
+      allow read: if logado() && (u == uid() || ativo());
+      // criar/alterar papéis: só admin global
+      allow create, update: if adminGlobal();
+      // a própria pessoa pode mudar só nome/cargo/telefone (não pode se promover)
+      allow update: if logado() && u == uid() && ativo()
+        && novo().diff(antigo()).affectedKeys().hasOnly(['nome', 'cargo', 'telefone']);
+      allow delete: if false;
+    }
+
+    // ---------------- obras ----------------
+    match /obras/{o} {
+      allow read: if membro(o);
+      allow create: if adminGlobal();
+      allow update: if adminObra(o) || adminGlobal();
+      allow delete: if false;
+
+      // Dados técnicos com ficha fechável
+      match /{col}/{id} {
+        allow read: if membro(o) && col in ['fvs', 'rastreabilidade', 'controleTecnologico', 'plantas', 'config'];
+      }
+      match /fvs/{id} {
+        allow create: if editorTecnico(o) && autoriaCriacao(o) && camposBasicosOk()
+          && (novo().get('fechado', false) == false || gestor(o)) && auditoriaOk(o, 'fvs', id);
+        allow update: if editorTecnico(o) && autoriaEdicao(o) && camposBasicosOk()
+          && fechamentoOk(o) && lixeiraOk(o) && naLixeiraOk() && auditoriaOk(o, 'fvs', id);
+        allow delete: if false;
+      }
+      match /rastreabilidade/{id} {
+        allow create: if editorTecnico(o) && autoriaCriacao(o) && camposBasicosOk()
+          && (novo().get('fechado', false) == false || gestor(o)) && auditoriaOk(o, 'rastreabilidade', id);
+        allow update: if editorTecnico(o) && autoriaEdicao(o) && camposBasicosOk()
+          && fechamentoOk(o) && lixeiraOk(o) && naLixeiraOk() && auditoriaOk(o, 'rastreabilidade', id);
+        allow delete: if false;
+      }
+      // Sem "fechado": controle tecnológico (planilha do laboratório) e plantas
+      match /controleTecnologico/{id} {
+        allow create: if editorTecnico(o) && autoriaCriacao(o) && auditoriaOk(o, 'controleTecnologico', id);
+        allow update: if editorTecnico(o) && autoriaEdicao(o) && lixeiraOk(o) && naLixeiraOk() && auditoriaOk(o, 'controleTecnologico', id);
+        allow delete: if false;
+      }
+      match /plantas/{id} {
+        allow create: if editorTecnico(o) && autoriaCriacao(o) && auditoriaOk(o, 'plantas', id);
+        allow update: if editorTecnico(o) && autoriaEdicao(o) && lixeiraOk(o) && naLixeiraOk() && auditoriaOk(o, 'plantas', id);
+        allow delete: if false;
+      }
+      // Configurações da obra (ex.: última importação do CT)
+      match /config/{id} {
+        allow write: if editorTecnico(o);
+      }
+
+      // Auditoria: só criar, sempre em nome de quem grava, com horário do servidor.
+      match /auditoria/{aid} {
+        allow read: if editorTecnico(o);
+        allow create: if editorTecnico(o)
+          && request.resource.data.por.uid == uid()
+          && request.resource.data.em == request.time
+          && request.resource.data.colecao in ['fvs', 'rastreabilidade', 'controleTecnologico', 'plantas']
+          && request.resource.data.acao in ['criar', 'editar', 'fechar', 'reabrir', 'excluir', 'restaurar', 'vincular', 'importar', 'migrar']
+          && request.resource.data.docId is string;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------------- coleções da v1 (raiz) ----------------
+    // Depois da virada: somente leitura por 90 dias, como garantia.
+    match /fvs/{id} { allow read: if ativo(); allow write: if false; }
+    match /rastreabilidade/{id} { allow read: if ativo(); allow write: if false; }
+    match /controleTecnologico/{id} { allow read: if ativo(); allow write: if false; }
+    match /plantas/{id} { allow read: if ativo(); allow write: if false; }
+
+    // Qualquer outra coisa: bloqueado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

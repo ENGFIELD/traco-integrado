@@ -266,6 +266,16 @@ Depois vem a **Fase 3** (offline completo, PWA, layout mobile da prévia, fotos 
 
 ---
 
+## 8.1 Andamento
+
+| Etapa | Situação |
+|---|---|
+| 2.1 | ✅ **Publicada (v1.2)** em 07/10/2026. 86/86 exports idênticos à v1.1. Junto foi o editor de mapeamento em tela cheia, com correção: áreas nunca eram salvas porque o Firestore não aceita lista dentro de lista. |
+| 2.2 | ✅ Concluída no emulador em 07/10/2026: `firestore.v2.rules` + **40 testes** (`npm run test:regras`, 40/40 ok); `scripts/usuarios.js definir-papeis` (simulação conferida contra as 4 contas reais, **nada gravado em produção**). |
+| 2.3 | Próxima: repositório com auditoria, lixeira, versão e horário do servidor no app (só emulador) |
+
+**Limitação conhecida da 2.2:** hoje as NCs ficam dentro da ficha FVS (lista `naoConformidades`). Por isso a regra "só Engenheiro/Admin encerra NC" é garantida **pela tela**, não pelo banco. Ela passa a ser garantida pelo banco quando as NCs ganharem coleção própria (Fase 4.2).
+
 ## 9. Decisões (aprovadas pelo Matheus em 07/10/2026)
 
 | # | Decisão |
