@@ -76,3 +76,6 @@ node_modules/
 chaves/
 # Dumps do Firestore (contêm dados reais da obra)
 backups/firestore_*.json
+
+# Pasta da chave de serviço (fica dentro do projeto, mas NUNCA versionar nem publicar)
+chaves-firebase/
