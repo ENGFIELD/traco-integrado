@@ -79,3 +79,6 @@ backups/firestore_*.json
 
 # Pasta da chave de serviço (fica dentro do projeto, mas NUNCA versionar nem publicar)
 chaves-firebase/
+
+# Build do Vite (gerado por npm run build)
+dist/

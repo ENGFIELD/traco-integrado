@@ -266,7 +266,23 @@ Depois vem a **Fase 3** (offline completo, PWA, layout mobile da prévia, fotos 
 
 ---
 
-## 9. O que preciso que você decida
+## 9. Decisões (aprovadas pelo Matheus em 07/10/2026)
+
+| # | Decisão |
+|---|---|
+| 1 | Vite + módulos, sem framework: **aprovado** |
+| 2 | Papéis iniciais da obra `belavista-ipanema` (contas conferidas no Firebase Auth: só estas 4 existem): |
+|   | `matheus.alves@sig.eng.br`: Estagiário / Desenvolvedor, **admin** |
+|   | `suellen.alves@sig.eng.br`: Engenheira Civil, **admin** (controle total) |
+|   | `alice.soares@sig.eng.br`: Estagiária, **tecnico** (edita FVS, rastreabilidade e CT) |
+|   | `jessica.araujo@sig.eng.br`: Analista de Qualidade, **visualizador** |
+| 3 | Lixeira de 30 dias, exclusão definitiva só por script do Admin: **aprovado** |
+| 4 | Coleções antigas somente leitura por 90 dias depois da virada: **aprovado** |
+| 5 | Matriz de permissões da seção 3: **aprovada sem mudanças** |
+| 6 | ID da obra `belavista-ipanema`: **aprovado** |
+
+### Perguntas originais
+
 
 1. **Vite + módulos (sem framework):** aprova?
 2. **Papéis da equipe atual:** me passe os 4 e-mails e o papel de cada um (Admin, Engenheiro, Técnico/Estagiário, Encarregado ou Visualizador). Hoje só 1 e-mail aparece como autor das edições.

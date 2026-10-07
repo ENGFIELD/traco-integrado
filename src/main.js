@@ -1,0 +1,4911 @@
+/* Traço Integrado — ponto de entrada (Vite).
+   Etapa 2.1 (v1.2): o código da v1.1 roda aqui SEM mudança de comportamento.
+   O que mudou é só a embalagem: CSS em arquivo próprio, logos e modelos
+   Excel como arquivos (baixados só quando usados) e bibliotecas pesadas
+   (Excel, ZIP, PDF) carregadas sob demanda — ver ./libs.js.
+   Os blocos abaixo serão divididos em módulos (src/modulos/...) aos poucos,
+   conforme cada área for sendo mexida nas próximas etapas. */
+import "./estilos/app.css";
+import firebase from "firebase/compat/app";
+import "firebase/compat/auth";
+import "firebase/compat/firestore";
+import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
+
+// Mantido no escopo global para depuração e testes automatizados.
+window.firebase = firebase;
+
+/* ===== bloco 1 — inicialização do Firebase ===== */
+firebase.initializeApp(firebaseConfig);
+var auth = firebase.auth();
+var dbf = firebase.firestore();
+// Rodando no próprio PC (http://localhost): usa os Firebase Emulators com uma
+// CÓPIA dos dados, nunca o banco real. No site publicado isto não se aplica.
+if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
+  auth.useEmulator("http://127.0.0.1:9099");
+  dbf.useEmulator("127.0.0.1", 8080);
+}
+
+/* ===== bloco 2 — aplicação ===== */
+(function(){
+  "use strict";
+
+  // pdf.js precisa de um "worker" (script separado que faz o trabalho pesado
+  // de decodificar o PDF fora da thread principal) — aponta pra mesma versão
+  // carregada lá em cima. Só configura se a biblioteca carregou de verdade
+  // (rede instável, adblock etc. podem impedir) — o resto do sistema
+  // continua funcionando normalmente mesmo sem isso; só a demarcação na
+  // planta do mapeamento de concretagem fica indisponível.
+  if(window.pdfjsLib){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  }
+
+  /* ---------------- anexos (fotos/documentos) das não conformidades ----------------
+     Os anexos são enviados direto do navegador pra uma conta gratuita do
+     Cloudinary (sem precisar de servidor nem de senha exposta no código —
+     um "unsigned upload preset" é seguro de deixar aqui). Pra ativar:
+       1. Crie uma conta grátis em https://cloudinary.com/users/register/free
+       2. No painel, copie o "Cloud name" (aparece no topo do Dashboard) e
+          cole abaixo em CLOUDINARY_CLOUD_NAME.
+       3. Vá em Settings → Upload → "Upload presets" → "Add upload preset",
+          troque "Signing Mode" para "Unsigned", salve, e cole o nome desse
+          preset abaixo em CLOUDINARY_UPLOAD_PRESET.
+     Removendo um anexo, ele só é desvinculado da ficha — o arquivo
+     continua guardado no Cloudinary (o Cloudinary não deixa mais pedir um
+     "delete token" em uploads sem assinatura/unsigned, então não dá pra
+     apagar o arquivo de dentro do próprio sistema; no plano gratuito isso
+     não chega a ser um problema de espaço na prática).
+     Enquanto os valores abaixo continuarem como estão, o botão de anexo
+     mostra um aviso explicando que falta configurar, em vez de tentar
+     enviar o arquivo. */
+  var CLOUDINARY_CLOUD_NAME = "uyzrizru";
+  var CLOUDINARY_UPLOAD_PRESET = "Fotos FVS";
+  function cloudinaryConfigurado(){
+    return CLOUDINARY_CLOUD_NAME && CLOUDINARY_CLOUD_NAME.indexOf("SEU_")!==0
+        && CLOUDINARY_UPLOAD_PRESET && CLOUDINARY_UPLOAD_PRESET.indexOf("SEU_")!==0;
+  }
+
+  var FVS_CHECKLIST = [
+    { cat:"Montagem de Fôrma", itens:[
+      {n:"Travamento", m:"Travamento e encaixe dos painéis, verificado visualmente."},
+      {n:"Nivelamento", m:"Nível do topo das fôrmas com nível a laser (desvio máx. 5mm)."},
+      {n:"Prumo", m:"Prumo de face (desvio máx. 3mm)."},
+      {n:"Escoramento", m:"Posição e quantidade do escoramento de acordo com o projeto."}
+    ]},
+    { cat:"Montagem de Armadura", itens:[
+      {n:"Amarração e posicionamento", m:"Amarração firme, armadura sem contato com as fôrmas, conforme projeto."},
+      {n:"Armadura positiva", m:"Posicionamento, espaçamento, bitola e fixação, conforme projeto."},
+      {n:"Armadura negativa", m:"Posicionamento, espaçamento, bitola e fixação, conforme projeto."},
+      {n:"Limpeza a laser", m:"Limpeza a laser das armaduras com corrosão."},
+      {n:"Limpeza", m:"Limpeza com hidrojato."}
+    ]},
+    { cat:"Instalações", itens:[
+      {n:"Furos de passagem e caixas", m:"Posicionamento e vedação."},
+      {n:"SPDA", m:"Distribuição e execução do sistema de descarga atmosférica, conforme projeto específico."},
+      {n:"Tubulações", m:"Posicionamento, tipo e vedação."}
+    ]},
+    { cat:"Concretagem de peça estrutural", itens:[
+      {n:"Nivelamento de taliscas", m:"Nível a laser na laje (desvio máx. 5mm)."},
+      {n:"Mapeamento do concreto", m:"Acompanhamento visual do lançamento e adensamento."}
+    ]},
+    { cat:"Laje mista", itens:[
+      {n:"Nivelamento", m:"Fôrmas de borda e laje (desvio máx. 5mm); encaixe das peças."},
+      {n:"Acabamento", m:"Acabamento da superfície da laje, verificado visualmente."}
+    ]},
+    { cat:"Desforma", itens:[
+      {n:"Falhas na concretagem", m:"Falhas identificadas após a desforma."},
+      {n:"Reescoramento", m:"Posicionamento do reescoramento, de acordo com o projeto."},
+      {n:"Terminalidade", m:"Verificação visual final."}
+    ]}
+  ];
+
+  // O modelo oficial da FVS-04 reserva 5 blocos de colunas ao lado de cada item
+  // do checklist (visível no cabeçalho "LOCAL:" da planilha) — um por tipo de
+  // elemento estrutural (Pilares / Vigas / Paredes / Laje / Outras Estruturas).
+  // Cada elemento marcado nesta ficha precisa ter TODO o checklist avaliado de
+  // novo, porque o resultado de "Travamento", "Nivelamento" etc. pode ser
+  // diferente para a laje e para os pilares concretados no mesmo dia.
+  var FVS_ELEMENTOS = [
+    { key:"pilares", label:"Pilares",           cols:["J","K","L"]      },
+    { key:"vigas",   label:"Vigas",              cols:["M","N","O"]      },
+    { key:"paredes", label:"Paredes",            cols:["P","Q","R"]      },
+    { key:"laje",    label:"Laje",               cols:["S","T","U"]      },
+    { key:"outras",  label:"Outras Estruturas",  cols:["V","W","X","Y"]  }
+  ];
+
+  // Catálogo dos "tipos de FVS" além da FVS 04 (Forma/Armação/Concretagem, que
+  // já tinha tratamento próprio com elementos fixos Pilares/Vigas/Paredes/Laje).
+  // Cada tipo traz o checklist oficial (categorias e itens) e como a ficha marca
+  // o resultado: "single" = uma marcação só por item (ex.: Locação da Obra, uma
+  // atividade única); "dynamic" = várias unidades numeradas pelo usuário na hora
+  // (ex.: várias estacas, sapatas ou blocos avaliados na mesma ficha), com o
+  // prefixo indicado (gera "Estaca 1", "Sapata 1" etc. como sugestão de nome).
+  var FVS_TIPOS = [
+    { key:"locacao_obra", codigo:"FVS 02", revisao:"05", titulo:"Locação da Obra", unidades:{mode:"single"},
+      checklist:[{cat:null, itens:[
+        {n:"Definir a referência de Nível (RN)", m:"Verificar as distâncias entre eixos e divisas.", tol:">1 metro"},
+        {n:"Cravação dos Pontaletes", m:"Verificar se estão aprumados e alinhados faceando o mesmo lado da linha de náilon. A distância será aproximadamente 2m entre um e outro.", tol:"aproximadamente 2 metros entre pontaletes"},
+        {n:"Pintura do gabarito", m:"Verificar se o gabarito foi pintado na cor branca."},
+        {n:"Posição do Elemento Estrutural", m:"Esticar um arame pelos dois eixos do elemento estrutural (o cruzamento do arame define a posição entre eixos, x e y)."}
+      ]}]
+    },
+    { key:"escavacao", codigo:"RVS-01", revisao:"01", titulo:"Escavação, Aterro, Reaterro e Compactação", unidades:{mode:"dynamic", prefix:"Trecho"},
+      checklist:[{cat:null, itens:[
+        {n:"Cortes", m:"Cortes conforme cotas de projeto - com trena, nível a laser ou teodolito.", tol:"≤ 3cm"},
+        {n:"Cotas", m:"Cotas finais de acordo com projeto, com nível a laser ou teodolito.", tol:"≤ 3cm"},
+        {n:"Ensaio", m:"Quando necessário, contratar laboratório para ensaio de compactação de aterro.", tol:"grau de compactação mínimo=95%"},
+        {n:"Gabarito", m:"Alinhamento e nivelamento da tabeira, com linha e nível de mangueira ou laser; esquadro com trena metálica; fixação e travamento visualmente.", tol:"desvio máx. 1cm (2cm na extremidade maior do triângulo 3x4x5m)"},
+        {n:"Marcação", m:"Locação dos eixos das peças na tabeira com trena metálica.", tol:"desvio máx. 5mm"},
+        {n:"Acabamento", m:"Inclinação dos taludes de acordo com projeto, com nível a laser ou teodolito.", tol:"desvio máx. 5cm"},
+        {n:"Uniformidade", m:"Uniformidade do terreno - visualmente.", tol:"não aplicável"}
+      ]}]
+    },
+    { key:"estaca_metalica", codigo:"RVS-03.4", revisao:"04", titulo:"Estaca Metálica (Perfil) e Estaca Prancha", unidades:{mode:"dynamic", prefix:"Estaca"},
+      checklist:[{cat:null, itens:[
+        {n:"Locação das Estacas", m:"A partir do gabarito, com os eixos definidos, os centros de cada estaca devem estar de acordo com o projeto de locação, com apoio da topografia. Verificar pintura, acabamento e firmeza.", tol:"± 1,0 cm"},
+        {n:"Diâmetro, especificação e profundidade das estacas", m:"De acordo com as definições de projeto de estaqueamento.", tol:"verificar tolerância definida pelo Consultor"},
+        {n:"Prumo do equipamento e da estaca", m:"Conferir o prumo do equipamento de cravação e da estaca, utilizar prumo de face e centro."},
+        {n:"Relatório de cravação", m:"Diário de cravação / relatório por estaca com todos os campos preenchidos (nega, profundidade, excentricidade etc.) e assinados pelo responsável.", tol:"verificar tolerância definida pelo Consultor"},
+        {n:"Acabamento", m:"Acabamento (visual)."}
+      ]}]
+    },
+    { key:"estaca_raiz", codigo:"RVS-03.3", revisao:"03", titulo:"Estaca Raiz", unidades:{mode:"dynamic", prefix:"Estaca"},
+      checklist:[{cat:null, itens:[
+        {n:"Locação do eixo das estacas", m:"Conferir a locação da estaca com o gabarito e com as medidas de projeto - trena metálica e prumo de centro.", tol:"1cm"},
+        {n:"Prumo equipamento de perfuração", m:"Conferir a verticalidade (prumo) da torre nos planos ortogonais (X e Y) ou inclinação, conforme projeto de fundações.", tol:"1º (grau)"},
+        {n:"Centralização da estaca", m:"Conferir que o centro da tubulação metálica de escavação coincida com a locação da estaca.", tol:"1% do diâmetro da estaca"},
+        {n:"Verificar a profundidade", m:"Verificar a profundidade mínima de perfuração conforme projeto - trena metálica.", tol:"5cm"},
+        {n:"Armação da estaca", m:"Conforme projeto de fundações.", tol:"não aplicável"},
+        {n:"Recobrimento da armação", m:"Conforme projeto de fundações.", tol:"1mm"},
+        {n:"Relatório de execução da estaca", m:"Leitura e assinatura do relatório.", tol:"consultar projetista e/ou consultor de fundação"},
+        {n:"Cota de arrasamento/corte da estaca", m:"A partir do gabarito e/ou acompanhamento topográfico, considerando as definições do projeto para o corte; checar excentricidade.", tol:"não aplicável"}
+      ]}]
+    },
+    { key:"estaca_helice", codigo:"RVS-03.5", revisao:"07", titulo:"Estaca Hélice Contínua", unidades:{mode:"dynamic", prefix:"Estaca"},
+      checklist:[{cat:null, itens:[
+        {n:"Locação das Estacas", m:"O centro de cada estaca deve estar de acordo com o projeto de locação, com apoio da topografia. Utilizar trena metálica e prumo de centro.", tol:"em projeto"},
+        {n:"Diâmetro, especificação e profundidade das estacas", m:"De acordo com as definições do projeto de estaqueamento.", tol:"em projeto"},
+        {n:"Prumo do equipamento e da estaca", m:"Conferir o prumo do equipamento de cravação e da estaca. Utilizar prumo de face e centro.", tol:"conforme procedimento de calibração"},
+        {n:"Relatório de cravação", m:"Relatório por estaca com todos os campos preenchidos (profundidade etc.), assinado pelo responsável e pelo fiscal."},
+        {n:"Armação", m:"Armação de acordo com o projeto e conferir profundidade."},
+        {n:"Concretagem", m:"Concreto bombeado de acordo com as especificações de projeto."},
+        {n:"Cota de arrasamento/corte da estaca", m:"A partir do gabarito e/ou acompanhamento topográfico, considerando as definições do projeto; checar excentricidade."},
+        {n:"Integridade e capacidade de carga da estaca de concreto", m:"Ensaios PIT, PDA e PCE devem ser executados de acordo com projeto e conforme NBR 6122 e outras."}
+      ]}]
+    },
+    { key:"estaca_escavada", codigo:"RVS-03.1", revisao:"02", titulo:"Estaca Escavada", unidades:{mode:"dynamic", prefix:"Estaca"},
+      checklist:[
+        {cat:"Locação", itens:[
+          {n:"Colocação de Camisa Guia", m:"Locação e nivelamento da camisa guia."},
+          {n:"Locação Topográfica", m:"Verificação da estaca através de estação total."}
+        ]},
+        {cat:"Escavação", itens:[
+          {n:"Posicionamento da Perfuratriz", m:"Alinhamento em relação ao eixo de escavação."},
+          {n:"Injetar Lama Bentonítica", m:"Injeção de lama."},
+          {n:"Profundidade", m:"Profundidade conforme especificado em projeto."}
+        ]},
+        {cat:"Armadura", itens:[
+          {n:"Montagem", m:"Armadura posicionada, com utilização dos espaçadores."},
+          {n:"Posicionamento", m:"Posicionamento, espaçamento, bitola e fixação da armadura positiva, conforme projeto."}
+        ]},
+        {cat:"Concretagem", itens:[
+          {n:"Lama Bentonítica", m:"Desarenação concluída."},
+          {n:"Armadura", m:"Armadura fixada na camisa-guia para evitar deslocamento durante a concretagem."},
+          {n:"Lançamento do Concreto", m:"Tempo de concretagem não deve ultrapassar 2h30."}
+        ]},
+        {cat:"Finalização", itens:[
+          {n:"Acabamento", m:"Acabamento (visual)."}
+        ]}
+      ]
+    },
+    { key:"estaca_franki", codigo:"RVS-03.2", revisao:"03", titulo:"Estaca Franki", unidades:{mode:"dynamic", prefix:"Estaca"},
+      checklist:[{cat:null, itens:[
+        {n:"Locação", m:"Locação e nivelamento através de trena metálica e topografia.", tol:"desvio ≤ 1cm"},
+        {n:"Prumo", m:"Locação e nivelamento através de trena metálica e topografia.", tol:"desvio de verticalidade no máx. 1% por metro cravado"},
+        {n:"Nega", m:"Verificação de acordo com o projeto / atender as especificações do projeto.", tol:"atender especificações do projeto"},
+        {n:"Comprimento da Estaca", m:"Através de mangueira de nível e trena; a concretagem do fuste deve ser executada no mínimo 40cm acima da cota de arrasamento."},
+        {n:"Desvio máximo na estaca já concretada", m:"Através da trena metálica e topografia.", tol:"desvio não pode ser maior que 5,0 cm"},
+        {n:"Acabamento", m:"Acabamento (visual)."}
+      ]}]
+    },
+    { key:"sapata_isolada", codigo:"RVS-03.10", revisao:"01", titulo:"Sapata Isolada", unidades:{mode:"dynamic", prefix:"Sapata"},
+      checklist:[{cat:null, itens:[
+        {n:"Cota do fundo", m:"Verificar cota de fundo por meio de mangueira de nível ou laser.", tol:"± 5mm"},
+        {n:"Forma de Borda", m:"Alinhamento, largura, altura e inclinação das laterais com linha de náilon e trena metálica. Dimensões e nivelamento do topo.", tol:"desvio máx. 5mm"},
+        {n:"Locação da base da sapata", m:"Por meio de linha e prumo de centro, após a montagem e ajuste das formas.", tol:"± 5mm"},
+        {n:"Largura e altura da sapata e inclinação das laterais", m:"Conforme projeto."},
+        {n:"Armadura", m:"Diâmetro e posicionamento das barras e estribos (espaçadores), de acordo com projeto. Fixação e afastamento das faces da forma, visualmente.", tol:"conforme projeto"},
+        {n:"Limpeza", m:"Limpeza antes da concretagem.", tol:"visual"},
+        {n:"Concretagem", m:"Mapeamento do concreto; acompanhamento visual e rastreamento dos locais onde o concreto foi lançado."},
+        {n:"Desforma", m:"Falhas de concretagem após a desforma (visual); limpeza final com retirada total dos restos de forma e outros materiais.", tol:"visual"}
+      ]}]
+    },
+    { key:"radier_armado", codigo:"RVS-03.10", revisao:"01", titulo:"Radier Armado", unidades:{mode:"dynamic", prefix:"Trecho"},
+      checklist:[{cat:null, itens:[
+        {n:"Locação da forma de borda", m:"A partir do gabarito, com trena metálica.", tol:"máx. 5mm"},
+        {n:"Nivelamento da forma de borda", m:"Nivelamento e alinhamento com linha e nível a laser ou mangueira.", tol:"máx. 5mm"},
+        {n:"Armadura", m:"Diâmetro e posicionamento das barras, de acordo com projeto. Amarração firme, sem contato com as fôrmas (visual)."},
+        {n:"Largura e caimento", m:"Largura e caimento das calçadas de borda, com trena metálica e nível de bolha.", tol:"máx. 5mm"},
+        {n:"Posicionamento da lona plástica", m:"Lona esticada em toda a extensão do radier, sem rasgos e sem danos."},
+        {n:"Instalações", m:"Locação de pontos conforme projetos específicos, com uso de trena para auxílio."}
+      ]}]
+    },
+    { key:"bloco", codigo:"FVS-03.9", revisao:"03", titulo:"Blocos", unidades:{mode:"dynamic", prefix:"Bloco"},
+      checklist:[
+        {cat:"Montagem de Forma", itens:[
+          {n:"Dimensão da peça", m:"Conferir a execução conforme o projeto, com trena metálica."},
+          {n:"Rigidez do Travamento", m:"Visualmente."},
+          {n:"Locação", m:"A partir da locação do gabarito, conferir os eixos e faces da peça e o engastamento do arranque do pilar, com prumo de centro e trena metálica."},
+          {n:"Nível", m:"Com apoio da topografia ou utilizando nível laser ou mangueira de nível."}
+        ]},
+        {cat:"Montagem de Armadura", itens:[
+          {n:"Amarração", m:"Rigidez da montagem e nós firmes."},
+          {n:"Posição da Armadura", m:"Posicionamento e fixação da armadura de acordo com o projeto (visual)."},
+          {n:"Espaçador", m:"Conferir o uso de espaçador, garantindo o afastamento da armação das faces da forma (visual)."},
+          {n:"Limpeza", m:"Limpeza antes da concretagem (visual)."}
+        ]},
+        {cat:"Concretagem de Peça Estrutural", itens:[
+          {n:"Mapeamento do Concreto", m:"Acompanhamento visual e rastreamento dos locais onde o concreto foi lançado."}
+        ]},
+        {cat:"Desforma", itens:[
+          {n:"Falhas", m:"Falhas de concretagem após a desforma (visual)."},
+          {n:"Limpeza Final", m:"Retirada total dos restos de forma e outros materiais (visual)."}
+        ]}
+      ]
+    },
+    { key:"impermeabilizacao_rigida", codigo:"FVS-11.1", revisao:"07", titulo:"Impermeabilização Rígida: Cristalização, Resina Epóxi, Argamassa Polimérica", unidades:{mode:"dynamic", prefix:"Área"},
+      checklist:[
+        {cat:"Inicial", itens:[
+          {n:"Preparação", m:"Local limpo e livre de poeiras, óleos ou desmoldantes.", tol:"-"},
+          {n:"Caimento", m:"Verificar se os caimentos estão corretos e com acabamento arredondado.", tol:"1%"}
+        ]},
+        {cat:"Impermeabilização", itens:[
+          {n:"Cantos e ralos", m:"Calafetar todas as emendas e encontros com ralos.", tol:"-"},
+          {n:"Mistura", m:"Misturar bem a resina ao pó, de modo a obter uma mistura homogênea.", tol:"-"},
+          {n:"Aplicação", m:"Aplicar a 1ª demão e aguardar de 4 a 8 horas para seguir com as demãos. Subir pelo menos 30cm nos cantos.", tol:"mínimo 30 cm"},
+          {n:"2º a 3º demão", m:"As demãos devem ser aplicadas de forma cruzada.", tol:"-"}
+        ]},
+        {cat:"Final", itens:[
+          {n:"Finalização", m:"Polvilhar areia seca e peneirada da última camada antes da secagem completa."},
+          {n:"Estanqueidade", m:"Após a secagem completa da impermeabilização, realizar o teste de estanqueidade, aplicar uma lâmina de água sobre o local, com no mínimo 10 cm de altura e aguardar por 72 horas.", tol:"Não haver vazamentos"}
+        ]}
+      ]
+    },
+    { key:"montagem_estrutura_metalica", codigo:"FVS-34", revisao:"00", titulo:"Montagem em Estrutura Metálica", unidades:{mode:"dynamic", prefix:"Peça"},
+      checklist:[
+        {cat:"Trabalho a Quente e Oxicorte", itens:[
+          {n:"Equipamentos íntegros e sem vazamentos", m:"Inspeção Visual", tol:"-"},
+          {n:"Mangueiras identificadas e em bom estado", m:"Inspeção Visual", tol:"-"},
+          {n:"Área isolada (mín. 10m sem inflamáveis)", m:"Remover todos os inflamáveis da área", tol:"10m no mínimo"},
+          {n:"Ventilação adequada", m:"Inspeção Visual", tol:"-"}
+        ]},
+        {cat:"SOLDAGEM", itens:[
+          {n:"Limpeza adequada da superfície", m:"Remoção do zinco na área de solda utilizando lixadeira ou produtos químicos para evitar contaminação", tol:"-"},
+          {n:"BURN-ZINC", m:"Técnica usada para queimar o zinco antes de iniciar a solda propriamente dita, garantindo um ponto mais limpo", tol:"-"},
+          {n:"Distâncias e Medidas", m:"Respeitar as distâncias recomendadas em projeto", tol:"-"},
+          {n:"Proteção anticorrosiva e limpeza", m:"Depois de soldar, realizar limpeza dos cordões de solda, com uso de escovas rotativas de aço e posterior aplicação de proteção anticorrosiva (CRZ) e remoção do zinco.", tol:"-"},
+          {n:"Rastreabilidade da solda", m:"No campo anotar: nome do executor da solda, data e se há relatórios complementares assinados pela empresa e/ou executor.", tol:"-"}
+        ]},
+        {cat:"GALVANIZAÇÃO", itens:[
+          {n:"Desengraxe e decapagem", m:"1.Desengraxe (NaOH); 2.Lavagem (Água); 3.Decapagem (HCl); 4.Lavagem (Água); 5.Fluxagem (ZnCl₂ e NH₄Cl); 6.Secagem; 7.Banho a zinco (450°C); 8.Passivação (solução cromatizante) e/ou resfriamento.", tol:"-"},
+          {n:"Limpeza pós-solda adequada", m:"Retirar escória e carepas com escova rotativa de aço.", tol:"-"},
+          {n:"Aplicação de tinta rica em zinco", m:"Com pincel – nunca spray, pois não atinge a espessura da camada e destaca pintura posterior.", tol:"-"},
+          {n:"Aceitação (acabamento final)", m:"As razões para a aceitação ou a rejeição devem ser comunicadas às partes responsáveis, a saber: o galvanizador, construtor, projetista e usuário final.", tol:"-"}
+        ]}
+      ]
+    },
+    { key:"parede_diafragma", codigo:"RVS-03.6", revisao:"02", titulo:"Execução de Parede Diafragma", unidades:{mode:"dynamic", prefix:"Painel"},
+      checklist:[
+        {cat:"Mureta Guia", itens:[
+          {n:"Locação", m:"Verificar a locação das lamelas de acordo com o projeto - trena metálica", tol:"± 1,0 cm"},
+          {n:"Largura", m:"Verificar a largura da parede; a mureta deverá fornecer espaçamento extra conforme projeto", tol:"1 cm"},
+          {n:"Armação", m:"Verificar a montagem da armação da mureta guia, conforme projeto", tol:"0,5mm"},
+          {n:"Prumo", m:"Verificar prumo da mureta guia, conforme projeto - prumo de face", tol:"0,5mm"}
+        ]},
+        {cat:null, itens:[
+          {n:"Lama betonítica", m:"Verificar resultados de ensaio da lama betonítica", tol:"Visual"},
+          {n:"Escavação", m:"Verificar cota de apoio para escavação da lamela conforme projeto", tol:"-"},
+          {n:"Painéis", m:"Verificar locação dos painéis das muretas guia conforme projeto - trena metálica", tol:"-"},
+          {n:"Armação", m:"Verificar montagem da armação da parede conforme projeto", tol:"0,5mm"},
+          {n:"Concretagem", m:"Concreto bombeado de acordo com as especificações de projeto", tol:"-"}
+        ]}
+      ]
+    },
+    { key:"cortina_atirantada", codigo:"RVS-03.7", revisao:"01", titulo:"Cortina Atirantada", unidades:{mode:"dynamic", prefix:"Painel"},
+      checklist:[
+        {cat:"Locação e Movimento de Terra", itens:[
+          {n:"Locação Topográfica, Alinhamento", m:"Verificar a locação e os níveis; Verificar alinhamento de acordo com os marcos topográficos", tol:"-"},
+          {n:"Corte manual de Barranco", m:"Cortar mantendo o alinhamento e prumo", tol:"-"},
+          {n:"Magro e chapisco", m:"Verificar se estão feitos garantindo alinhamento e nível", tol:"-"}
+        ]},
+        {cat:"Forma, Armação e Concretagem", itens:[
+          {n:"Dimensão da peça", m:"Conferir a execução conforme o projeto, com trena metálica", tol:"-"},
+          {n:"Rigidez do Travamento", m:"Visualmente", tol:"-"},
+          {n:"Nível", m:"Com apoio da topografia ou utilizando nível a laser ou mangueira de nível", tol:"-"},
+          {n:"Amarração da Armação", m:"Rigidez da montagem e nós firmes", tol:"-"},
+          {n:"Posição da Armadura", m:"Posicionamento e fixação da armadura de acordo com o projeto - visual", tol:"-"},
+          {n:"Espaçador", m:"Conferir o uso de espaçador de forma a garantir o afastamento da armação das faces da forma - visual", tol:"-"},
+          {n:"Limpeza", m:"Limpeza antes da concretagem - visual", tol:"-"},
+          {n:"Mapeamento do Concreto", m:"Acompanhamento visual e rastreamento dos locais que o concreto foi lançado", tol:"-"},
+          {n:"Falhas após Concretagem", m:"Falhas de concretagem após a desforma - visual", tol:"-"},
+          {n:"Limpeza final", m:"Retirada total dos restos de forma e outros materiais - visual", tol:"-"}
+        ]},
+        {cat:"Atirantamento e Protensão", itens:[
+          {n:"Locação dos tirantes", m:"Conferir a locação de tirantes em cada painel observando os níveis em função dos marcos topográficos", tol:"0,5 cm"},
+          {n:"Perfuração", m:"Verificar se perfuração alcançou profundidade prevista em projeto", tol:"-"},
+          {n:"Tirante", m:"Colocação de tirante devidamente tratado", tol:"-"},
+          {n:"Injeção", m:"Injetar até o transbordamento de calda sã", tol:"-"},
+          {n:"Protensão", m:"Verificar pelos dados do equipamento se alcançou a carga de projeto", tol:"-"},
+          {n:"Acabamento", m:"Verificar a colocação da chapa, cunha, porca e contra-porca devidamente protegidas e concretar as cabeças", tol:"-"}
+        ]}
+      ]
+    },
+    { key:"protensao_cabos", codigo:"RVS-33", revisao:"00", titulo:"Protensão de Cabos (Distribuição das Cordoalhas na Forma da Laje)", unidades:{mode:"dynamic", prefix:"Painel"},
+      checklist:[
+        {cat:null, itens:[
+          {n:"Cabos", m:"Quantidade e disposição dos cabos - Visual. Após a abertura dos rolos, as cordoalhas sem tensão devem manter flechas inferiores a 15 cm em 2 m de comprimento.\n\nApoio (excentricidade dos cabos): Estar de acordo com projeto; com auxílio de trena metálica e Projeto.", tol:"Estar de acordo com projeto / Até 5 mm."},
+          {n:"Curvatura dos Cabos", m:"Curvatura dos cabos horizontais para desvios de aberturas ou outras interferências devem ser previstas no projeto estrutural; em tais curvaturas, os cabos que caminham em grupos de até quatro cordoalhas lado a lado devem ser afastados uns dos outros em 5 cm no centro da curva.", tol:"5 cm"},
+          {n:"Ancoragens", m:"Fixação das Ancoragens - Aceitar se estiver bem fixa. A extremidade do cabo com ancoragem passiva deve ser colocada na fôrma conforme indicado em projeto. Esta ponta ficará oculta após a concretagem. Note que o trecho descoberto da cordoalha não pode ser maior que 2,5 cm.", tol:"2,5cm"},
+          {n:"Forma de Borda", m:"Um ponto crítico na execução de estruturas protendidas com cordoalhas engraxadas é a furação da forma de borda por onde deve passar a cordoalha da ancoragem ativa. Para que não haja erros de cota, o espaçamento entre as ancoragens deve se basear, exclusivamente, nos desenhos detalhados em Projeto.", tol:"-"},
+          {n:"Instalação dos Cabos nas Fôrmas", m:"Para permitir a atuação do equipamento de protensão, faça a cordoalha ultrapassar o limite da fôrma em no mínimo 30 cm.", tol:"30 cm"},
+          {n:"Ferragem", m:"Barras de fretagem - Estar de acordo com projeto.", tol:"-"}
+        ]},
+        {cat:"Finalização", itens:[
+          {n:"Organização e limpeza", m:"Acabamento", tol:"Visual"}
+        ]}
+      ]
+    },
+    { key:"guarda_corpo", codigo:"RVS-34", revisao:"00", titulo:"Instalação de Guarda-Corpo", unidades:{mode:"dynamic", prefix:"Trecho"},
+      checklist:[
+        {cat:null, itens:[
+          {n:"Ancoragens", m:"Marcação de ancoragens: conferir com trena se marcação está conforme projeto, aceitar se a marcação estiver correta.\n\nLimpeza dos furos das ancoragens: verificar visualmente a limpeza do furo para melhor fixação do graute; o furo deve estar livre de pó.\n\nFixação das ancoragens: verificar visualmente se o chumbamento está bem acabado e firme, aceitar se não houver imperfeições.\n\nNivelamento: verificar com prumo, nível de bolha ou laser.", tol:"No máximo 5mm."},
+          {n:"Acabamento", m:"As peças deverão estar no alinhamento correto, acabamentos e calafetes bem feitos.", tol:"-"},
+          {n:"Apoios", m:"Balançar um pouco as peças para verificar se há folgas ou partes soltas. As peças deverão estar totalmente apoiadas, sem folgas ou partes soltas.", tol:"-"},
+          {n:"Guarda-Corpo", m:"Atender a profundidade mínima de penetração dos elementos de fixação (ancoragens) ao concreto não inferior a 90 mm, independentemente da espessura de eventuais revestimentos.", tol:"-"}
+        ]},
+        {cat:"Finalização", itens:[
+          {n:"Organização e limpeza", m:"Verificar visualmente", tol:"-"}
+        ]}
+      ]
+    },
+    { key:"preservacao_produto_acabado", codigo:"RVS-32", revisao:"00", titulo:"Preservação do Produto/Serviço Acabado", unidades:{mode:"single"},
+      checklist:[
+        {cat:null, itens:[
+          {n:"Alvenaria", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Contrapiso", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Revestimento em Gesso Liso (estuque)", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Impermeabilização", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Instalação Hidrosanitária", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Instalação Elétrica e Caixas de Passagem", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Forro de Gesso", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Locação da Obra", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Tubulação de espera (elétrica)", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Tubulação de espera (Hidráulica)", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Dutos SPDA", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Piso de Madeira", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Paredes de Dry Wall", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Piso de pedra natural e piso cerâmico", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Caixilhos de Alumínio", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Banheiras e cubas de aço inóx", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Registros de pressão e de gaveta", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Ralos", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Dobradiças, fechaduras, ferragens, chapas testa e contra-testa de portas", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Tomadas interruptores sem espelhos", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Esquadrias de Madeira, Alumínio e Aço", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Batentes", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Tanque de lavar e louça sanitária", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Pontos d'água", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Forro", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Piso Cerâmico", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Pintura", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Vidros", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Porta de elevador", m:"Ver método de proteção específico do item.", tol:"N/A"},
+          {n:"Cabine interna de elevador", m:"Ver método de proteção específico do item.", tol:"N/A"}
+        ]}
+      ]
+    }
+  ];
+  function getFvsTipo(key){ return FVS_TIPOS.find(function(t){ return t.key===key; }) || null; }
+
+  var DEFAULT_OBRA = "Consórcio de Construção Belavista Ipanema";
+  var TEMPO_MAX_MIN = 150; // 2:30h, conforme FORM-15
+
+  // Data de hoje no fuso do aparelho (Rio, UTC-3). Antes usava toISOString(),
+  // que é UTC — entre 21h e 0h devolvia o dia seguinte.
+  function todayISO(){
+    var d=new Date();
+    function p2(n){ return n<10 ? "0"+n : ""+n; }
+    return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate());
+  }
+  function nowISO(){ return new Date().toISOString(); }
+  function escapeHtml(s){
+    return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function fmtDateBR(iso){
+    if(!iso) return "—";
+    var p = iso.split("-"); if(p.length!==3) return iso;
+    return p[2]+"/"+p[1]+"/"+p[0];
+  }
+  // Formata um timestamp ISO completo (com hora) para o rodapé "Última
+  // atualização" das fichas — usa o horário local do navegador de quem visualiza.
+  function fmtDateTimeBR(iso){
+    if(!iso) return "";
+    var d = new Date(iso);
+    if(isNaN(d)) return "";
+    function pad(n){ return String(n).length<2 ? "0"+n : String(n); }
+    return pad(d.getHours())+":"+pad(d.getMinutes())+" do dia "+pad(d.getDate())+"/"+pad(d.getMonth()+1)+"/"+d.getFullYear();
+  }
+  function dowBR(iso){
+    if(!iso) return "";
+    var d = new Date(iso+"T12:00:00");
+    if(isNaN(d)) return "";
+    return ["dom","seg","ter","qua","qui","sex","sáb"][d.getDay()];
+  }
+  function diffMin(a,b){
+    if(!a || !b) return null;
+    var pa=a.split(":"), pb=b.split(":");
+    if(pa.length<2||pb.length<2) return null;
+    var ma=(+pa[0])*60+(+pa[1]), mb=(+pb[0])*60+(+pb[1]);
+    var d=mb-ma; if(d<0) d+=24*60;
+    return d;
+  }
+  // Linha discreta de rodapé mostrando quem foi a última pessoa a salvar esta
+  // ficha/controle e quando — visível ao final do modal de FVS e de Rastreabilidade.
+  function lastUpdatedHtml(d){
+    // Só aparece depois do primeiro salvamento (é aí que updatedByEmail passa a
+    // existir) — numa ficha nova, ainda não salva, não faz sentido mostrar
+    // "última atualização" nenhuma.
+    if(!d.updatedByEmail) return "";
+    var when = fmtDateTimeBR(d.updatedAt);
+    if(!when) return "";
+    return '<div class="last-updated">Última atualização: '+escapeHtml(d.updatedByEmail)+' às '+when+'</div>';
+  }
+  function fmtMin(m){
+    if(m==null) return "—";
+    var h=Math.floor(m/60), r=m%60;
+    return (h>0? h+"h ":"")+r+"min";
+  }
+
+  /* ---------------- state ---------------- */
+  var fvsCol = dbf.collection("fvs");
+  var rastCol = dbf.collection("rastreabilidade");
+  var ctCol = dbf.collection("controleTecnologico");
+  // Biblioteca de plantas de forma: cada planta é cadastrada uma única vez
+  // aqui (comprimida, ver comprimirPlantaEmImagem) e depois só é escolhida
+  // numa lista dentro de cada rastreabilidade (ver mapeamentoFieldHtml) —
+  // em vez de subir um PDF pesado de novo a cada ficha, economizando a cota
+  // do Cloudinary discutida com o Matheus.
+  var plantasCol = dbf.collection("plantas");
+  var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
+  var currentUserEmail="";
+  var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
+  var draft=null;
+  var unsubFvs=null, unsubRast=null, unsubCt=null, unsubPlantas=null;
+  // Estado transitório da ferramenta de mapeamento (planta + desenho) do
+  // modal de rastreabilidade aberto no momento — não é dado da ficha, só o
+  // progresso da ferramenta enquanto o modal está na tela (ver
+  // wireMapeamentoEvents()). Reiniciado toda vez que o modal é reaberto.
+  var mapaEstado=null;
+
+  /* ---------------- não conformidades: lista + migração ---------------- */
+  // Uma ficha nova sempre grava d.naoConformidades como lista (uma entrada
+  // por não conformidade: descrição, correção proposta, se foi concluída e a
+  // data de conclusão). Fichas já preenchidas antes dessa mudança usavam só
+  // um bloco único (houveNC/ncDescricao/ncCorrecao/ncDataCorrecao) — esta
+  // função sintetiza, na leitura, uma lista de 1 item equivalente a partir
+  // desses campos antigos, sem precisar migrar nada no banco: nenhuma
+  // informação já preenchida se perde, ela só passa a ser lida no formato
+  // novo (e é convertida de vez assim que a ficha for aberta e salva outra
+  // vez, ver openModal()).
+  function fichaNaoConformidades(f){
+    if(Array.isArray(f.naoConformidades)) return f.naoConformidades;
+    if(f.houveNC){
+      return [{
+        descricao: f.ncDescricao||"",
+        correcao: f.ncCorrecao||"",
+        concluida: !!f.ncDataCorrecao,
+        dataConclusao: f.ncDataCorrecao||"",
+        dataRegistro: f.dataAbertura||"",
+        anexos: []
+      }];
+    }
+    return [];
+  }
+  function blankNaoConformidade(){
+    return { descricao:"", correcao:"", concluida:false, dataConclusao:"", dataRegistro: todayISO(), anexos:[] };
+  }
+  function ncAnexos(nc){ return Array.isArray(nc.anexos) ? nc.anexos : []; }
+  // Guarda a última mensagem de erro de envio de anexo por índice de NC,
+  // só pra sobreviver ao renderModal() que roda logo depois de cada envio
+  // (senão a mensagem de erro apareceria e sumiria na hora).
+  var ncAnexoErro = {};
+  function ncAnexoEhImagem(a){ return /^image\//.test(a.tipo||""); }
+  // Envia um arquivo direto do navegador pro Cloudinary (sem servidor
+  // nenhum no meio) usando um "unsigned upload preset" — ver comentário de
+  // CLOUDINARY_CLOUD_NAME lá no topo do arquivo pra como configurar. Some
+  // 'auto' deixa o próprio Cloudinary decidir o tipo (foto, PDF, etc.).
+  async function ncUploadAnexo(file){
+    var fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    var endpoint = "https://api.cloudinary.com/v1_1/"+encodeURIComponent(CLOUDINARY_CLOUD_NAME)+"/auto/upload";
+    var resp = await fetch(endpoint, { method:"POST", body:fd });
+    var data = null;
+    try{ data = await resp.json(); }catch(ex){}
+    if(!resp.ok || !data || !data.secure_url){
+      var msg = (data && data.error && data.error.message) ? data.error.message : ("erro HTTP "+resp.status);
+      throw new Error(msg);
+    }
+    return {
+      url: data.secure_url,
+      nome: file.name||"arquivo",
+      tipo: file.type||"",
+      tamanho: file.size||0,
+      adicionadoEm: nowISO()
+    };
+  }
+  // Diferença em dias entre duas datas ISO (YYYY-MM-DD) — usada para "quantos
+  // dias está em aberto" na tela de não conformidades. Meio-dia local evita
+  // problema de fuso/horário de verão na hora de contar dias corridos.
+  function diffDias(isoInicio, isoFim){
+    if(!isoInicio) return null;
+    var a = new Date(isoInicio+"T12:00:00");
+    var b = new Date((isoFim||todayISO())+"T12:00:00");
+    if(isNaN(a)||isNaN(b)) return null;
+    return Math.max(0, Math.round((b-a)/86400000));
+  }
+
+  /* ---------------- derived status ---------------- */
+  function fvsStatus(f){
+    var ncs = fichaNaoConformidades(f);
+    if(!f.fechado){
+      // Ficha ainda aberta, mas já com não conformidade registrada: mantém no
+      // grupo "Em aberto" (não muda o comportamento dos filtros), só ganha um
+      // indicador visual diferente para chamar atenção antes mesmo de fechar.
+      if(ncs.length>0) return {key:"aberto", label:"Aberta com NC", nc:true};
+      return {key:"aberto", label:"Aberta"};
+    }
+    if(ncs.some(function(nc){ return !nc.concluida; })) return {key:"pendente", label:"Pendente de NC"};
+    return {key:"concluido", label:"Fechada"};
+  }
+  function rastOverrun(r){
+    var linhas=r.linhas||[];
+    for(var i=0;i<linhas.length;i++){
+      var l=linhas[i];
+      var gasto = diffMin(l.saidaUsina, l.lancFinal);
+      if(gasto!=null && gasto>TEMPO_MAX_MIN) return true;
+    }
+    return false;
+  }
+  function rastStatus(r){
+    if(!r.fechado) return {key:"aberto", label:"Aberto"};
+    if(rastOverrun(r) && !(r.acoesCorretivas||"").trim()) return {key:"pendente", label:"Pendente de ação"};
+    return {key:"concluido", label:"Fechado"};
+  }
+  function rowStatus(f,r){
+    var fSt = f ? fvsStatus(f) : null;
+    var rSt = r ? rastStatus(r) : null;
+    var keys=[];
+    if(fSt) keys.push(fSt.key);
+    if(rSt) keys.push(rSt.key);
+    if(keys.indexOf("pendente")!==-1) return {key:"pendente", label:"Pendente"};
+    if(keys.indexOf("aberto")!==-1){
+      // Propaga o mesmo indicador de "aberta com NC" da ficha FVS para o selo
+      // geral da linha (coluna Situação), não só para o selo pequeno da FVS.
+      if(fSt && fSt.nc) return {key:"aberto", label:"Em aberto (NC)", nc:true};
+      return {key:"aberto", label:"Em aberto"};
+    }
+    return {key:"concluido", label:"Concluído"};
+  }
+
+  /* ---------------- ordem canônica dos pavimentos (filtro) ----------------
+     O cliente numerou os pavimentos do prédio de 00 (Fundação) a 27 (Telhado).
+     O campo "Local / elemento" / "Bloco / Pavimento" continua sendo texto
+     livre, então essa função tenta reconhecer o pavimento a partir do que foi
+     digitado, em ordem de confiança: (1) já vem no formato "NN - Nome" igual à
+     lista oficial; (2) traz o código numérico do andar entre parênteses (ex.:
+     "(701)"); (3) menciona "Nº Pavimento Tipo"/"Nº Pav." ou "Nº Embasamento";
+     (4) bate com uma palavra-chave sem número (fundação, subsolo, térreo,
+     cobertura, dependência, técnico, telhado). O que não for reconhecido vai
+     para o fim da lista, em ordem alfabética entre si — nunca escondido. */
+  var PAVIMENTO_CODIGOS = { "201":6, "301":7, "401":8, "501":9, "601":10, "701":11, "801":12, "901":13,
+    "1001":14, "1101":15, "1201":16, "1301":17, "1401":18, "1501":19, "1601":20, "1701":21, "1801":22, "1901":23, "2001":24 };
+  var PAVIMENTO_PALAVRAS = [
+    { rank:0,  re:/funda[cç][aã]o/i },
+    { rank:1,  re:/sub\s*-?\s*solo/i },
+    { rank:2,  re:/t[eé]rreo/i },
+    { rank:24, re:/cobertura/i },
+    { rank:25, re:/depend[eê]ncia/i },
+    { rank:26, re:/t[eé]cnico/i },
+    { rank:27, re:/telhado/i }
+  ];
+  function pavimentoRank(valorBruto){
+    var v = (valorBruto||"").toString().trim().toLowerCase();
+    if(!v) return 9999;
+    var mLead = v.match(/^(\d{1,2})\s*[-–.)]/);
+    if(mLead) return parseInt(mLead[1],10);
+    var mCod = v.match(/\(?\b(\d{3,4})\)?\b/);
+    if(mCod && PAVIMENTO_CODIGOS[mCod[1]]!==undefined) return PAVIMENTO_CODIGOS[mCod[1]];
+    var mTipo = v.match(/(\d{1,2})\s*[ºo°.]?\s*pav(imento)?(\s*tipo)?\b/);
+    if(mTipo){
+      var n = parseInt(mTipo[1],10);
+      if(n>=1 && n<=17) return 6+n;
+    }
+    var mEmb = v.match(/(\d{1,2})\s*[ºo°.]?\s*embasamento/);
+    if(mEmb){
+      var ne = parseInt(mEmb[1],10);
+      if(ne>=1 && ne<=5) return 1+ne;
+    }
+    for(var i=0;i<PAVIMENTO_PALAVRAS.length;i++){
+      if(PAVIMENTO_PALAVRAS[i].re.test(v)) return PAVIMENTO_PALAVRAS[i].rank;
+    }
+    return 9999;
+  }
+
+  function buildRows(){
+    var rows=[];
+    var linkedRastIds=new Set();
+    fvsMap.forEach(function(f,id){
+      var r = f.rastreabilidadeId ? rastMap.get(f.rastreabilidadeId) : null;
+      if(f.rastreabilidadeId && r) linkedRastIds.add(f.rastreabilidadeId);
+      rows.push({ fvsId:id, fvs:f, rastId: (r? f.rastreabilidadeId : null), rast:r||null,
+        data: f.dataConcretagem || f.dataAbertura || "" });
+    });
+    rastMap.forEach(function(r,id){
+      if(linkedRastIds.has(id)) return;
+      rows.push({ fvsId:null, fvs:null, rastId:id, rast:r, data: r.data || "" });
+    });
+    rows.forEach(function(row){
+      row.linked = !!(row.fvs && row.rast);
+      row.status = rowStatus(row.fvs, row.rast);
+      row.local = (row.fvs && row.fvs.local) || (row.rast && row.rast.blocoPav) || "";
+      // Lista efetiva de pavimentos da linha, usada pelo filtro: junta os chips
+      // de pavimentos da FVS e/ou da rastreabilidade vinculadas (uma ficha pode
+      // cobrir mais de um andar). Fichas antigas, sem chips cadastrados, caem no
+      // fallback do campo único "Local"/"Bloco / Pavimento" de sempre — nenhum
+      // dado existente deixa de aparecer no filtro por causa dessa mudança.
+      var chipsF = (row.fvs && Array.isArray(row.fvs.pavimentos)) ? row.fvs.pavimentos : [];
+      var chipsR = (row.rast && Array.isArray(row.rast.pavimentos)) ? row.rast.pavimentos : [];
+      var combinados = chipsF.concat(chipsR).map(function(p){ return (p||"").trim(); }).filter(Boolean);
+      row.pavimentos = combinados.length ? Array.from(new Set(combinados)) : (row.local ? [row.local] : []);
+    });
+    rows.sort(function(a,b){ return (b.data||"").localeCompare(a.data||""); });
+    return rows;
+  }
+
+  function matchesSit(row, sit){
+    if(sit==="todos") return true;
+    if(sit==="vinculo") return !row.linked;
+    return row.status.key===sit;
+  }
+
+  function applyFilters(rows){
+    var s=filters.search.trim().toLowerCase();
+    return rows.filter(function(row){
+      if(!matchesSit(row, filters.sit)) return false;
+      if(filters.from && row.data && row.data<filters.from) return false;
+      if(filters.to && row.data && row.data>filters.to) return false;
+      if(filters.pavimento){
+        // Compara por pavimento reconhecido (mesmo rank), não pelo texto
+        // exato: a mesma ficha pode ter chip "05 - Piso do 5º Pavimento Tipo
+        // (501)" enquanto outra ainda usa o texto livre antigo "5º Pavimento"
+        // — ambos devem casar com a mesma opção do filtro.
+        var pFiltroRank = pavimentoRank(filters.pavimento);
+        var pavBate = false;
+        for(var pvi=0; pvi<row.pavimentos.length; pvi++){
+          var pv = row.pavimentos[pvi];
+          if(pFiltroRank!==9999 ? pavimentoRank(pv)===pFiltroRank : pv===filters.pavimento){ pavBate=true; break; }
+        }
+        if(!pavBate) return false;
+      }
+      if(s){
+        var hay=[
+          row.fvs && row.fvs.numero, row.fvs && row.fvs.codigo, row.fvs && row.fvs.local,
+          row.rast && row.rast.numero, row.rast && row.rast.blocoPav,
+          row.fvs && row.fvs.obra, row.rast && row.rast.obra
+        ].concat((row.rast && row.rast.linhas || []).map(function(l){ return l.betoneira; }))
+         .concat((row.rast && row.rast.linhas || []).map(function(l){ return l.notaFiscal; }))
+         .concat((row.rast && row.rast.linhas || []).map(function(l){ return l.pecas; }))
+         .concat((row.fvs && row.fvs.unidades) || [])
+         .join(" ").toLowerCase();
+        if(hay.indexOf(s)===-1) return false;
+      }
+      return true;
+    });
+  }
+
+  /* ---------------- render: KPIs ---------------- */
+  function renderKPIs(rows){
+    var totalFvs=fvsMap.size, totalRast=rastMap.size;
+    var pendente=0, aberto=0, concluido=0, vinculo=0, abertoNc=0;
+    rows.forEach(function(r){
+      if(!r.linked) vinculo++;
+      if(r.status.key==="pendente") pendente++;
+      else if(r.status.key==="aberto") aberto++;
+      else concluido++;
+      if(r.status.nc) abertoNc++;
+    });
+    var data=[
+      {n:totalFvs, l:"Fichas FVS", t:""},
+      {n:totalRast, l:"Rastreabilidades", t:""},
+      {n:vinculo, l:"Sem vínculo", t:"vinculo"},
+      {n:aberto, l:"Em aberto", t:"aberto"},
+      {n:abertoNc, l:"Aberta(s) com NC", t:"nc"},
+      {n:pendente, l:"Pendentes", t:"pendente"},
+      {n:concluido, l:"Concluídos", t:"concluido"}
+    ];
+    document.getElementById("kpis").innerHTML = data.map(function(d){
+      return '<div class="kpi'+(d.t?" tone-"+d.t:"")+'"><div class="n">'+d.n+'</div><div class="l">'+d.l+'</div></div>';
+    }).join("");
+  }
+
+  /* ---------------- render: board ---------------- */
+  function pill(sit){
+    return '<span class="pill '+sit.key+(sit.nc?' has-nc':'')+'"><span class="dot"></span>'+sit.label+'</span>';
+  }
+  function renderBoard(rows){
+    var body=document.getElementById("board-body");
+    if(rows.length===0){
+      body.innerHTML = '<div class="empty-state"><div class="big">Nada por aqui ainda</div><p>Crie uma ficha FVS ou um controle de rastreabilidade para começar, ou ajuste os filtros acima.</p></div>';
+      return;
+    }
+    body.innerHTML = rows.map(function(row){
+      var f=row.fvs, r=row.rast;
+      var fvsCell = f
+        ? '<div class="rec"><span class="num">'+escapeHtml(f.codigo||"FVS")+' · '+escapeHtml(f.numero||"s/ nº")+'</span><span class="meta">'+pill(fvsStatus(f))+'</span></div>'
+        : '<div class="rec empty"><span class="num">Sem ficha FVS</span></div>';
+      var rastCell = r
+        ? '<div class="rec"><span class="num">Rastr. '+escapeHtml(r.numero||"s/ nº")+'</span><span class="meta">'+pill(rastStatus(r))+'</span></div>'
+        : '<div class="rec empty"><span class="num">Sem rastreabilidade</span></div>';
+      var obra = (f && f.obra) || (r && r.obra) || DEFAULT_OBRA;
+      var local = row.local;
+      var sitHtml = pill(row.status) + (!row.linked ? ' '+pill({key:"vinculo",label:"Sem vínculo"}) : '');
+      return '<div class="row row-grid" data-fvs="'+(row.fvsId||"")+'" data-rast="'+(row.rastId||"")+'">'
+        + '<div class="cell-data" data-label="Data">'+escapeHtml(fmtDateBR(row.data))+(row.data?'<span class="dow">'+dowBR(row.data)+'</span>':'')+'</div>'
+        + '<div class="cell" data-label="Rastreabilidade">'+rastCell+'</div>'
+        + '<div class="cell" data-label="Ficha FVS">'+fvsCell+'</div>'
+        + '<div class="cell local-cell" data-label="Obra / Elemento"><span class="obra">'+escapeHtml(obra)+'</span><span class="elem">'+escapeHtml(local)+'</span></div>'
+        + '<div class="cell" data-label="Situação" style="display:flex;flex-wrap:wrap;gap:4px;">'+sitHtml+'</div>'
+        + '<div class="cell row-actions" data-label="">'
+          + (f? '<button class="icon-btn" data-open-fvs="'+row.fvsId+'">FVS</button>' : (r? '<button class="icon-btn" data-gen-fvs="'+row.rastId+'">+ FVS</button>' : ''))
+          + (r? '<button class="icon-btn" data-open-rast="'+row.rastId+'">Rastr.</button>' : (f? '<button class="icon-btn" data-gen-rast="'+row.fvsId+'">+ Rastr.</button>' : ''))
+        + '</div>'
+        + '</div>';
+    }).join("");
+  }
+
+  // Lista canônica de pavimentos (00-Fundação ... 27-Telhado) a partir das
+  // linhas cadastradas: agrupa textos diferentes que descrevem o mesmo andar
+  // (ex.: "5º Pavimento" digitado à mão numa ficha antiga e o chip novo
+  // "05 - Piso do 5º Pavimento Tipo (501)") pelo mesmo rank reconhecido,
+  // mostrando 1 label por andar (preferindo o formato oficial "NN - Nome").
+  // O que não for reconhecido (rank 9999) não pode ser agrupado com
+  // segurança, então continua aparecendo por texto exato. Usada tanto pelo
+  // filtro de pavimento do quadro principal quanto pelo relatório "FVS por
+  // pavimento", para as duas telas sempre mostrarem os mesmos andares.
+  function pavimentosCanonicos(allRows){
+    var todos=[];
+    allRows.forEach(function(r){ (r.pavimentos||[]).forEach(function(p){ todos.push((p||"").trim()); }); });
+    todos = todos.filter(Boolean);
+
+    var porRank = new Map(); // rank -> {label, oficial}
+    var naoReconhecidos = new Set();
+    todos.forEach(function(v){
+      var rank = pavimentoRank(v);
+      if(rank===9999){ naoReconhecidos.add(v); return; }
+      var oficial = /^\s*\d{1,2}\s*[-–.)]/.test(v);
+      var atual = porRank.get(rank);
+      if(!atual || (oficial && !atual.oficial) || (oficial===atual.oficial && v.length>atual.label.length)){
+        porRank.set(rank, { label:v, oficial:oficial });
+      }
+    });
+    var vals = [];
+    porRank.forEach(function(o, rank){ vals.push({label:o.label, rank:rank}); });
+    naoReconhecidos.forEach(function(v){ vals.push({label:v, rank:9999}); });
+
+    // Ordem canônica dos pavimentos do prédio (00-Fundação ... 27-Telhado); só
+    // mostra os que já existem nas fichas cadastradas, nunca a lista toda.
+    vals.sort(function(a,b){
+      if(a.rank!==b.rank) return a.rank-b.rank;
+      return a.label.localeCompare(b.label, "pt-BR", {numeric:true, sensitivity:"base"});
+    });
+    return vals; // [{label, rank}, ...]
+  }
+
+  function renderPavimentoOptions(allRows){
+    var sel = document.getElementById("f-pavimento");
+    var vals = pavimentosCanonicos(allRows).map(function(o){ return o.label; });
+    var current = filters.pavimento;
+    if(current && vals.indexOf(current)===-1){
+      // A opção exata que estava selecionada sumiu (virou outra label
+      // representativa do mesmo pavimento) — tenta manter o filtro pelo
+      // mesmo andar (mesmo rank) em vez de simplesmente limpar a seleção.
+      var rankAtual = pavimentoRank(current);
+      if(rankAtual!==9999){
+        for(var vi=0; vi<vals.length; vi++){
+          if(pavimentoRank(vals[vi])===rankAtual){ current = vals[vi]; break; }
+        }
+      }
+    }
+    sel.innerHTML = '<option value="">Todos os pavimentos</option>'
+      + vals.map(function(v){ return '<option value="'+escapeHtml(v)+'">'+escapeHtml(v)+'</option>'; }).join("");
+    sel.value = vals.indexOf(current)!==-1 ? current : "";
+    filters.pavimento = sel.value;
+  }
+  function render(){
+    var allRows = buildRows();
+    renderPavimentoOptions(allRows);
+    var rows = applyFilters(allRows);
+    renderKPIs(rows);
+    renderBoard(rows);
+    // Mantém o relatório "FVS por Pavimento" atualizado se ele estiver aberto
+    // no momento em que os dados mudarem (ex.: outra aba salvando algo).
+    var viewPav = document.getElementById("view-pavimento");
+    if(viewPav && !viewPav.hidden) renderViewPavimento();
+    var viewNc = document.getElementById("view-nc");
+    if(viewNc && !viewNc.hidden) renderViewNc();
+    var viewCt = document.getElementById("view-ct");
+    if(viewCt && !viewCt.hidden) renderViewCt();
+    var viewDash = document.getElementById("view-dashboard");
+    if(viewDash && !viewDash.hidden) renderViewDashboard();
+    var viewPlantas = document.getElementById("view-plantas");
+    if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
+  }
+
+  /* ---------------- navegação entre telas ---------------- */
+  // Cada tela do sistema é um dos elementos abaixo, e só uma fica visível
+  // por vez. Centralizar a troca aqui (em vez de cada tela saber esconder e
+  // mostrar a outra "vizinha") evita o problema de telas que só eram
+  // alcançáveis passando por dentro de outra (ex.: Não Conformidades antes
+  // só abria de dentro de "FVS por Pavimento") — agora qualquer tela pode
+  // ser aberta a partir de qualquer outra, inclusive pelo menu do topo.
+  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas" };
+  function switchView(nome){
+    Object.keys(VIEW_IDS).forEach(function(k){
+      var el = document.getElementById(VIEW_IDS[k]);
+      if(el) el.hidden = (k!==nome);
+    });
+    document.querySelectorAll(".nav-btn[data-view]").forEach(function(b){
+      b.setAttribute("aria-current", b.getAttribute("data-view")===nome ? "page" : "false");
+    });
+    if(nome==="dashboard") renderViewDashboard();
+    else if(nome==="pavimento") renderViewPavimento();
+    else if(nome==="nc") renderViewNc();
+    else if(nome==="ct") renderViewCt();
+    else if(nome==="plantas") renderViewPlantas();
+    // "board" não precisa de um render próprio aqui: KPIs e lista já são
+    // mantidos atualizados por render() independente de qual tela está
+    // visível no momento.
+  }
+
+  /* ---------------- painel geral (tela inicial) ---------------- */
+  function renderViewDashboard(){
+    var container = document.getElementById("view-dashboard");
+    if(!container) return;
+
+    var totalFvs = fvsMap.size, totalRast = rastMap.size;
+    var fvsAbertas = 0;
+    fvsMap.forEach(function(f){ if(fvsStatus(f).key==="aberto") fvsAbertas++; });
+    var todasNc = todasNaoConformidades();
+    var ncAbertas = todasNc.filter(function(i){ return !i.concluida; }).length;
+    var ctPendentes = ctRowsArray().filter(ctTemPendencia).length;
+    var rastPendentes = 0;
+    rastMap.forEach(function(r){ if(rastStatus(r).key==="pendente") rastPendentes++; });
+
+    var kpiCards = [
+      { n:fvsAbertas, l:"Fichas FVS em aberto", t:"aberto", d:"Fichas de verificação de serviço lançadas e ainda não fechadas." },
+      { n:ncAbertas, l:"Não conformidades em aberto", t:"nc", d:"Itens registrados como não conformes nas fichas, ainda pendentes de correção." },
+      { n:ctPendentes, l:"Traços com resultado pendente", t:"pendente", d:"Corpos de prova com data de ensaio (7/14/28/63 dias) já vencida sem resultado lançado." },
+      { n:rastPendentes, l:"Rastreabilidades com pendência", t:"pendente", d:"Concretagens que passaram do tempo máximo usina → lançamento sem ação corretiva registrada." }
+    ];
+    var kpisHtml = '<div class="dash-kpis">' + kpiCards.map(function(c){
+      return '<div class="dash-kpi-card tone-'+c.t+'"><div class="n">'+c.n+'</div><div class="l">'+escapeHtml(c.l)+'</div><div class="d">'+escapeHtml(c.d)+'</div></div>';
+    }).join("") + '</div>';
+
+    var modCards = [
+      { view:"board", t:"Fichas & Rastreabilidade", d:"Lista geral de fichas FVS e controles de rastreabilidade, com filtros e vínculo automático entre eles.", badge:(totalFvs+totalRast)+" registro(s)" },
+      { view:"pavimento", t:"FVS por Pavimento", d:"Fichas agrupadas por pavimento/unidade, para acompanhar o avanço físico da obra.", badge:totalFvs+" ficha(s)" },
+      { view:"nc", t:"Não Conformidades", d:"Todas as não conformidades das fichas em um só lugar, com geração de relatório em Word.", badge:ncAbertas+" em aberto" },
+      { view:"ct", t:"Controle Tecnológico do Concreto", d:"Resultados de ensaio dos corpos de prova, importados direto da planilha do laboratório.", badge:ctPendentes+" pendente(s)" }
+    ];
+    var modsHtml = '<div class="dash-section-title">Áreas do sistema</div>'
+      + '<div class="dash-modulos">' + modCards.map(function(m){
+          return '<button type="button" class="dash-modulo-card" data-goto-view="'+m.view+'">'
+            + '<div class="t">'+escapeHtml(m.t)+'</div>'
+            + '<div class="d">'+escapeHtml(m.d)+'</div>'
+            + '<div class="badge">'+escapeHtml(m.badge)+'</div>'
+          + '</button>';
+        }).join("") + '</div>';
+
+    container.innerHTML =
+      '<div class="dash-header">'
+        + '<h2>Painel geral</h2>'
+        + '<p class="dash-sub">Visão geral do canteiro — '+escapeHtml(DEFAULT_OBRA)+'. Use os cartões abaixo para entrar em cada área do sistema.</p>'
+      + '</div>'
+      + kpisHtml
+      + modsHtml;
+
+    container.querySelectorAll("[data-goto-view]").forEach(function(btn){
+      btn.addEventListener("click", function(){ switchView(btn.getAttribute("data-goto-view")); });
+    });
+  }
+
+  /* ---------------- relatório: FVS por pavimento ---------------- */
+  var filtrosPav = { pavimento:"", tipo:"", situacao:"todos" };
+  // Mesma lista de tipos usada no "Qual o tipo de FVS?" (fvs04 + FVS_TIPOS),
+  // reaproveitada aqui para o filtro "Por tipo de FVS".
+  function todosTiposFvs(){
+    return [{key:"fvs04", codigo:"FVS 04", titulo:"Forma, Desforma, Armação e Concretagem"}]
+      .concat(FVS_TIPOS.map(function(t){ return {key:t.key, codigo:t.codigo, titulo:t.titulo}; }));
+  }
+  function fvsPavimentosList(f){
+    var chips = (Array.isArray(f.pavimentos) && f.pavimentos.length) ? f.pavimentos : (f.local ? [f.local] : []);
+    return chips.map(function(p){ return (p||"").trim(); }).filter(Boolean);
+  }
+  // Situação de cada FVS, no vocabulário do filtro (mesmas categorias do
+  // selo que já aparece em cada ficha: Aberta / Aberta com NC / Pendente de
+  // NC / Fechada), pra "abertas, fechadas, não conformes e tal" ficar 1 pra 1
+  // com o que a pessoa já vê no resto do app.
+  function situacaoPavKey(f){
+    var st = fvsStatus(f);
+    if(st.key==="aberto") return st.nc ? "aberto_nc" : "aberto";
+    return st.key; // "pendente" ou "concluido"
+  }
+  function matchesFiltrosPav(f){
+    if(filtrosPav.tipo && (f.tipo||"fvs04")!==filtrosPav.tipo) return false;
+    if(filtrosPav.situacao!=="todos" && situacaoPavKey(f)!==filtrosPav.situacao) return false;
+    return true;
+  }
+  function buildRelatorioPavimento(){
+    // Usa o mesmo universo de pavimentos do filtro principal (junta FVS +
+    // rastreabilidade) pra a lista de andares bater com a do filtro do
+    // quadro, mas só conta FVS's (é um relatório de "FVS por pavimento").
+    var canon = pavimentosCanonicos(buildRows());
+    if(filtrosPav.pavimento){
+      var rankFiltro = pavimentoRank(filtrosPav.pavimento);
+      canon = canon.filter(function(c){
+        return rankFiltro!==9999 ? c.rank===rankFiltro : c.label===filtrosPav.pavimento;
+      });
+    }
+    var grupos = canon.map(function(c){ return { label:c.label, rank:c.rank, fichas:[] }; });
+    var porRank = new Map(), porLabel = new Map();
+    grupos.forEach(function(g){ if(g.rank!==9999) porRank.set(g.rank, g); else porLabel.set(g.label, g); });
+    fvsMap.forEach(function(f){
+      if(!matchesFiltrosPav(f)) return;
+      var pavs = fvsPavimentosList(f);
+      if(!pavs.length) return;
+      var jaContado = new Set();
+      pavs.forEach(function(p){
+        var r = pavimentoRank(p);
+        var g = r!==9999 ? porRank.get(r) : porLabel.get(p);
+        if(!g || jaContado.has(g.label)) return;
+        jaContado.add(g.label);
+        g.fichas.push(f);
+      });
+    });
+    grupos.forEach(function(g){
+      g.fichas.sort(function(a,b){
+        var da=a.dataConcretagem||a.dataAbertura||"", db=b.dataConcretagem||b.dataAbertura||"";
+        return db.localeCompare(da);
+      });
+    });
+    return grupos;
+  }
+  function renderViewPavimento(){
+    var container = document.getElementById("view-pavimento");
+    var grupos = buildRelatorioPavimento();
+    var totalGeral = grupos.reduce(function(acc,g){ return acc+g.fichas.length; }, 0);
+
+    var pavimentoOpcoes = pavimentosCanonicos(buildRows());
+    var filtrosHtml = '<div class="pav-filtros">'
+      + '<select id="pav-f-pavimento" aria-label="Filtrar por pavimento">'
+        + '<option value="">Todos os pavimentos</option>'
+        + pavimentoOpcoes.map(function(o){ return '<option value="'+escapeHtml(o.label)+'"'+(filtrosPav.pavimento===o.label?" selected":"")+'>'+escapeHtml(o.label)+'</option>'; }).join("")
+      + '</select>'
+      + '<select id="pav-f-tipo" aria-label="Filtrar por tipo de FVS">'
+        + '<option value="">Todos os tipos de FVS</option>'
+        + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosPav.tipo===t.key?" selected":"")+'>'+escapeHtml(t.titulo)+'</option>'; }).join("")
+      + '</select>'
+      + '<div class="chips" id="pav-f-situacao" role="group" aria-label="Filtrar por situação">'
+        + ['todos::Todas','aberto::Aberta','aberto_nc::Aberta com NC','pendente::Pendente de NC','concluido::Fechada'].map(function(opt){
+            var parts = opt.split("::"), key=parts[0], label=parts[1];
+            return '<button class="chip" data-sit-pav="'+key+'" aria-pressed="'+(filtrosPav.situacao===key)+'">'+label+'</button>';
+          }).join("")
+      + '</div>'
+    + '</div>';
+
+    var corpoHtml;
+    if(grupos.length===0){
+      corpoHtml = '<div class="empty-state"><div class="big">Nenhuma FVS encontrada</div><p>Cadastre o pavimento nas fichas FVS ou de rastreabilidade, ou ajuste os filtros acima, para ver o resumo aqui.</p></div>';
+    } else {
+      var resumoHtml = '<div class="pav-resumo-grid">' + grupos.map(function(g){
+        return '<div class="pav-resumo-card"><div class="n">'+g.fichas.length+'</div><div class="l">'+escapeHtml(g.label)+'</div></div>';
+      }).join("") + '</div>';
+      var listaHtml = '<div class="pav-lista">' + grupos.map(function(g){
+        var linhas = g.fichas.length
+          ? g.fichas.map(function(f){
+              return '<div class="pav-ficha-row">'
+                + '<span class="pav-ficha-cod">'+escapeHtml(f.descricao||f.codigo||"FVS")+' · '+escapeHtml(f.numero||"s/ nº")+'</span>'
+                + '<span class="pav-ficha-obra">'+escapeHtml(f.obra||"")+'</span>'
+                + pill(fvsStatus(f))
+                + '<span class="pav-ficha-data">'+escapeHtml(fmtDateBR(f.dataConcretagem||f.dataAbertura||""))+'</span>'
+                + '</div>';
+            }).join("")
+          : '<div class="pav-ficha-vazio">Nenhuma FVS encontrada neste pavimento com os filtros atuais.</div>';
+        return '<div class="pav-grupo">'
+          + '<div class="pav-grupo-head"><span class="pav-grupo-nome">'+escapeHtml(g.label)+'</span><span class="pav-grupo-count">'+g.fichas.length+' ficha(s)</span></div>'
+          + '<div class="pav-grupo-body">'+linhas+'</div>'
+          + '</div>';
+      }).join("") + '</div>';
+      corpoHtml = resumoHtml + listaHtml;
+    }
+
+    container.innerHTML =
+      '<div class="pav-header">'
+        + '<button class="btn" id="btn-voltar-pavimento">← Voltar</button>'
+        + '<h2>FVS\'s por pavimento</h2>'
+        + '<span class="pav-total">'+totalGeral+' ficha(s) encontrada(s)</span>'
+        + '<button class="btn ghost danger" id="btn-view-nc">NÃO CONFORMIDADES</button>'
+      + '</div>'
+      + '<p class="view-desc">Fichas agrupadas por pavimento/unidade da obra, pra acompanhar o avanço físico de cada trecho.</p>'
+      + filtrosHtml
+      + corpoHtml;
+
+    document.getElementById("btn-voltar-pavimento").addEventListener("click", hideViewPavimento);
+    document.getElementById("btn-view-nc").addEventListener("click", showViewNc);
+    document.getElementById("pav-f-pavimento").addEventListener("change", function(e){ filtrosPav.pavimento=e.target.value; renderViewPavimento(); });
+    document.getElementById("pav-f-tipo").addEventListener("change", function(e){ filtrosPav.tipo=e.target.value; renderViewPavimento(); });
+    document.getElementById("pav-f-situacao").addEventListener("click", function(e){
+      var btn=e.target.closest("[data-sit-pav]"); if(!btn) return;
+      filtrosPav.situacao = btn.getAttribute("data-sit-pav");
+      renderViewPavimento();
+    });
+  }
+  function showViewPavimento(){ switchView("pavimento"); }
+  function hideViewPavimento(){ switchView("dashboard"); }
+
+  /* ---------------- relatório: Não conformidades ---------------- */
+  var filtrosNc = { pavimento:"", tipo:"", situacao:"todos", destinatario:"" }; // situacao: "todos" | "aberto" | "concluida"
+
+  // Lista plana de todas as não conformidades cadastradas em todas as
+  // fichas FVS (novas, já como lista, e antigas migradas na hora por
+  // fichaNaoConformidades()) — cada item já carrega os dados da ficha-mãe e
+  // os dias em aberto já calculados, pra alimentar tanto o resumo por
+  // pavimento quanto o relatório em Word.
+  function todasNaoConformidades(){
+    var out=[];
+    fvsMap.forEach(function(f, fid){
+      fichaNaoConformidades(f).forEach(function(nc, ni){
+        out.push({
+          fichaId: fid, ficha: f, idx: ni,
+          descricao: nc.descricao||"", correcao: nc.correcao||"",
+          concluida: !!nc.concluida,
+          dataRegistro: nc.dataRegistro||f.dataAbertura||"", dataConclusao: nc.dataConclusao||"",
+          diasAberto: nc.concluida ? null : diffDias(nc.dataRegistro||f.dataAbertura||"", todayISO()),
+          pavimentos: fvsPavimentosList(f),
+          anexos: ncAnexos(nc)
+        });
+      });
+    });
+    return out;
+  }
+  function matchesFiltrosNc(item){
+    if(filtrosNc.tipo && (item.ficha.tipo||"fvs04")!==filtrosNc.tipo) return false;
+    if(filtrosNc.situacao==="aberto" && item.concluida) return false;
+    if(filtrosNc.situacao==="concluida" && !item.concluida) return false;
+    if(filtrosNc.pavimento){
+      var rankFiltro = pavimentoRank(filtrosNc.pavimento);
+      var ok = item.pavimentos.some(function(p){
+        return rankFiltro!==9999 ? pavimentoRank(p)===rankFiltro : p===filtrosNc.pavimento;
+      });
+      if(!ok) return false;
+    }
+    return true;
+  }
+  function buildRelatorioNc(){
+    var todas = todasNaoConformidades().filter(matchesFiltrosNc);
+
+    var canon = pavimentosCanonicos(buildRows());
+    if(filtrosNc.pavimento){
+      var rankFiltro = pavimentoRank(filtrosNc.pavimento);
+      canon = canon.filter(function(c){ return rankFiltro!==9999 ? c.rank===rankFiltro : c.label===filtrosNc.pavimento; });
+    }
+    var grupos = canon.map(function(c){ return { label:c.label, rank:c.rank, itens:[] }; });
+    var porRank=new Map(), porLabel=new Map();
+    grupos.forEach(function(g){ if(g.rank!==9999) porRank.set(g.rank,g); else porLabel.set(g.label,g); });
+    todas.forEach(function(item){
+      if(!item.pavimentos.length) return;
+      var jaContado=new Set();
+      item.pavimentos.forEach(function(p){
+        var r=pavimentoRank(p);
+        var g = r!==9999 ? porRank.get(r) : porLabel.get(p);
+        if(!g || jaContado.has(g.label)) return;
+        jaContado.add(g.label);
+        g.itens.push(item);
+      });
+    });
+    grupos.forEach(function(g){
+      g.itens.sort(function(a,b){ return (b.dataRegistro||"").localeCompare(a.dataRegistro||""); });
+    });
+    return { todas: todas, grupos: grupos };
+  }
+  function descricaoFiltrosNc(){
+    var tipoLabel = "todos";
+    if(filtrosNc.tipo){
+      var t = todosTiposFvs().find(function(x){ return x.key===filtrosNc.tipo; });
+      tipoLabel = t ? t.titulo : filtrosNc.tipo;
+    }
+    var sitLabel = {todos:"todas", aberto:"em aberto", concluida:"concluídas"}[filtrosNc.situacao] || "todas";
+    return "Pavimento: "+(filtrosNc.pavimento||"todos")+" · Tipo de FVS: "+tipoLabel+" · Situação: "+sitLabel;
+  }
+  function renderViewNc(){
+    var container = document.getElementById("view-nc");
+    var rel = buildRelatorioNc();
+    var todas = rel.todas, grupos = rel.grupos;
+
+    var abertas = todas.filter(function(i){ return !i.concluida; }).length;
+    var concluidas = todas.length - abertas;
+
+    var pavimentoOpcoes = pavimentosCanonicos(buildRows());
+    var filtrosHtml = '<div class="pav-filtros">'
+      + '<select id="nc-f-pavimento" aria-label="Filtrar por pavimento">'
+        + '<option value="">Todos os pavimentos</option>'
+        + pavimentoOpcoes.map(function(o){ return '<option value="'+escapeHtml(o.label)+'"'+(filtrosNc.pavimento===o.label?" selected":"")+'>'+escapeHtml(o.label)+'</option>'; }).join("")
+      + '</select>'
+      + '<select id="nc-f-tipo" aria-label="Filtrar por tipo de FVS">'
+        + '<option value="">Todos os tipos de FVS</option>'
+        + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosNc.tipo===t.key?" selected":"")+'>'+escapeHtml(t.titulo)+'</option>'; }).join("")
+      + '</select>'
+      + '<div class="chips" id="nc-f-situacao" role="group" aria-label="Filtrar por situação da não conformidade">'
+        + ['todos::Todas','aberto::Em aberto','concluida::Concluídas'].map(function(opt){
+            var parts=opt.split("::"), key=parts[0], label=parts[1];
+            return '<button class="chip" data-sit-nc="'+key+'" aria-pressed="'+(filtrosNc.situacao===key)+'">'+label+'</button>';
+          }).join("")
+      + '</div>'
+    + '</div>';
+
+    var resumoHtml = '<div class="pav-resumo-grid">'
+      + '<div class="pav-resumo-card"><div class="n">'+todas.length+'</div><div class="l">Não conformidades (filtro atual)</div></div>'
+      + '<div class="pav-resumo-card tone-nc"><div class="n">'+abertas+'</div><div class="l">Em aberto</div></div>'
+      + '<div class="pav-resumo-card tone-ok"><div class="n">'+concluidas+'</div><div class="l">Concluídas</div></div>'
+    + '</div>';
+
+    var corpoHtml;
+    if(todas.length===0){
+      corpoHtml = '<div class="empty-state"><div class="big">Nenhuma não conformidade encontrada</div><p>Ajuste os filtros acima ou registre não conformidades nas fichas FVS.</p></div>';
+    } else {
+      corpoHtml = '<div class="pav-lista">' + grupos.map(function(g){
+        var abertasG = g.itens.filter(function(i){ return !i.concluida; }).length;
+        var concluidasG = g.itens.length - abertasG;
+        var linhas = g.itens.length
+          ? g.itens.map(function(item){
+              var f=item.ficha;
+              var statusPill = item.concluida
+                ? '<span class="pill concluido"><span class="dot"></span>Concluída</span>'
+                : '<span class="pill aberto has-nc"><span class="dot"></span>Em aberto</span>';
+              var diasHtml = !item.concluida && item.diasAberto!=null
+                ? '<span class="nc-dias">'+item.diasAberto+' dia(s) em aberto</span>'
+                : (item.concluida ? '<span class="nc-dias">Concluída em '+escapeHtml(fmtDateBR(item.dataConclusao))+'</span>' : '');
+              return '<div class="pav-ficha-row">'
+                + '<span class="pav-ficha-cod">'+escapeHtml(f.descricao||f.codigo||"FVS")+' · '+escapeHtml(f.numero||"s/ nº")+'</span>'
+                + '<span class="pav-ficha-obra">'+escapeHtml(item.descricao||"(sem descrição)")+'</span>'
+                + statusPill
+                + diasHtml
+                + '</div>';
+            }).join("")
+          : '<div class="pav-ficha-vazio">Nenhuma não conformidade neste pavimento com os filtros atuais.</div>';
+        return '<div class="pav-grupo">'
+          + '<div class="pav-grupo-head"><span class="pav-grupo-nome">'+escapeHtml(g.label)+'</span>'
+            + '<span class="pav-grupo-count">'+g.itens.length+' NC(s) · '+abertasG+' em aberto · '+concluidasG+' concluída(s)</span></div>'
+          + '<div class="pav-grupo-body">'+linhas+'</div>'
+          + '</div>';
+      }).join("") + '</div>';
+    }
+
+    var relatorioHtml = '<div class="nc-relatorio-bar">'
+      + '<input type="text" id="nc-f-destinatario" placeholder="Empreiteira / destinatário deste relatório (opcional)" value="'+escapeHtml(filtrosNc.destinatario)+'">'
+      + '<button class="btn primary" id="btn-relatorio-nc">Gerar relatório (Word)</button>'
+    + '</div>';
+
+    container.innerHTML =
+      '<div class="pav-header">'
+        + '<button class="btn" id="btn-voltar-nc">← Voltar</button>'
+        + '<h2>Não conformidades</h2>'
+        + '<span class="pav-total">'+todas.length+' não conformidade(s) encontrada(s)</span>'
+      + '</div>'
+      + '<p class="view-desc">Todas as não conformidades registradas nas fichas FVS, filtráveis por pavimento, tipo e situação — gere um relatório em Word pra notificar a empreiteira ao final.</p>'
+      + filtrosHtml
+      + resumoHtml
+      + relatorioHtml
+      + corpoHtml;
+
+    document.getElementById("btn-voltar-nc").addEventListener("click", hideViewNc);
+    document.getElementById("btn-relatorio-nc").addEventListener("click", gerarRelatorioNcWord);
+    document.getElementById("nc-f-destinatario").addEventListener("input", function(e){ filtrosNc.destinatario = e.target.value; });
+    document.getElementById("nc-f-pavimento").addEventListener("change", function(e){ filtrosNc.pavimento=e.target.value; renderViewNc(); });
+    document.getElementById("nc-f-tipo").addEventListener("change", function(e){ filtrosNc.tipo=e.target.value; renderViewNc(); });
+    document.getElementById("nc-f-situacao").addEventListener("click", function(e){
+      var btn=e.target.closest("[data-sit-nc]"); if(!btn) return;
+      filtrosNc.situacao = btn.getAttribute("data-sit-nc");
+      renderViewNc();
+    });
+  }
+  function showViewNc(){ switchView("nc"); }
+  function hideViewNc(){ switchView("dashboard"); }
+
+  /* ---------------- Controle Tecnológico do Concreto ---------------- */
+  // Em vez de uma tela pra digitar cada traço manualmente, o usuário reenvia
+  // a mesma planilha de Controle Tecnológico (a mesma que já circula com o
+  // laboratório/concreteira) sempre que ela tiver novidade, e o app lê essa
+  // planilha e grava/atualiza cada linha no Firestore usando a "Nota de
+  // Remessa" como identificador único: reenviar a planilha nunca duplica
+  // nada, só atualiza o que já existe e adiciona o que for novo. Registros
+  // que em algum momento saírem da planilha (linha apagada/renumerada) nunca
+  // são excluídos automaticamente por aqui — continuam guardados como
+  // estavam, pra não haver risco de perda de dados.
+
+  // Mapa de colunas da aba "CONT. TECNOLÓGICO" (0-index, no formato que
+  // XLSX.utils.encode_cell espera), a partir da linha 7 da planilha (linhas
+  // 1–6 são título e cabeçalhos). CT_IDADES usa os mesmos nomes de campo
+  // abaixo pra descobrir qual resultado de ruptura já saiu e qual está
+  // pendente.
+  var CT_COLS = {
+    local:0, volume:4, fck:5, notaRemessa:6, laboratorio:7, concreteira:8,
+    dataConcretagem:9, numCps:10, slump:11,
+    data7:12, data14:13, data28:14, data63:15,
+    cpsConforme:16, r3:17, r7:18, r7b:19, r14:20, r14b:21, r28:22, r28b:23, r63:24, r63b:25,
+    observacao:26
+  };
+  // Cada idade de ruptura tem uma data prevista (colunas "Data 7/14/28/63
+  // Dias") e um ou dois resultados (a planilha reserva uma segunda coluna,
+  // ex. "7' Dias", para reensaio). Um resultado é "pendente" quando a data
+  // prevista já passou e nenhum dos dois foi preenchido; se a data prevista
+  // ainda não chegou, simplesmente ainda não é o caso de cobrar o resultado.
+  var CT_IDADES = [
+    {key:"7", dataCampo:"data7", campos:["r7","r7b"]},
+    {key:"14", dataCampo:"data14", campos:["r14","r14b"]},
+    {key:"28", dataCampo:"data28", campos:["r28","r28b"]},
+    {key:"63", dataCampo:"data63", campos:["r63","r63b"]}
+  ];
+  function ctValorPreenchido(v){ return v!=null && String(v).trim()!==""; }
+  // Na prática, nem todo traço passa pelas 4 idades de ruptura — é comum o
+  // laboratório pular o rompimento de 14 dias, por exemplo, quando já não
+  // é mais necessário. Quando isso acontece, quem preenche a planilha marca
+  // a coluna "Observação" como "CONCLUÍDO" mesmo com aquela idade em
+  // branco — esse marcador é o sinal mais confiável de que não há nada
+  // pendente ali, então ele tem prioridade sobre a comparação de datas: só
+  // vira "pendente" (cobrança de resultado) quando a data já passou, o
+  // resultado não saiu E a observação não foi marcada como concluída.
+  function ctRowConcluidaPorObservacao(row){
+    return /CONCLU/i.test(row.observacao||"");
+  }
+  function ctStatusIdade(row, idade){
+    var dataPrev = row[idade.dataCampo];
+    if(!dataPrev) return "sem-data";
+    var saiu = idade.campos.some(function(c){ return ctValorPreenchido(row[c]); });
+    if(saiu) return "concluido";
+    if(dataPrev > todayISO()) return "aguardando";
+    return ctRowConcluidaPorObservacao(row) ? "dispensado" : "pendente";
+  }
+  function ctIdadesPendentes(row){
+    return CT_IDADES.filter(function(idade){ return ctStatusIdade(row, idade)==="pendente"; });
+  }
+  function ctTemPendencia(row){ return ctIdadesPendentes(row).length>0; }
+
+  // Liga a Nota de Remessa desta linha às linhas de rastreabilidade que
+  // citam a mesma nota fiscal (mesmo campo já usado na busca ampliada do
+  // quadro principal), dando acesso direto à ficha de rastreabilidade a
+  // partir do painel de Controle Tecnológico.
+  function ctNormalizaNota(v){
+    var s = String(v==null?"":v).replace(/\D/g,"");
+    return s.replace(/^0+(?=\d)/,"");
+  }
+  function ctRastreabilidadesLigadas(notaRemessa){
+    var alvo = ctNormalizaNota(notaRemessa);
+    if(!alvo) return [];
+    var achados = [];
+    rastMap.forEach(function(r, id){
+      var bateu = (r.linhas||[]).some(function(l){ return ctNormalizaNota(l.notaFiscal)===alvo; });
+      if(bateu) achados.push({ id:id, numero:r.numero||"s/ nº" });
+    });
+    return achados;
+  }
+
+  /* ---- leitura da planilha (.xlsx) ---- */
+  function ctCellVal(ws, r, c){
+    var cell = ws[XLSX.utils.encode_cell({r:r,c:c})];
+    return cell ? cell.v : null;
+  }
+  function ctPad2(n){ return n<10 ? "0"+n : ""+n; }
+  function ctDataISO(v){
+    if(v==null || v==="") return "";
+    if(v instanceof Date && !isNaN(v)) return v.getUTCFullYear()+"-"+ctPad2(v.getUTCMonth()+1)+"-"+ctPad2(v.getUTCDate());
+    if(typeof v==="number" && typeof XLSX!=="undefined" && XLSX.SSF && XLSX.SSF.parse_date_code){
+      var d = XLSX.SSF.parse_date_code(v);
+      if(d) return d.y+"-"+ctPad2(d.m)+"-"+ctPad2(d.d);
+    }
+    return "";
+  }
+  function ctNum(v){
+    if(v==null || v==="") return null;
+    var n = Number(v);
+    return isNaN(n) ? null : n;
+  }
+  function ctStr(v){ return v==null ? "" : String(v).trim(); }
+  function ctBruto(v){
+    if(v instanceof Date) return ctDataISO(v);
+    if(v==null || v==="") return null;
+    return v;
+  }
+
+  var ctImportando = false;
+  function ctSetStatus(msg, tone){
+    var el = document.getElementById("ct-import-msg");
+    if(!el) return;
+    el.textContent = msg||"";
+    el.className = "ct-import-msg"+(tone?" "+tone:"");
+  }
+  async function ctImportarArquivo(file){
+    try{ await garantirLibs(); }catch(ex){ console.error(ex); }
+    if(!file || ctImportando) return;
+    ctImportando = true;
+    var bar = document.getElementById("ct-upload-bar");
+    if(bar) bar.classList.add("busy");
+    ctSetStatus("Lendo "+file.name+"…");
+    try{
+      var buf = await file.arrayBuffer();
+      var wb = XLSX.read(buf, {type:"array", cellDates:true});
+      var nomeAba = wb.SheetNames.find(function(n){ return /CONT\.?\s*TECNOL/i.test(n); }) || wb.SheetNames[0];
+      var ws = wb.Sheets[nomeAba];
+      if(!ws || !ws["!ref"]) throw new Error("planilha vazia ou sem a aba de Controle Tecnológico");
+      var range = XLSX.utils.decode_range(ws["!ref"]);
+      var linhas = [];
+      for(var r=6; r<=range.e.r; r++){ // linha 7 da planilha (0-index 6) em diante
+        var notaVal = ctCellVal(ws, r, CT_COLS.notaRemessa);
+        if(notaVal==null || String(notaVal).trim()==="") continue; // sem Nota de Remessa não é uma linha de dado
+        linhas.push({
+          notaRemessa: String(notaVal).trim(),
+          local: ctStr(ctCellVal(ws,r,CT_COLS.local)),
+          volume: ctNum(ctCellVal(ws,r,CT_COLS.volume)),
+          fck: ctNum(ctCellVal(ws,r,CT_COLS.fck)),
+          laboratorio: ctStr(ctCellVal(ws,r,CT_COLS.laboratorio)),
+          concreteira: ctStr(ctCellVal(ws,r,CT_COLS.concreteira)),
+          dataConcretagem: ctDataISO(ctCellVal(ws,r,CT_COLS.dataConcretagem)),
+          numCps: ctNum(ctCellVal(ws,r,CT_COLS.numCps)),
+          slump: ctNum(ctCellVal(ws,r,CT_COLS.slump)),
+          data7: ctDataISO(ctCellVal(ws,r,CT_COLS.data7)),
+          data14: ctDataISO(ctCellVal(ws,r,CT_COLS.data14)),
+          data28: ctDataISO(ctCellVal(ws,r,CT_COLS.data28)),
+          data63: ctDataISO(ctCellVal(ws,r,CT_COLS.data63)),
+          cpsConforme: ctNum(ctCellVal(ws,r,CT_COLS.cpsConforme)),
+          r3: ctBruto(ctCellVal(ws,r,CT_COLS.r3)),
+          r7: ctBruto(ctCellVal(ws,r,CT_COLS.r7)),
+          r7b: ctBruto(ctCellVal(ws,r,CT_COLS.r7b)),
+          r14: ctBruto(ctCellVal(ws,r,CT_COLS.r14)),
+          r14b: ctBruto(ctCellVal(ws,r,CT_COLS.r14b)),
+          r28: ctBruto(ctCellVal(ws,r,CT_COLS.r28)),
+          r28b: ctBruto(ctCellVal(ws,r,CT_COLS.r28b)),
+          r63: ctBruto(ctCellVal(ws,r,CT_COLS.r63)),
+          r63b: ctBruto(ctCellVal(ws,r,CT_COLS.r63b)),
+          observacao: ctStr(ctCellVal(ws,r,CT_COLS.observacao))
+        });
+      }
+      if(!linhas.length) throw new Error("nenhuma linha com Nota de Remessa foi encontrada na planilha");
+
+      var novos=0, atualizados=0;
+      var ops = linhas.map(function(row){
+        var id = "nf_"+safeName(row.notaRemessa);
+        var existente = ctMap.get(id);
+        if(existente) atualizados++; else novos++;
+        var data = Object.assign({}, row, {
+          criadoEm: (existente && existente.criadoEm) ? existente.criadoEm : nowISO(),
+          atualizadoEm: nowISO(),
+          atualizadoPor: currentUserEmail||""
+        });
+        return { id:id, data:data };
+      });
+      ctSetStatus("Gravando "+ops.length+" linha(s)…");
+      // Grava em lotes (limite de 500 operações por commit no Firestore).
+      for(var i=0;i<ops.length;i+=450){
+        var chunk = ops.slice(i, i+450);
+        var batch = dbf.batch();
+        chunk.forEach(function(op){ batch.set(ctCol.doc(op.id), op.data); });
+        await batch.commit();
+      }
+      await ctCol.doc("_meta").set({
+        ultimaImportacaoEm: nowISO(), ultimaImportacaoPor: currentUserEmail||"",
+        ultimoArquivo: file.name||"", ultimoTotalLinhas: linhas.length
+      }, {merge:true});
+
+      ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s).", "ok");
+    } catch(ex){
+      console.error(ex);
+      ctSetStatus("Não foi possível importar: "+(ex && ex.message ? ex.message : "erro desconhecido")+".", "err");
+    } finally {
+      ctImportando = false;
+      if(bar) bar.classList.remove("busy");
+    }
+  }
+
+  /* ---- painel / dashboard ---- */
+  var filtrosCt = { busca:"", somentePendentes:false };
+  function ctRowsArray(){
+    var out = [];
+    ctMap.forEach(function(d, id){
+      if(id==="_meta" || !d || !d.notaRemessa) return;
+      out.push(d);
+    });
+    out.sort(function(a,b){ return (b.dataConcretagem||"").localeCompare(a.dataConcretagem||""); });
+    return out;
+  }
+  function ctRowsFiltradas(){
+    var termo = (filtrosCt.busca||"").trim().toLowerCase();
+    return ctRowsArray().filter(function(row){
+      if(filtrosCt.somentePendentes && !ctTemPendencia(row)) return false;
+      if(termo){
+        var alvo = (String(row.local||"")+" "+String(row.notaRemessa||"")+" "+String(row.concreteira||"")+" "+String(row.laboratorio||"")).toLowerCase();
+        if(alvo.indexOf(termo)===-1) return false;
+      }
+      return true;
+    });
+  }
+  function ctCelulaResultado(row, campo, idade){
+    var v = row[campo];
+    var texto = (v==null || v==="") ? "—" : String(v);
+    var tone = idade ? ctStatusIdade(row, idade) : "";
+    return '<td class="ct-cell'+(tone?" tone-"+tone:"")+'">'+escapeHtml(texto)+'</td>';
+  }
+  function ctCelulaData(iso){
+    return '<td class="ct-cell" style="color:var(--text-muted);">'+escapeHtml(fmtDateBR(iso))+'</td>';
+  }
+  function ctCelulaTexto(v, align){
+    return '<td'+(align?' style="text-align:'+align+';"':'')+'>'+escapeHtml(v==null||v===""?"—":v)+'</td>';
+  }
+  function ctCelulaRastreabilidade(row){
+    var ligadas = ctRastreabilidadesLigadas(row.notaRemessa);
+    if(!ligadas.length) return '<td><span class="ct-sem-vinculo">sem vínculo</span></td>';
+    var principal = ligadas[0];
+    var extra = ligadas.length>1 ? ' <span class="ct-sem-vinculo">+'+(ligadas.length-1)+'</span>' : '';
+    return '<td><button type="button" class="ct-rast-link" data-open-rast="'+escapeHtml(principal.id)+'">Rastr. '+escapeHtml(principal.numero)+'</button>'+extra+'</td>';
+  }
+  function ctUltimoImportInfo(){
+    var meta = ctMap.get("_meta");
+    if(!meta || !meta.ultimaImportacaoEm) return "Nenhuma planilha importada ainda.";
+    return "Última importação: "+fmtDateTimeBR(meta.ultimaImportacaoEm)+(meta.ultimaImportacaoPor?" por "+escapeHtml(meta.ultimaImportacaoPor):"")+(meta.ultimoTotalLinhas?" — "+meta.ultimoTotalLinhas+" linha(s)":"")+".";
+  }
+  // Só a tabela é reconstruída a cada busca/filtro (o cabeçalho com o campo
+  // de busca fica de fora), pro campo de texto não perder o foco/cursor a
+  // cada letra digitada — mesmo cuidado já tomado no campo de busca do
+  // quadro principal.
+  function renderCtTable(){
+    var el = document.getElementById("ct-table-container");
+    if(!el) return;
+    var rows = ctRowsArray();
+    if(!rows.length){
+      el.innerHTML = '<div class="empty-state"><div class="big">Nenhum traço importado ainda</div><p>Envie a planilha de Controle Tecnológico do Concreto acima para preencher este painel automaticamente.</p></div>';
+      return;
+    }
+    var visiveis = ctRowsFiltradas();
+    el.innerHTML = '<div class="lines-wrap ct-wrap"><table class="ct-table"><thead>'
+      + '<tr>'
+        + '<th rowspan="2">Local</th>'
+        + '<th rowspan="2">Vol (m³)</th>'
+        + '<th rowspan="2">Fck (Mpa)</th>'
+        + '<th rowspan="2">Nota de Remessa</th>'
+        + '<th rowspan="2">Laboratório</th>'
+        + '<th rowspan="2">Concreteira</th>'
+        + '<th rowspan="2">Data Concretagem</th>'
+        + '<th rowspan="2">Nº de CPs</th>'
+        + '<th rowspan="2">Slump</th>'
+        + '<th rowspan="2">Data 7 Dias</th>'
+        + '<th rowspan="2">Data 14 Dias</th>'
+        + '<th rowspan="2">Data 28 Dias</th>'
+        + '<th rowspan="2">Data 63 Dias</th>'
+        + '<th rowspan="2">CPs Conforme</th>'
+        + '<th rowspan="2">3 Dias</th>'
+        + '<th class="ct-th-group" colspan="2">7 Dias</th>'
+        + '<th class="ct-th-group" colspan="2">14 Dias</th>'
+        + '<th class="ct-th-group" colspan="2">28 Dias</th>'
+        + '<th class="ct-th-group" colspan="2">63 Dias</th>'
+        + '<th rowspan="2">Observação</th>'
+        + '<th rowspan="2">Rastreabilidade</th>'
+      + '</tr>'
+      + '<tr>'
+        + '<th class="ct-th-sub">7 Dias</th><th class="ct-th-sub">7\' Dias</th>'
+        + '<th class="ct-th-sub">14 Dias</th><th class="ct-th-sub">14\' Dias</th>'
+        + '<th class="ct-th-sub">28 Dias</th><th class="ct-th-sub">28\' Dias</th>'
+        + '<th class="ct-th-sub">63 Dias</th><th class="ct-th-sub">63\' Dias</th>'
+      + '</tr>'
+    + '</thead><tbody>'
+    + (visiveis.length ? visiveis.map(function(row){
+        return '<tr>'
+          + ctCelulaTexto(row.local, "left")
+          + ctCelulaTexto(row.volume)
+          + ctCelulaTexto(row.fck)
+          + ctCelulaTexto(row.notaRemessa)
+          + ctCelulaTexto(row.laboratorio, "left")
+          + ctCelulaTexto(row.concreteira, "left")
+          + ctCelulaData(row.dataConcretagem)
+          + ctCelulaTexto(row.numCps)
+          + ctCelulaTexto(row.slump)
+          + ctCelulaData(row.data7)
+          + ctCelulaData(row.data14)
+          + ctCelulaData(row.data28)
+          + ctCelulaData(row.data63)
+          + ctCelulaTexto(row.cpsConforme)
+          + ctCelulaResultado(row, "r3", null)
+          + ctCelulaResultado(row, "r7", CT_IDADES[0]) + ctCelulaResultado(row, "r7b", CT_IDADES[0])
+          + ctCelulaResultado(row, "r14", CT_IDADES[1]) + ctCelulaResultado(row, "r14b", CT_IDADES[1])
+          + ctCelulaResultado(row, "r28", CT_IDADES[2]) + ctCelulaResultado(row, "r28b", CT_IDADES[2])
+          + ctCelulaResultado(row, "r63", CT_IDADES[3]) + ctCelulaResultado(row, "r63b", CT_IDADES[3])
+          + ctCelulaTexto(row.observacao, "left")
+          + ctCelulaRastreabilidade(row)
+        + '</tr>';
+      }).join("") : '<tr><td colspan="25" style="text-align:center;color:var(--text-muted);padding:20px;">Nenhum traço encontrado com os filtros atuais.</td></tr>')
+    + '</tbody></table></div>';
+    el.querySelectorAll("[data-open-rast]").forEach(function(btn){
+      btn.addEventListener("click", function(){ openModal("rast", btn.getAttribute("data-open-rast")); });
+    });
+  }
+  function renderViewCt(){
+    var container = document.getElementById("view-ct");
+    var rows = ctRowsArray();
+    var pendentesTotal = rows.filter(ctTemPendencia).length;
+
+    var uploadHtml = '<div class="ct-upload-bar" id="ct-upload-bar">'
+      + '<div class="info"><div class="t">Importar planilha de Controle Tecnológico (.xlsx)</div>'
+        + '<div class="s">'+ctUltimoImportInfo()+'</div>'
+        + '<div class="ct-import-msg" id="ct-import-msg"></div>'
+      + '</div>'
+      + '<button class="btn primary" id="ct-btn-importar" type="button">Importar planilha…</button>'
+      + '<input type="file" id="ct-file-input" accept=".xlsx" hidden>'
+    + '</div>';
+
+    var resumoHtml = '<div class="pav-resumo-grid">'
+      + '<div class="pav-resumo-card"><div class="n">'+rows.length+'</div><div class="l">Traços de concreto</div></div>'
+      + '<div class="pav-resumo-card tone-nc"><div class="n">'+pendentesTotal+'</div><div class="l">Com resultado pendente</div></div>'
+      + '<div class="pav-resumo-card tone-ok"><div class="n">'+(rows.length-pendentesTotal)+'</div><div class="l">Sem pendências</div></div>'
+    + '</div>';
+
+    var filtrosHtml = '<div class="ct-filtros">'
+      + '<div class="search" style="max-width:320px;">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+        + '<input type="text" id="ct-f-busca" placeholder="Buscar por local, nota, concreteira…" value="'+escapeHtml(filtrosCt.busca)+'">'
+      + '</div>'
+      + '<div class="chips" role="group" aria-label="Filtrar por pendência">'
+        + '<button class="chip" id="ct-f-pendentes" aria-pressed="'+(!!filtrosCt.somentePendentes)+'">Somente pendentes</button>'
+      + '</div>'
+    + '</div>';
+
+    container.innerHTML =
+      '<div class="pav-header">'
+        + '<button class="btn" id="btn-voltar-ct">← Voltar</button>'
+        + '<h2>Controle Tecnológico do Concreto</h2>'
+        + '<span class="pav-total">'+rows.length+' traço(s)</span>'
+      + '</div>'
+      + '<p class="view-desc">Resultados de ensaio dos corpos de prova de concreto (7/14/28/63 dias), importados da planilha do laboratório e vinculados às rastreabilidades pela Nota de Remessa.</p>'
+      + uploadHtml
+      + resumoHtml
+      + filtrosHtml
+      + '<div id="ct-table-container"></div>';
+
+    document.getElementById("btn-voltar-ct").addEventListener("click", hideViewCt);
+    var fileInput = document.getElementById("ct-file-input");
+    document.getElementById("ct-btn-importar").addEventListener("click", function(){ fileInput.click(); });
+    fileInput.addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      if(f) ctImportarArquivo(f);
+      fileInput.value = "";
+    });
+    document.getElementById("ct-f-busca").addEventListener("input", function(e){ filtrosCt.busca = e.target.value; renderCtTable(); });
+    document.getElementById("ct-f-pendentes").addEventListener("click", function(e){
+      filtrosCt.somentePendentes = !filtrosCt.somentePendentes;
+      e.target.setAttribute("aria-pressed", filtrosCt.somentePendentes ? "true":"false");
+      renderCtTable();
+    });
+    renderCtTable();
+  }
+  function showViewCt(){ switchView("ct"); }
+  function hideViewCt(){ switchView("dashboard"); }
+
+  /* ---------------- biblioteca de plantas de forma ---------------- */
+  // Tela de cadastro/gestão das plantas reaproveitadas pela ferramenta de
+  // mapeamento de concretagem (ver bibliotecaAdicionarPlanta,
+  // mapeamentoFieldHtml e mapaPlantasOrdenadas). Cada planta é cadastrada
+  // uma única vez aqui — comprimida automaticamente — e depois só é
+  // escolhida numa lista dentro de cada rastreabilidade, sem reenviar o PDF.
+  function showViewPlantas(){ switchView("plantas"); }
+  function hideViewPlantas(){ switchView("dashboard"); }
+  function plantasOrdenadasPorPavimento(){
+    var todas = [];
+    plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
+    todas.forEach(function(p){ p._rank = pavimentoRank(p.pavimento); });
+    todas.sort(function(a,b){
+      if(a._rank !== b._rank) return a._rank - b._rank;
+      return (a.nome||"").localeCompare(b.nome||"");
+    });
+    return todas;
+  }
+  function renderViewPlantas(){
+    var container = document.getElementById("view-plantas");
+    if(!container) return;
+    var lista = plantasOrdenadasPorPavimento();
+
+    var uploadHtml = '<div class="ct-upload-bar" id="planta-upload-bar">'
+      + '<div class="info"><div class="t">Cadastrar planta de forma (PDF) na biblioteca</div>'
+        + '<div class="s">A planta é comprimida automaticamente ao cadastrar, pra ocupar bem menos espaço — depois fica disponível pra escolher em qualquer rastreabilidade, sem precisar reenviar o PDF de novo.</div>'
+        + '<div class="hint" id="planta-upload-msg"></div>'
+      + '</div>'
+      + '<input type="text" id="planta-nova-pavimento" placeholder="Pavimento (ex.: 5º Pavimento Tipo)" style="max-width:220px;">'
+      + '<button class="btn primary" id="planta-btn-cadastrar" type="button">Cadastrar planta…</button>'
+      + '<input type="file" id="planta-file-input" accept="application/pdf" hidden>'
+    + '</div>';
+
+    var resumoHtml = '<div class="pav-resumo-grid">'
+      + '<div class="pav-resumo-card"><div class="n">'+lista.length+'</div><div class="l">Plantas cadastradas</div></div>'
+    + '</div>';
+
+    var listaHtml;
+    if(lista.length===0){
+      listaHtml = '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
+    }else{
+      var porGrupo = [];
+      var grupoAtual = null;
+      lista.forEach(function(p){
+        var titulo = p.pavimento || "Sem pavimento definido";
+        if(!grupoAtual || grupoAtual.titulo!==titulo){
+          grupoAtual = { titulo:titulo, itens:[] };
+          porGrupo.push(grupoAtual);
+        }
+        grupoAtual.itens.push(p);
+      });
+      listaHtml = porGrupo.map(function(g){
+        return '<div class="planta-grupo-titulo">'+escapeHtml(g.titulo)+'</div>'
+          + '<div class="planta-lista">'
+          + g.itens.map(function(p){
+              return '<div class="planta-item">'
+                + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
+                + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
+                + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
+                + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
+              + '</div>';
+            }).join("")
+          + '</div>';
+      }).join("");
+    }
+
+    container.innerHTML =
+      '<div class="pav-header">'
+        + '<button class="btn" id="btn-voltar-plantas">← Voltar</button>'
+        + '<h2>Biblioteca de plantas</h2>'
+        + '<span class="pav-total">'+lista.length+' planta(s)</span>'
+      + '</div>'
+      + '<p class="view-desc">Plantas de forma cadastradas uma única vez aqui, pra escolher (sem reenviar) na ferramenta de mapeamento de concretagem de qualquer rastreabilidade.</p>'
+      + uploadHtml
+      + resumoHtml
+      + listaHtml;
+
+    document.getElementById("btn-voltar-plantas").addEventListener("click", hideViewPlantas);
+    var fileInput = document.getElementById("planta-file-input");
+    var msgEl = document.getElementById("planta-upload-msg");
+    document.getElementById("planta-btn-cadastrar").addEventListener("click", function(){ fileInput.click(); });
+    fileInput.addEventListener("change", async function(e){
+      var f = e.target.files && e.target.files[0];
+      fileInput.value = "";
+      if(!f) return;
+      if(!cloudinaryConfigurado()){
+        if(msgEl) msgEl.textContent = "Envio de plantas ainda não configurado neste sistema (falta ligar a conta do Cloudinary).";
+        return;
+      }
+      var pavInput = document.getElementById("planta-nova-pavimento");
+      var pavimento = pavInput ? pavInput.value : "";
+      if(msgEl) msgEl.textContent = "Comprimindo e enviando "+f.name+"…";
+      try{
+        await bibliotecaAdicionarPlanta(f, pavimento);
+        renderViewPlantas();
+      }catch(ex){
+        console.error(ex);
+        if(msgEl) msgEl.textContent = "Não foi possível cadastrar "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
+      }
+    });
+    container.querySelectorAll("[data-rm-planta]").forEach(function(btn){
+      btn.addEventListener("click", async function(){
+        var id = btn.getAttribute("data-rm-planta");
+        if(!confirm("Remover esta planta da biblioteca? Rastreabilidades que já escolheram ela continuam com a planta normalmente, só não vai mais aparecer pra escolher em fichas novas.")) return;
+        try{ await plantasCol.doc(id).delete(); renderViewPlantas(); }catch(ex){ console.error(ex); alert("Não foi possível remover: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
+      });
+    });
+  }
+
+  /* ---------------- relatório de não conformidades em .docx (Word) ---------------- */
+  // Gera um .docx de verdade (não um .rtf) manipulando o XML do Office Open
+  // XML diretamente via JSZip — a mesma técnica já usada pra exportação em
+  // Excel deste app, só que pro formato do Word. Isso dá um documento com
+  // cara de relatório formal (faixa colorida, tabelas com cabeçalho, cores
+  // de situação), que abre no Word sem nenhum aviso de compatibilidade,
+  // pronto pra ser enviado a uma empreiteira — com exatamente as não
+  // conformidades que batem com os filtros ativos no momento do clique.
+  var DOCX_COR_FAIXA = "1A1A1A";   // --accent-strong (identidade Belavista Consórcio: preto/grafite)
+  var DOCX_COR_ACCENT = "404040";  // --accent
+  var DOCX_COR_RUIM = "AD3A2C";    // --bad
+  var DOCX_COR_BOM = "2E7D46";     // --good
+  var DOCX_COR_CINZA_CLARO = "F2F2F2";
+  var DOCX_COR_BORDA = "BFBFBF";
+  var DOCX_LARGURA_UTIL = 9906; // twips (~ A4 menos margens de 1000 twips de cada lado)
+
+  function docxEscape(s){
+    return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function docxRun(text, opts){
+    opts = opts||{};
+    var rpr = "";
+    if(opts.bold) rpr += "<w:b/>";
+    if(opts.italic) rpr += "<w:i/>";
+    if(opts.color) rpr += '<w:color w:val="'+opts.color+'"/>';
+    if(opts.sz) rpr += '<w:sz w:val="'+opts.sz+'"/><w:szCs w:val="'+opts.sz+'"/>';
+    var rprXml = rpr ? "<w:rPr>"+rpr+"</w:rPr>" : "";
+    var linhas = String(text==null?"":text).split("\n");
+    return linhas.map(function(linha, i){
+      return (i>0 ? "<w:br/>" : "") + "<w:r>"+rprXml+'<w:t xml:space="preserve">'+docxEscape(linha)+"</w:t></w:r>";
+    }).join("");
+  }
+  function docxPar(text, opts){
+    opts = opts||{};
+    var ppr = "";
+    if(opts.align) ppr += '<w:jc w:val="'+opts.align+'"/>';
+    if(opts.shd) ppr += '<w:shd w:val="clear" w:color="auto" w:fill="'+opts.shd+'"/>';
+    ppr += '<w:spacing w:before="'+(opts.spacingBefore||0)+'" w:after="'+(opts.spacingAfter!=null?opts.spacingAfter:120)+'"/>';
+    if(opts.borderBottom) ppr += '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="4" w:color="'+opts.borderBottom+'"/></w:pBdr>';
+    var run = text==="" ? "" : docxRun(text, opts);
+    return "<w:p><w:pPr>"+ppr+"</w:pPr>"+run+"</w:p>";
+  }
+  function docxCell(innerXml, opts){
+    opts = opts||{};
+    var tcpr = '<w:tcW w:w="'+opts.width+'" w:type="dxa"/>';
+    if(opts.shd) tcpr += '<w:shd w:val="clear" w:color="auto" w:fill="'+opts.shd+'"/>';
+    tcpr += '<w:vAlign w:val="'+(opts.vAlign||"center")+'"/>';
+    return "<w:tc><w:tcPr>"+tcpr+"</w:tcPr>"+innerXml+"</w:tc>";
+  }
+  function docxCelTexto(text, width, parOpts, cellOpts){
+    var opts = Object.assign({spacingBefore:30, spacingAfter:30}, parOpts||{});
+    return docxCell(docxPar(text, opts), Object.assign({width:width}, cellOpts||{}));
+  }
+  function docxTable(colWidths, rows){
+    var totalW = colWidths.reduce(function(a,b){ return a+b; }, 0);
+    var grid = colWidths.map(function(w){ return '<w:gridCol w:w="'+w+'"/>'; }).join("");
+    var trs = rows.map(function(cells){ return "<w:tr>"+cells.join("")+"</w:tr>"; }).join("");
+    var borda = ' w:val="single" w:sz="4" w:space="0" w:color="'+DOCX_COR_BORDA+'"/>';
+    return "<w:tbl>"
+      + '<w:tblPr><w:tblW w:w="'+totalW+'" w:type="dxa"/>'
+      + "<w:tblBorders>"
+        + "<w:top"+borda+"<w:left"+borda+"<w:bottom"+borda+"<w:right"+borda
+        + "<w:insideH"+borda+"<w:insideV"+borda
+      + "</w:tblBorders>"
+      + '<w:tblCellMar><w:top w:w="50" w:type="dxa"/><w:left w:w="110" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/><w:right w:w="110" w:type="dxa"/></w:tblCellMar>'
+      + "</w:tblPr>"
+      + "<w:tblGrid>"+grid+"</w:tblGrid>"
+      + trs
+      + "</w:tbl>";
+  }
+  function docxCabecalhoTabela(labels, widths){
+    return labels.map(function(label, i){
+      return docxCelTexto(label, widths[i], {bold:true, color:"FFFFFF", sz:17, align:"center"}, {shd:DOCX_COR_FAIXA});
+    });
+  }
+
+  /* ---------------- fotos/documentos anexados às NCs, embutidos no .docx ----------------
+     Cada foto anexada é redimensionada pelo próprio Cloudinary (sem recorte,
+     preservando a proporção original, sempre convertida pra JPG — não
+     importa o formato original) só pra limitar o tamanho do arquivo: assim
+     o Word sempre recebe um JPG de resolução previsível, mesmo que o anexo
+     original seja HEIC/PNG/WEBP. No relatório a foto entra em tamanho
+     grande — o suficiente pra ser analisada de verdade, não só uma
+     miniatura de referência — numa seção própria "Registro fotográfico"
+     logo depois da tabela de cada pavimento, e continua clicável, abrindo a
+     foto original (em tamanho cheio) no navegador. Documentos que não são
+     foto (PDF, etc.) entram como um link com o nome do arquivo — não dá pra
+     "desenhar" um PDF como imagem. */
+  var DOCX_ANEXO_FOTO_MAX_PX = 1600;
+  var DOCX_ANEXO_FOTO_MAX_CX = 5040000; // ~14cm de largura máxima no documento
+  var DOCX_ANEXO_FOTO_MAX_CY = 6480000; // ~18cm de altura máxima no documento
+  function docxUrlFotoRelatorio(url){
+    // c_limit (sem recorte) com largura E altura máximas: o Cloudinary só
+    // reduz a imagem (nunca aumenta) até caber nesse quadro, preservando a
+    // proporção original — diferente do antigo c_fill, que recortava um
+    // quadrado fixo.
+    var transform = "c_limit,w_"+DOCX_ANEXO_FOTO_MAX_PX+",h_"+DOCX_ANEXO_FOTO_MAX_PX+",q_auto:good,f_jpg";
+    return url.indexOf("/image/upload/")!==-1 ? url.replace("/image/upload/", "/image/upload/"+transform+"/") : url;
+  }
+  async function docxBaixarComoBlob(url){
+    var resp = await fetch(url);
+    if(!resp.ok) throw new Error("HTTP "+resp.status);
+    return await resp.blob();
+  }
+  // Mede a foto já baixada (largura/altura reais em pixels) carregando-a
+  // numa <img> na própria página — assim dá pra calcular o tamanho de
+  // exibição no Word preservando a proporção original (sem esticar/achatar
+  // a imagem). Se por algum motivo não conseguir medir, retorna null e o
+  // chamador usa um tamanho padrão.
+  function docxMedirImagem(blob){
+    return new Promise(function(resolve){
+      try{
+        var url = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function(){
+          var w = img.naturalWidth||0, h = img.naturalHeight||0;
+          URL.revokeObjectURL(url);
+          resolve((w&&h) ? {w:w, h:h} : null);
+        };
+        img.onerror = function(){ URL.revokeObjectURL(url); resolve(null); };
+        img.src = url;
+      }catch(ex){ resolve(null); }
+    });
+  }
+  // Calcula o tamanho de exibição (em EMU) da foto no documento, tipo
+  // "object-fit: contain" dentro de um quadro máximo de
+  // DOCX_ANEXO_FOTO_MAX_CX x DOCX_ANEXO_FOTO_MAX_CY, preservando a proporção
+  // real da imagem.
+  function docxCalcularExtentImagem(pxW, pxH){
+    if(!pxW || !pxH){
+      return { cx: DOCX_ANEXO_FOTO_MAX_CX, cy: Math.round(DOCX_ANEXO_FOTO_MAX_CX*0.75) };
+    }
+    var r = pxW/pxH;
+    var cx = DOCX_ANEXO_FOTO_MAX_CX, cy = Math.round(cx/r);
+    if(cy > DOCX_ANEXO_FOTO_MAX_CY){ cy = DOCX_ANEXO_FOTO_MAX_CY; cx = Math.round(cy*r); }
+    return { cx:cx, cy:cy };
+  }
+  function docxImagemInlineXml(relId, idNum, nomeAlt, hlinkRelId, cx, cy){
+    cx = cx || DOCX_ANEXO_FOTO_MAX_CX;
+    cy = cy || Math.round(DOCX_ANEXO_FOTO_MAX_CX*0.75);
+    var cNvPr = '<pic:cNvPr id="'+idNum+'" name="'+docxEscape(nomeAlt)+'">'
+      + (hlinkRelId ? '<a:hlinkClick xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:id="'+hlinkRelId+'"/>' : '')
+      + '</pic:cNvPr>';
+    return '<w:r><w:drawing>'
+      + '<wp:inline distT="0" distB="0" distL="0" distR="45720" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
+        + '<wp:extent cx="'+cx+'" cy="'+cy+'"/>'
+        + '<wp:docPr id="'+idNum+'" name="'+docxEscape(nomeAlt)+'"/>'
+        + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+          + '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+              + '<pic:nvPicPr>'+cNvPr+'<pic:cNvPicPr/></pic:nvPicPr>'
+              + '<pic:blipFill><a:blip r:embed="'+relId+'"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+              + '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="'+cx+'" cy="'+cy+'"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            + '</pic:pic>'
+          + '</a:graphicData>'
+        + '</a:graphic>'
+      + '</wp:inline>'
+    + '</w:drawing></w:r>';
+  }
+  function docxParImagem(drawingRunXml, opts){
+    opts = opts||{};
+    var ppr = '<w:jc w:val="'+(opts.align||"center")+'"/>'
+      + '<w:spacing w:before="'+(opts.spacingBefore!=null?opts.spacingBefore:60)+'" w:after="'+(opts.spacingAfter!=null?opts.spacingAfter:200)+'"/>';
+    return "<w:p><w:pPr>"+ppr+"</w:pPr>"+drawingRunXml+"</w:p>";
+  }
+  function docxHyperlinkRunXml(relId, texto, opts){
+    opts = opts||{};
+    var rpr = '<w:rPr><w:color w:val="'+DOCX_COR_ACCENT+'"/><w:u w:val="single"/>'+(opts.sz?'<w:sz w:val="'+opts.sz+'"/><w:szCs w:val="'+opts.sz+'"/>':'')+'</w:rPr>';
+    return '<w:hyperlink r:id="'+relId+'"><w:r>'+rpr+'<w:t xml:space="preserve">'+docxEscape(texto)+'</w:t></w:r></w:hyperlink>';
+  }
+  // Baixa (melhor esforço) todas as fotos/documentos anexados às NCs do
+  // relatório atual, preparando as relações (rels) e os arquivos de mídia
+  // que vão dentro do .docx. Uma foto que não pode ser baixada (rede caiu,
+  // link expirou etc.) é simplesmente pulada — não trava o relatório
+  // inteiro por causa de uma foto só.
+  async function docxPrepararAnexosNc(todas){
+    var proximoRelId = 2; // rId1 já é usado pelo relacionamento com styles.xml
+    var proximoDocPrId = 1;
+    var extraRels = [];  // {id, type:"image"|"hyperlink", target}
+    var mediaFiles = []; // {name, buffer}
+    var anexoInfo = new Map(); // chave "fichaId:idx:ai" -> {relIdImagem?, relIdLink?, docPrId?}
+    var tarefas = [];
+
+    todas.forEach(function(item){
+      (item.anexos||[]).forEach(function(a, ai){
+        var chave = item.fichaId+":"+item.idx+":"+ai;
+        if(ncAnexoEhImagem(a)){
+          tarefas.push((async function(){
+            try{
+              var blob = await docxBaixarComoBlob(docxUrlFotoRelatorio(a.url));
+              var dims = await docxMedirImagem(blob);
+              var extent = docxCalcularExtentImagem(dims&&dims.w, dims&&dims.h);
+              var buffer = await blob.arrayBuffer();
+              var relIdImg = "rId"+(proximoRelId++);
+              var relIdLink = "rId"+(proximoRelId++);
+              var nomeArquivo = "image"+mediaFiles.length+".jpg";
+              mediaFiles.push({ name:nomeArquivo, buffer:buffer });
+              extraRels.push({ id:relIdImg, type:"image", target:"media/"+nomeArquivo });
+              extraRels.push({ id:relIdLink, type:"hyperlink", target:a.url });
+              anexoInfo.set(chave, { relIdImagem:relIdImg, relIdLink:relIdLink, docPrId:(proximoDocPrId++), cx:extent.cx, cy:extent.cy });
+            }catch(ex){
+              console.error("relatório NC: não foi possível baixar a foto", a.url, ex);
+            }
+          })());
+        } else {
+          var relIdLink2 = "rId"+(proximoRelId++);
+          extraRels.push({ id:relIdLink2, type:"hyperlink", target:a.url });
+          anexoInfo.set(chave, { relIdLink:relIdLink2 });
+        }
+      });
+    });
+
+    await Promise.all(tarefas);
+    return { extraRels:extraRels, mediaFiles:mediaFiles, anexoInfo:anexoInfo };
+  }
+  // Monta a seção "Registro fotográfico" de um grupo (pavimento): pra cada
+  // item que tem foto/documento anexado, imprime um mini-título (ficha +
+  // descrição da NC) seguido da(s) foto(s) em tamanho grande — o suficiente
+  // pra analisar de verdade os detalhes da não conformidade — e dos links
+  // dos documentos que não são foto. Fica separada da tabela principal
+  // (que continua enxuta, só com o texto) pra dar espaço de verdade às
+  // fotos. Retorna "" se nenhum item do grupo tiver anexo.
+  function docxSecaoRegistroFotografico(itens, anexoInfo){
+    var partes = "";
+    itens.forEach(function(item){
+      var algumAnexo = (item.anexos||[]).some(function(a, ai){ return anexoInfo.get(item.fichaId+":"+item.idx+":"+ai); });
+      if(!algumAnexo) return;
+      var f = item.ficha;
+      partes += docxPar("Ficha "+(f.numero||"s/ nº")+" — "+(item.descricao||"—"),
+        {bold:true, sz:17, color:DOCX_COR_ACCENT, spacingBefore:160, spacingAfter:80, borderBottom:DOCX_COR_BORDA});
+      (item.anexos||[]).forEach(function(a, ai){
+        var info = anexoInfo.get(item.fichaId+":"+item.idx+":"+ai);
+        if(!info) return; // sem info = download falhou (melhor esforço) ou não tinha url
+        if(info.relIdImagem){
+          partes += docxParImagem(docxImagemInlineXml(info.relIdImagem, info.docPrId, a.nome||"foto", info.relIdLink, info.cx, info.cy));
+          partes += docxPar("Clique na imagem para abrir a foto original em tamanho cheio.", {italic:true, color:"7F7F7F", sz:13, align:"center", spacingBefore:0, spacingAfter:180});
+        } else if(info.relIdLink){
+          partes += '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="160"/></w:pPr>'+docxHyperlinkRunXml(info.relIdLink, "📎 "+(a.nome||"documento"), {sz:16})+'</w:p>';
+        }
+      });
+    });
+    if(!partes) return "";
+    return docxPar("Registro fotográfico", {bold:true, color:"FFFFFF", shd:DOCX_COR_ACCENT, sz:19, spacingBefore:60, spacingAfter:80}) + partes;
+  }
+  async function gerarRelatorioNcWord(){
+    try{ await garantirLibs(); }catch(ex){ console.error(ex); }
+    var rel = buildRelatorioNc();
+    var todas = rel.todas;
+    var grupos = rel.grupos.filter(function(g){ return g.itens.length>0; });
+    var abertas = todas.filter(function(i){ return !i.concluida; }).length;
+    var concluidas = todas.length - abertas;
+
+    if(todas.length===0){
+      alert("Nenhuma não conformidade encontrada com os filtros atuais — ajuste os filtros antes de gerar o relatório.");
+      return;
+    }
+
+    // Baixar as fotos anexadas pode levar alguns segundos (depende da
+    // internet e de quantas NCs têm foto) — trava o botão nesse meio tempo
+    // pra não deixar a pessoa achar que travou ou clicar duas vezes.
+    var btnRelatorio = document.getElementById("btn-relatorio-nc");
+    var btnRelatorioTextoOriginal = btnRelatorio ? btnRelatorio.textContent : "";
+    if(btnRelatorio){ btnRelatorio.disabled = true; btnRelatorio.textContent = "Gerando relatório… (baixando fotos)"; }
+    var anexosPreparados;
+    try{
+      anexosPreparados = await docxPrepararAnexosNc(todas);
+    } finally {
+      if(btnRelatorio){ btnRelatorio.disabled = false; btnRelatorio.textContent = btnRelatorioTextoOriginal; }
+    }
+    var extraRelsAnexos = anexosPreparados.extraRels;
+    var mediaFilesAnexos = anexosPreparados.mediaFiles;
+    var anexoInfoMap = anexosPreparados.anexoInfo;
+
+    var agora = new Date();
+    function pad2(n){ return String(n).length<2?"0"+n:String(n); }
+    var geradoEm = pad2(agora.getDate())+"/"+pad2(agora.getMonth()+1)+"/"+agora.getFullYear()+" às "+pad2(agora.getHours())+":"+pad2(agora.getMinutes());
+    var destinatario = (filtrosNc.destinatario||"").trim();
+
+    var body = "";
+
+    // ---- faixa de cabeçalho (letterhead) ----
+    body += docxPar("TRAÇO INTEGRADO", {align:"center", shd:DOCX_COR_FAIXA, color:"FFFFFF", bold:true, sz:40, spacingBefore:120, spacingAfter:20});
+    body += docxPar((DEFAULT_OBRA||"").toUpperCase(), {align:"center", shd:DOCX_COR_FAIXA, color:"FFFFFF", sz:19, spacingBefore:0, spacingAfter:120});
+    body += docxPar("", {spacingAfter:120});
+    body += docxPar("RELATÓRIO DE NÃO CONFORMIDADES", {align:"center", bold:true, color:DOCX_COR_FAIXA, sz:34, spacingAfter:20});
+    body += docxPar("Documento para acompanhamento e notificação de não conformidades de execução", {align:"center", italic:true, color:"595959", sz:17, spacingAfter:220});
+
+    // ---- bloco de identificação do documento ----
+    var infoLinhas = [["Gerado em", geradoEm], ["Elaborado por", currentUserEmail||"—"]];
+    if(destinatario) infoLinhas.push(["Empreiteira / Destinatário", destinatario]);
+    infoLinhas.push(["Filtros aplicados", descricaoFiltrosNc()]);
+    body += docxTable([2200, DOCX_LARGURA_UTIL-2200], infoLinhas.map(function(par){
+      return [
+        docxCelTexto(par[0], 2200, {bold:true, sz:17}, {shd:DOCX_COR_CINZA_CLARO, vAlign:"top"}),
+        docxCelTexto(par[1], DOCX_LARGURA_UTIL-2200, {sz:17}, {vAlign:"top"})
+      ];
+    }));
+    body += docxPar("", {spacingAfter:160});
+
+    // ---- resumo (total / em aberto / concluídas) ----
+    var wResumo = Math.floor(DOCX_LARGURA_UTIL/3);
+    body += docxTable([wResumo, wResumo, DOCX_LARGURA_UTIL-2*wResumo], [
+      docxCabecalhoTabela(["TOTAL NO RELATÓRIO","EM ABERTO","CONCLUÍDAS"], [wResumo, wResumo, DOCX_LARGURA_UTIL-2*wResumo]),
+      [
+        docxCelTexto(String(todas.length), wResumo, {align:"center", bold:true, sz:36, color:DOCX_COR_FAIXA, spacingBefore:80, spacingAfter:80}),
+        docxCelTexto(String(abertas), wResumo, {align:"center", bold:true, sz:36, color:DOCX_COR_RUIM, spacingBefore:80, spacingAfter:80}),
+        docxCelTexto(String(concluidas), DOCX_LARGURA_UTIL-2*wResumo, {align:"center", bold:true, sz:36, color:DOCX_COR_BOM, spacingBefore:80, spacingAfter:80})
+      ]
+    ]);
+    body += docxPar("", {spacingAfter:220});
+
+    // ---- detalhe por pavimento ----
+    var wCols = [1500, 3006, 3006, 1100, 1294]; // Ficha / Descrição / Correção / Situação / Dias-Data
+    grupos.forEach(function(g, gi){
+      var abertasG = g.itens.filter(function(i){ return !i.concluida; }).length;
+      var concluidasG = g.itens.length - abertasG;
+      body += docxPar(g.label.toUpperCase()+"   ·   "+g.itens.length+" NC(s)   ·   "+abertasG+" em aberto   ·   "+concluidasG+" concluída(s)",
+        {bold:true, color:"FFFFFF", shd:DOCX_COR_ACCENT, sz:19, spacingBefore:gi>0?160:0, spacingAfter:80});
+
+      var linhasTabela = [docxCabecalhoTabela(["Ficha","Descrição da NC","Correção proposta","Situação","Dias / Conclusão"], wCols)];
+      g.itens.forEach(function(item){
+        var f = item.ficha;
+        var fichaTxt = (f.descricao||f.codigo||"FVS")+"\nNº "+(f.numero||"s/ nº");
+        var sitTxt = item.concluida ? "Concluída" : "Em aberto";
+        var sitCor = item.concluida ? DOCX_COR_BOM : DOCX_COR_RUIM;
+        var diasTxt = item.concluida
+          ? "Concluída em\n"+(item.dataConclusao?fmtDateBR(item.dataConclusao):"—")
+          : (item.diasAberto!=null ? item.diasAberto+" dia(s)\nem aberto" : "—");
+        linhasTabela.push([
+          docxCelTexto(fichaTxt, wCols[0], {sz:16, bold:true}),
+          docxCelTexto(item.descricao||"—", wCols[1], {sz:16}),
+          docxCelTexto(item.correcao||"—", wCols[2], {sz:16}),
+          docxCelTexto(sitTxt, wCols[3], {sz:16, bold:true, color:sitCor, align:"center"}),
+          docxCelTexto(diasTxt, wCols[4], {sz:15, align:"center"})
+        ]);
+      });
+      body += docxTable(wCols, linhasTabela);
+      body += docxSecaoRegistroFotografico(g.itens, anexoInfoMap);
+    });
+
+    // ---- encerramento / recebimento ----
+    body += docxPar("", {spacingAfter:260});
+    body += docxPar("Recebimento", {bold:true, color:DOCX_COR_FAIXA, sz:22, spacingAfter:140, borderBottom:DOCX_COR_BORDA});
+    body += docxPar("Empreiteira / responsável: "+(destinatario||"______________________________________________"), {sz:17, spacingAfter:200});
+    body += docxPar("Assinatura: ___________________________________________________     Data: ____ / ____ / ______", {sz:17, spacingAfter:160});
+    body += docxPar("Documento gerado automaticamente pelo sistema Traço Integrado, a partir dos registros de campo cadastrados nas fichas FVS.", {italic:true, color:"7F7F7F", sz:14, spacingAfter:0});
+
+    var documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+      + "<w:body>"
+      + body
+      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="1000" w:bottom="900" w:left="1000" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+      + "</w:body></w:document>";
+
+    var contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + (mediaFilesAnexos.length ? '<Default Extension="jpg" ContentType="image/jpeg"/>' : '')
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+      + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+      + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+      + "</Types>";
+
+    var rootRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+      + '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+      + "</Relationships>";
+
+    var docRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+      + extraRelsAnexos.map(function(r){
+          if(r.type==="image"){
+            return '<Relationship Id="'+r.id+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="'+docxEscape(r.target)+'"/>';
+          }
+          return '<Relationship Id="'+r.id+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="'+docxEscape(r.target)+'" TargetMode="External"/>';
+        }).join("")
+      + "</Relationships>";
+
+    var stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="20"/><w:lang w:val="pt-BR"/></w:rPr></w:rPrDefault></w:docDefaults>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
+      + "</w:styles>";
+
+    var coreXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+      + "<dc:title>Relatório de Não Conformidades</dc:title>"
+      + "<dc:creator>Traço Integrado</dc:creator>"
+      + "</cp:coreProperties>";
+
+    var appXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Traço Integrado</Application></Properties>';
+
+    var zip = new JSZip();
+    zip.file("[Content_Types].xml", contentTypesXml);
+    zip.folder("_rels").file(".rels", rootRelsXml);
+    zip.folder("word").file("document.xml", documentXml);
+    zip.folder("word").file("styles.xml", stylesXml);
+    zip.folder("word/_rels").file("document.xml.rels", docRelsXml);
+    zip.folder("docProps").file("core.xml", coreXml);
+    zip.folder("docProps").file("app.xml", appXml);
+    if(mediaFilesAnexos.length){
+      var pastaMedia = zip.folder("word/media");
+      mediaFilesAnexos.forEach(function(m){ pastaMedia.file(m.name, m.buffer); });
+    }
+
+    zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}).then(function(blob){
+      triggerDownload(blob, "Relatorio_NaoConformidades_"+todayISO()+".docx");
+    });
+  }
+
+  /* ---------------- auth + db bootstrap ---------------- */
+  // Selo do topo reflete a conexão real do aparelho (antes ficava sempre
+  // "sincronizado" depois do login, mesmo sem sinal).
+  function atualizarIndicadorConexao(){
+    if(navigator.onLine===false) setSync("off","sem conexão");
+    else setSync("on","sincronizado");
+  }
+  window.addEventListener("online", atualizarIndicadorConexao);
+  window.addEventListener("offline", atualizarIndicadorConexao);
+  function setSync(state,text){
+    var el=document.getElementById("sync-indicator");
+    el.className="sync "+state;
+    document.getElementById("sync-text").textContent=text;
+  }
+  function authErrorMessage(code){
+    var map={
+      "auth/invalid-email":"E-mail inválido.",
+      "auth/user-disabled":"Este usuário foi desativado.",
+      "auth/user-not-found":"E-mail ou senha incorretos.",
+      "auth/wrong-password":"E-mail ou senha incorretos.",
+      "auth/invalid-credential":"E-mail ou senha incorretos.",
+      "auth/missing-password":"Digite sua senha.",
+      "auth/too-many-requests":"Muitas tentativas. Aguarde alguns minutos e tente novamente.",
+      "auth/network-request-failed":"Falha de conexão. Verifique sua internet e tente novamente."
+    };
+    return map[code] || "Não foi possível entrar. Verifique os dados e tente novamente.";
+  }
+  function subscribeCollections(){
+    if(unsubFvs) unsubFvs();
+    if(unsubRast) unsubRast();
+    if(unsubCt) unsubCt();
+    // Sem orderBy/limit: o Firestore esconde de uma consulta com orderBy os
+    // documentos que não têm o campo ordenado, e o limit(500) cortava os mais
+    // antigos sem aviso. A ordenação já é feita na tela (buildRows).
+    unsubFvs = fvsCol.onSnapshot(function(snap){
+      fvsMap = new Map();
+      snap.docs.forEach(function(d){ fvsMap.set(d.id, d.data()); });
+      render();
+    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    unsubRast = rastCol.onSnapshot(function(snap){
+      rastMap = new Map();
+      snap.docs.forEach(function(d){ rastMap.set(d.id, d.data()); });
+      render();
+    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    unsubCt = ctCol.onSnapshot(function(snap){
+      ctMap = new Map();
+      snap.docs.forEach(function(d){ ctMap.set(d.id, d.data()); });
+      render();
+    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    if(unsubPlantas) unsubPlantas();
+    unsubPlantas = plantasCol.onSnapshot(function(snap){
+      plantasMap = new Map();
+      snap.docs.forEach(function(d){ plantasMap.set(d.id, d.data()); });
+      render();
+    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+  }
+  function showApp(user){
+    document.getElementById("auth-screen").hidden = true;
+    document.getElementById("app-root").hidden = false;
+    document.getElementById("user-name").textContent = user.displayName || user.email || "";
+    currentUserEmail = user.email || "";
+    atualizarIndicadorConexao();
+    subscribeCollections();
+    render();
+    // Dá tempo das fichas chegarem do servidor antes de oferecer o rascunho.
+    setTimeout(oferecerRascunhoPendente, 2500);
+  }
+  function showAuth(){
+    document.getElementById("app-root").hidden = true;
+    document.getElementById("auth-screen").hidden = false;
+    if(unsubFvs){ unsubFvs(); unsubFvs=null; }
+    if(unsubRast){ unsubRast(); unsubRast=null; }
+    if(unsubCt){ unsubCt(); unsubCt=null; }
+    fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
+    currentUserEmail="";
+  }
+  function boot(){
+    try{
+      var lastEmail = localStorage.getItem("traco-integrado-last-email");
+      if(lastEmail) document.getElementById("login-email").value = lastEmail;
+    }catch(e){}
+    auth.onAuthStateChanged(function(user){
+      if(user) showApp(user); else showAuth();
+    });
+  }
+
+  /* ---------------- modal: FVS ---------------- */
+  function blankFvs(tipoKey){
+    var tipo = tipoKey ? getFvsTipo(tipoKey) : null;
+    return {
+      tipo: tipoKey || "fvs04", unidades: [],
+      numero:"", codigo:(tipo?tipo.codigo:"FVS 04"), descricao:(tipo?tipo.titulo:"Forma, Desforma, Armação e Concretagem"),
+      obra:DEFAULT_OBRA, local:"", pavimentos:[], dataAbertura:todayISO(), dataConcretagem:todayISO(), dataFechamento:"",
+      inspecionadoPor:"", engenheiro:"", elementos:{}, checklist:{}, naoConformidades:[],
+      observacoes:"", fechado:false, rastreabilidadeId:null, createdAt:nowISO(), updatedAt:nowISO()
+    };
+  }
+  function blankRast(){
+    return {
+      numero:"", obra:DEFAULT_OBRA, blocoPav:"", pavimentos:[], data:todayISO(), projetoReferencia:"",
+      slumpAprovado:"", fckSolicitado:"", linhas:[ blankLinha(1) ], acoesCorretivas:"",
+      responsavelColeta:"", engenheiro:"", fechado:false, dataFechamento:"", fvsId:null,
+      mapeamento: blankMapeamento(),
+      createdAt:nowISO(), updatedAt:nowISO()
+    };
+  }
+  // Mapeamento de concretagem: a planta de forma (PDF) anexada a esta
+  // rastreabilidade, mais as áreas demarcadas nela (cada uma ligada a uma
+  // sequência/BT das "Betonadas" acima) — ver mapeamentoFieldHtml().
+  function blankMapeamento(){
+    return { plantaUrl:"", plantaNome:"", pagina:1, tipo:"pdf", areas:[] };
+  }
+  // Paleta de cores fixa pra distinguir visualmente cada sequência (BT)
+  // demarcada na planta — cicla se houver mais sequências do que cores.
+  var MAPA_CORES = ["#2E5AAC","#2E7D46","#AD3A2C","#B8860B","#6A3FA0","#0E7C86","#C2410C","#767A00","#9C2F6B","#3D5A80"];
+  function mapaCorSequencia(seq){
+    var n = parseInt(seq,10); if(isNaN(n) || n<1) n=1;
+    return MAPA_CORES[(n-1) % MAPA_CORES.length];
+  }
+  // Envia um arquivo (PDF anexado manualmente, ou o blob de imagem já
+  // comprimido de uma planta da biblioteca) direto pro Cloudinary, igual ao
+  // envio de anexos de não conformidade — mesma conta, mesmo preset (ver
+  // comentário de CLOUDINARY_CLOUD_NAME no topo do arquivo).
+  async function uploadParaCloudinary(arquivoOuBlob, nomeArquivo){
+    var fd = new FormData();
+    fd.append("file", arquivoOuBlob, nomeArquivo);
+    fd.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    var endpoint = "https://api.cloudinary.com/v1_1/"+encodeURIComponent(CLOUDINARY_CLOUD_NAME)+"/auto/upload";
+    var resp = await fetch(endpoint, { method:"POST", body:fd });
+    var data = null;
+    try{ data = await resp.json(); }catch(ex){}
+    if(!resp.ok || !data || !data.secure_url){
+      var msg = (data && data.error && data.error.message) ? data.error.message : ("erro HTTP "+resp.status);
+      throw new Error(msg);
+    }
+    return data.secure_url;
+  }
+  // Anexo manual de planta (PDF) só pra esta rastreabilidade — usado quando o
+  // usuário escolhe "Anexar PDF só pra esta ficha" em vez de escolher uma
+  // planta já cadastrada na biblioteca (ver mapeamentoFieldHtml). Guarda o
+  // PDF original, sem comprimir — como não é reaproveitado em outras
+  // fichas, não pesa tanto na cota quanto duplicar a mesma planta repetida.
+  async function rastUploadPlanta(file){
+    var url = await uploadParaCloudinary(file, file.name||"planta.pdf");
+    return { url: url, nome: file.name||"planta.pdf" };
+  }
+  // Renderiza a página 1 do PDF (via pdf.js) num canvas e devolve esse
+  // desenho como um JPEG — usado só ao CADASTRAR uma planta na biblioteca
+  // (ver bibliotecaAdicionarPlanta). Como essa mesma planta é reaproveitada
+  // por várias rastreabilidades (em vez de reenviar o PDF de novo em cada
+  // uma), vale a pena comprimir aqui: o PDF vetorial original de obra costuma
+  // pesar 2-5MB, e essa versão rasterizada fica bem mais leve, mas ainda
+  // nítida o bastante pro zoom de até 400% da ferramenta de mapeamento.
+  async function comprimirPlantaEmImagem(file){
+    try{ await garantirPdf(); }catch(ex){ console.error(ex); }
+    if(!window.pdfjsLib) throw new Error("a biblioteca pdf.js não carregou (verifique a internet)");
+    var arrayBuffer = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({ data:arrayBuffer }).promise;
+    var page = await pdf.getPage(1);
+    var viewportBase = page.getViewport({ scale:1 });
+    var alvoPx = 2400; // largura-alvo (px): nítido até 400% de zoom, sem ficar tão pesado quanto o PDF vetorial original
+    var escala = Math.min(4, alvoPx/viewportBase.width);
+    var viewport = page.getViewport({ scale:escala });
+    var canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,canvas.width,canvas.height); // fundo branco (o PDF pode ter fundo transparente)
+    await page.render({ canvasContext:ctx, viewport:viewport }).promise;
+    var blob = await new Promise(function(resolve){ canvas.toBlob(resolve, "image/jpeg", 0.82); });
+    if(!blob) throw new Error("não foi possível gerar a versão comprimida da planta");
+    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height };
+  }
+  // Cadastra uma planta na biblioteca: comprime (ver comprimirPlantaEmImagem
+  // acima), envia a imagem já leve pro Cloudinary e grava o registro em
+  // /plantas — a partir daí ela aparece pra escolher em qualquer
+  // rastreabilidade (ver mapeamentoFieldHtml / mapaPlantasOrdenadas).
+  async function bibliotecaAdicionarPlanta(file, pavimento){
+    var comp = await comprimirPlantaEmImagem(file);
+    var nomeBase = (file.name||"planta").replace(/\.pdf$/i, "");
+    var url = await uploadParaCloudinary(comp.blob, nomeBase+".jpg");
+    await plantasCol.add({
+      nome: nomeBase,
+      pavimento: (pavimento||"").trim(),
+      url: url,
+      tipo: "imagem",
+      larguraPx: comp.larguraPx,
+      alturaPx: comp.alturaPx,
+      criadoEm: nowISO(),
+      criadoPor: currentUserEmail
+    });
+  }
+  // Ordena as plantas da biblioteca pra exibição num <select>: as que batem
+  // com o(s) pavimento(s) já marcados nesta ficha (chips de pavimentos, ver
+  // pavimentosFieldHtml) aparecem primeiro, o resto continua disponível
+  // embaixo — nunca escondido, só priorizado, já que o reconhecimento do
+  // pavimento (pavimentoRank) é por texto livre e pode não bater sempre.
+  function mapaPlantasOrdenadas(pavimentosRecord){
+    var ranksRecord = (pavimentosRecord||[]).map(pavimentoRank);
+    var todas = [];
+    plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
+    todas.forEach(function(p){
+      p._rank = pavimentoRank(p.pavimento);
+      p._match = p._rank!==9999 && ranksRecord.indexOf(p._rank)!==-1;
+    });
+    todas.sort(function(a,b){
+      if(a._match !== b._match) return a._match ? -1 : 1;
+      if(a._rank !== b._rank) return a._rank - b._rank;
+      return (a.nome||"").localeCompare(b.nome||"");
+    });
+    return todas;
+  }
+  function blankLinha(seq){
+    return { seq:seq, notaFiscal:"", betoneira:"", lacre:"", volBetoneira:"", volAcumulado:"",
+      fornecedor:"", nSerieCP:"", nCPs:"", slump:"", saidaUsina:"", chegadaObra:"", lancInicial:"",
+      lancFinal:"", aguaFolga:"", aguaLanc:"", pecas:"" };
+  }
+
+  // Bloco de "chips" de pavimentos, reutilizado tanto na ficha FVS quanto na
+  // rastreabilidade — permite marcar que uma mesma ficha vale para mais de um
+  // pavimento (ex.: verificação abrangendo dois andares), sem mexer no campo
+  // "Local / elemento" ou "Bloco / Pavimento" já existente (que continua
+  // funcionando normalmente para fichas antigas, ver fallback em buildRows()).
+  function pavimentosFieldHtml(d){
+    var pavs = d.pavimentos || [];
+    return '<div class="unidades-row">'
+      + pavs.map(function(p, pi){
+          return '<span class="unidade-chip">'+escapeHtml(p)+'<button type="button" data-rm-pavimento="'+pi+'" title="Remover">✕</button></span>';
+        }).join("")
+      + '</div>'
+      + '<div class="unidade-add"><input type="text" id="nova-pavimento" placeholder="ex.: 5º Pavimento Tipo"><button type="button" class="btn" id="add-pavimento">+ Adicionar pavimento</button></div>'
+      + '<div class="hint" style="margin-top:6px;">Opcional: adicione um pavimento para cada andar que esta ficha também cobre. Todos aparecem no filtro de pavimentos do painel.</div>';
+  }
+
+  /* ---------------- proteção do rascunho (v1.1) ----------------
+     Tudo o que é digitado numa ficha fica guardado também no próprio
+     aparelho (localStorage) até o servidor confirmar o salvamento. Assim,
+     fechar a ficha sem querer, o app travar ou o sinal cair no subsolo não
+     apaga o que foi preenchido: ao reabrir, o sistema oferece recuperar. */
+  var RASCUNHO_KEY = "traco-integrado-rascunho";
+  var salvando = false;
+  var ignorarPop = false;
+  var MSG_SAIR_SEM_SALVAR = "Há alterações não salvas nesta ficha. Sair mesmo assim?\n\n"
+    + "(Elas continuam guardadas neste aparelho e podem ser recuperadas ao abrir a ficha de novo.)";
+  function rascunhoChave(type, id){ return type+":"+(id||"novo"); }
+  function lerRascunho(){
+    try{ return JSON.parse(localStorage.getItem(RASCUNHO_KEY)||"null"); }catch(ex){ return null; }
+  }
+  function guardarRascunho(){
+    if(!draft || !draft.chave) return;
+    try{
+      localStorage.setItem(RASCUNHO_KEY, JSON.stringify({
+        chave: draft.chave, type: draft.type, id: draft.id, data: draft.data, em: nowISO()
+      }));
+    }catch(ex){}
+  }
+  function limparRascunho(chave){
+    var r = lerRascunho();
+    if(r && (!chave || r.chave===chave)){ try{ localStorage.removeItem(RASCUNHO_KEY); }catch(ex){} }
+  }
+  function draftAlterado(){
+    return !!draft && typeof draft.orig==="string" && JSON.stringify(draft.data)!==draft.orig;
+  }
+  // Fechar pedido pelo usuário (✕, toque fora, Esc, botão Voltar do celular):
+  // pergunta antes de sair se houver algo não salvo.
+  function tentarFecharModal(){
+    if(salvando) return false;
+    if(draftAlterado() && !confirm(MSG_SAIR_SEM_SALVAR)) return false;
+    closeModal();
+    return true;
+  }
+  // Botão "Voltar" do Android / gesto de voltar do iPhone: com a ficha aberta,
+  // fecha a ficha em vez de sair do app.
+  function marcarHistoricoModal(){
+    try{ if(!(history.state && history.state.tiModal)) history.pushState({tiModal:1}, ""); }catch(ex){}
+  }
+  window.addEventListener("popstate", function(){
+    var aberto = !document.getElementById("overlay").hidden;
+    if(ignorarPop){ ignorarPop=false; if(aberto) marcarHistoricoModal(); return; }
+    if(!aberto) return;
+    if(salvando || (draftAlterado() && !confirm(MSG_SAIR_SEM_SALVAR))){
+      try{ history.pushState({tiModal:1}, ""); }catch(ex){}
+      return;
+    }
+    closeModal(true);
+  });
+  // Ao entrar no sistema: se ficou alguma ficha não salva neste aparelho
+  // (app fechado, bateria acabou, sem sinal), oferece reabrir.
+  function oferecerRascunhoPendente(){
+    var r = lerRascunho();
+    if(!r || !r.data || !document.getElementById("overlay").hidden) return;
+    var nome = r.type==="fvs"
+      ? "a ficha FVS "+(r.data.numero||"(sem número)")
+      : "a rastreabilidade "+(r.data.numero||"(sem número)");
+    if(confirm("Este aparelho tem alterações não salvas n"+nome+" (de "+fmtDateTimeBR(r.em)+").\n\nAbrir agora para revisar e salvar?")){
+      openModal(r.type, r.id, r.data.tipo, {restaurar:true});
+    }
+  }
+
+  function openModal(type, id, tipoKey, opts){
+    opts = opts || {};
+    ncAnexoErro = {};
+    var data;
+    var base = id ? (type==="fvs" ? fvsMap.get(id) : rastMap.get(id)) : null;
+    var rasc = lerRascunho();
+    var chave = rascunhoChave(type, id);
+    if(opts.restaurar && rasc && rasc.type===type && (rasc.id||null)===(id||null)) chave = rasc.chave;
+    if(base) data = JSON.parse(JSON.stringify(base));
+    else if(opts.restaurar && rasc && rasc.data) data = JSON.parse(JSON.stringify(rasc.data));
+    else data = type==="fvs" ? blankFvs(tipoKey) : blankRast();
+    if(!data.checklist) data.checklist={};
+    if(!data.elementos) data.elementos={};
+    if(!data.linhas) data.linhas=[blankLinha(1)];
+    if(type==="rast" && !data.mapeamento) data.mapeamento=blankMapeamento();
+    if(type==="fvs" && !data.tipo) data.tipo="fvs04"; // fichas antigas, de antes dos novos tipos
+    if(type==="fvs" && !data.unidades) data.unidades=[];
+    // Fichas de FVS antigas (antes da lista de não conformidades) chegam aqui
+    // sem "naoConformidades" — converte já na abertura, a partir do bloco
+    // único legado, para o formato de lista novo. Se a ficha for salva assim
+    // (mesmo sem editar nada na NC), ela passa a usar o formato novo pra
+    // sempre, sem perder a não conformidade que já estava registrada.
+    if(type==="fvs" && !Array.isArray(data.naoConformidades)) data.naoConformidades = fichaNaoConformidades(data);
+    if(!data.pavimentos) data.pavimentos=[]; // fichas antigas, de antes do multi-pavimento — fallback usa local/blocoPav
+    draft = { type:type, id:id||null, data:data, orig:JSON.stringify(data), chave:chave };
+    // Ficha que só existe no rascunho (nunca chegou ao servidor): conta como
+    // alterada, para pedir confirmação antes de fechar sem salvar.
+    if(opts.restaurar && !base) draft.orig = "{}";
+    // Rascunho guardado neste aparelho para esta mesma ficha, diferente do
+    // que está no servidor: oferece recuperar (ou aplica direto, se veio de
+    // oferecerRascunhoPendente).
+    if(rasc && rasc.chave===chave && rasc.type===type && rasc.data){
+      var rascJson = JSON.stringify(rasc.data);
+      if(rascJson!==draft.orig){
+        if(opts.restaurar || confirm("Este aparelho tem alterações desta ficha que não foram salvas (de "+fmtDateTimeBR(rasc.em)+").\n\nRecuperar essas alterações?")){
+          draft.data = JSON.parse(rascJson);
+        } else {
+          limparRascunho(chave);
+        }
+      }
+    }
+    document.getElementById("overlay").hidden=false;
+    document.body.style.overflow="hidden";
+    marcarHistoricoModal();
+    renderModal();
+  }
+  // Tela de escolha do tipo de FVS, mostrada antes de abrir uma ficha nova (não
+  // aparece ao editar uma já existente — aí o tipo já está definido). Reaproveita
+  // o mesmo overlay/modal da edição, só que com um conteúdo próprio.
+  function openTipoChooser(onChoose){
+    // onChoose(tipoKey) é opcional: quando informado, é chamado em vez de abrir
+    // direto um rascunho novo — usado por generateLinked() para criar a FVS já
+    // vinculada a uma rastreabilidade existente, mas ainda perguntando o tipo.
+    var m=document.getElementById("modal");
+    var opcoes = [{key:"fvs04", codigo:"FVS 04", titulo:"Forma, Desforma, Armação e Concretagem"}]
+      .concat(FVS_TIPOS.map(function(t){ return {key:t.key, codigo:t.codigo, titulo:t.titulo}; }));
+    m.innerHTML = ''
+      + '<div class="modal-head"><h2>Qual o tipo de FVS?</h2><button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-body">'
+      + '<div class="tipo-grid">'
+      + opcoes.map(function(o){
+          return '<button type="button" class="tipo-card" data-tipo-choice="'+o.key+'">'
+            + '<span class="tipo-codigo">'+escapeHtml(o.codigo)+'</span>'
+            + '<span class="tipo-titulo">'+escapeHtml(o.titulo)+'</span>'
+            + '</button>';
+        }).join("")
+      + '</div></div>';
+    m.querySelector("#modal-close").addEventListener("click", tentarFecharModal);
+    m.querySelectorAll("[data-tipo-choice]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var tipoKey = btn.getAttribute("data-tipo-choice");
+        if(onChoose) onChoose(tipoKey);
+        else openModal("fvs", null, tipoKey);
+      });
+    });
+    document.getElementById("overlay").hidden=false;
+    document.body.style.overflow="hidden";
+    marcarHistoricoModal();
+  }
+  // fromPop=true quando o fechamento veio do botão Voltar (o histórico já voltou).
+  function closeModal(fromPop){
+    draft=null;
+    mapaEstado=null;
+    document.getElementById("overlay").hidden=true;
+    document.body.style.overflow="";
+    // "!ignorarPop": se já há um "voltar" a caminho (fechou e reabriu rápido),
+    // não pede outro — dois seguidos saíam do app (corrigido na v1.2).
+    if(fromPop!==true && !ignorarPop){
+      try{ if(history.state && history.state.tiModal){ ignorarPop=true; history.back(); } }catch(ex){}
+    }
+  }
+
+  function renderModal(){
+    var m=document.getElementById("modal");
+    m.innerHTML = draft.type==="fvs" ? fvsModalHtml(draft.data, draft.id) : rastModalHtml(draft.data, draft.id);
+    wireModalEvents();
+    if(draftAlterado()) guardarRascunho();
+  }
+
+  function statusBadgeFvs(d){ return pill(fvsStatus(d)); }
+  function statusBadgeRast(d){ return pill(rastStatus(d)); }
+
+  // Mesma legenda impressa no rodapé do checklist da planilha oficial —
+  // mostrada em toda ficha FVS (qualquer tipo) para quem estiver preenchendo
+  // saber o que cada sigla dos botões (NA/P/X/V) significa.
+  var LEGENDA_FVS_HTML = '<div class="legenda-fvs">'
+    + '<span class="legenda-item"><span class="legenda-badge badge-na">NA</span>Não aplicável</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-p sym-wingdings">P</span>Aprovado</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-x">X</span>Reprovado</span>'
+    + '<span class="legenda-item"><span class="legenda-badge badge-v sym-wingdings">V</span>Reinspecionado e aprovado</span>'
+    + '</div>';
+
+  // Botão de um item do checklist marcado para um grupo específico (elemento
+  // estrutural, unidade dinâmica como "Estaca 3", ou "_unico" quando a ficha
+  // não distingue grupos). "P" e "V" usam a fonte Wingdings 2 (mesma da
+  // legenda impressa no modelo oficial) para virar símbolo; em computadores
+  // sem essa fonte instalada, o navegador simplesmente volta a mostrar a
+  // letra normal.
+  function segBtn(key, grupoKey, val, label, v){
+    var symClass = (val==="P"||val==="V") ? " sym-wingdings" : "";
+    return '<button type="button" class="'+symClass.trim()+'" data-check="'+key+'" data-elemento="'+grupoKey+'" data-v="'+val+'" aria-pressed="'+(v===val)+'">'+label+'</button>';
+  }
+
+  function anyChecklistReprovado(checklist){
+    return Object.keys(checklist||{}).some(function(k){
+      var porGrupo = checklist[k] || {};
+      return Object.keys(porGrupo).some(function(gk){ return porGrupo[gk]==="X"; });
+    });
+  }
+
+  function fvsModalHtml(d, id){
+    var linked = d.rastreabilidadeId ? rastMap.get(d.rastreabilidadeId) : null;
+    var unlinkedRast=[];
+    rastMap.forEach(function(r,rid){ if(!r.fvsId) unlinkedRast.push({id:rid,r:r}); });
+
+    var tipoInfo = (d.tipo && d.tipo!=="fvs04") ? getFvsTipo(d.tipo) : null;
+    var legendaHtml = LEGENDA_FVS_HTML;
+    var elementosHtml = "";
+    var checklistHtml = "";
+    var anyReprovado = false;
+
+    if(!tipoInfo){
+      // ---------------- FVS 04 — Forma, Desforma, Armação e Concretagem ----------------
+      // Cada elemento estrutural marcado abaixo ganha seu próprio conjunto de
+      // respostas do checklist (NA/Aprovado/Reprovado/Reinspecionado por item) —
+      // reflete as colunas Pilares/Vigas/Paredes/Laje/Outras Estruturas do modelo
+      // oficial, onde o mesmo item pode ter resultado diferente em cada uma.
+      var elementosAtivos = FVS_ELEMENTOS.filter(function(el){ return !!d.elementos[el.key]; });
+
+      elementosHtml = '<fieldset><legend>Elementos estruturais avaliados nesta ficha</legend><div class="elementos-grid">'+FVS_ELEMENTOS.map(function(el){
+        var checked = !!d.elementos[el.key];
+        return '<label class="elemento-chip'+(checked?" active":"")+'"><input type="checkbox" data-elemento="'+el.key+'" '+(checked?"checked":"")+'> '+escapeHtml(el.label)+'</label>';
+      }).join("")+'</div></fieldset>';
+
+      if(elementosAtivos.length===0){
+        checklistHtml = '<div class="hint">Selecione ao menos um elemento estrutural acima (Pilares, Vigas, Paredes, Laje ou Outras Estruturas) para avaliar o checklist. Se mais de um elemento foi concretado nesta ficha, cada um é avaliado separadamente — o resultado de um item pode ser diferente para a laje e para os pilares, por exemplo.</div>';
+      } else {
+        checklistHtml = FVS_CHECKLIST.map(function(cat, ci){
+          var itemsHtml = cat.itens.map(function(it, ii){
+            var key=ci+"-"+ii;
+            var porElemento = d.checklist[key] || {};
+            var rowsHtml = elementosAtivos.map(function(el){
+              var v = porElemento[el.key] || "";
+              return '<div class="item-row-elemento"><div class="elemento-tag">'+escapeHtml(el.label)+'</div>'
+                + '<div class="seg">'+segBtn(key,el.key,"NA","NA",v)+segBtn(key,el.key,"P","P",v)+segBtn(key,el.key,"X","X",v)+segBtn(key,el.key,"V","V",v)+'</div></div>';
+            }).join("");
+            return '<div class="item-row multi"><div class="item-info"><div class="name">'+escapeHtml(it.n)+'</div><div class="method">'+escapeHtml(it.m)+'</div></div>'
+              + '<div class="item-elementos">'+rowsHtml+'</div></div>';
+          }).join("");
+          return '<div class="cat-block"><div class="cat-title">'+escapeHtml(cat.cat)+'</div>'+itemsHtml+'</div>';
+        }).join("");
+      }
+      anyReprovado = anyChecklistReprovado(d.checklist);
+
+    } else if(tipoInfo.unidades.mode==="single"){
+      // ---------------- tipo de unidade única (ex.: Locação da Obra) ----------------
+      // Não há elementos/unidades a distinguir: um único marcador por item.
+      checklistHtml = tipoInfo.checklist.map(function(cat, ci){
+        var itemsHtml = cat.itens.map(function(it, ii){
+          var key=ci+"-"+ii;
+          var porGrupo = d.checklist[key] || {};
+          var v = porGrupo["_unico"] || "";
+          return '<div class="item-row"><div class="item-info"><div class="name">'+escapeHtml(it.n)+'</div><div class="method">'+escapeHtml(it.m)+(it.tol?' · Tolerância: '+escapeHtml(it.tol):'')+'</div></div>'
+            + '<div class="item-row-single seg">'+segBtn(key,"_unico","NA","NA",v)+segBtn(key,"_unico","P","P",v)+segBtn(key,"_unico","X","X",v)+segBtn(key,"_unico","V","V",v)+'</div></div>';
+        }).join("");
+        return '<div class="cat-block">'+(cat.cat?'<div class="cat-title">'+escapeHtml(cat.cat)+'</div>':'')+itemsHtml+'</div>';
+      }).join("");
+      anyReprovado = anyChecklistReprovado(d.checklist);
+
+    } else {
+      // ---------------- tipo de unidades dinâmicas (estacas, sapatas, blocos, trechos...) ----------------
+      var unidades = d.unidades || [];
+      var prefixo = tipoInfo.unidades.prefix || "Unidade";
+
+      elementosHtml = '<fieldset><legend>Unidades avaliadas nesta ficha (ex.: '+escapeHtml(prefixo)+' 1, '+escapeHtml(prefixo)+' 2…)</legend>'
+        + '<div class="unidades-row">'
+        + unidades.map(function(u, ui){
+            return '<span class="unidade-chip">'+escapeHtml(u)+'<button type="button" data-rm-unidade="'+ui+'" title="Remover">✕</button></span>';
+          }).join("")
+        + '</div>'
+        + '<div class="unidade-add"><input type="text" id="nova-unidade" placeholder="ex.: '+escapeHtml(prefixo)+' '+(unidades.length+1)+'"><button type="button" class="btn" id="add-unidade">+ Adicionar</button></div>'
+        + '</fieldset>';
+
+      if(unidades.length===0){
+        checklistHtml = '<div class="hint">Adicione ao menos uma unidade acima (ex.: '+escapeHtml(prefixo)+' 1) para avaliar o checklist. Cada uma é avaliada separadamente — o resultado de um item pode ser diferente entre elas.</div>';
+      } else {
+        checklistHtml = tipoInfo.checklist.map(function(cat, ci){
+          var itemsHtml = cat.itens.map(function(it, ii){
+            var key=ci+"-"+ii;
+            var porUnidade = d.checklist[key] || {};
+            var rowsHtml = unidades.map(function(u){
+              var v = porUnidade[u] || "";
+              return '<div class="item-row-elemento"><div class="elemento-tag">'+escapeHtml(u)+'</div>'
+                + '<div class="seg">'+segBtn(key,u,"NA","NA",v)+segBtn(key,u,"P","P",v)+segBtn(key,u,"X","X",v)+segBtn(key,u,"V","V",v)+'</div></div>';
+            }).join("");
+            return '<div class="item-row multi"><div class="item-info"><div class="name">'+escapeHtml(it.n)+'</div><div class="method">'+escapeHtml(it.m)+(it.tol?' · Tolerância: '+escapeHtml(it.tol):'')+'</div></div>'
+              + '<div class="item-elementos">'+rowsHtml+'</div></div>';
+          }).join("");
+          return '<div class="cat-block">'+(cat.cat?'<div class="cat-title">'+escapeHtml(cat.cat)+'</div>':'')+itemsHtml+'</div>';
+        }).join("");
+      }
+      anyReprovado = anyChecklistReprovado(d.checklist);
+    }
+
+    var linkHtml;
+    if(linked){
+      linkHtml = '<div class="link-card linked"><div class="info"><div class="t">Rastreabilidade '+escapeHtml(linked.numero||"s/ nº")+'</div>'
+        + '<div class="s">'+escapeHtml(fmtDateBR(linked.data))+' · '+statusBadgeRast(linked)+'</div></div>'
+        + '<button class="btn" id="open-linked-rast">Abrir</button>'
+        + '<button class="btn ghost danger" id="unlink-rast">Desvincular</button></div>';
+    } else {
+      linkHtml = '<div class="link-card"><div class="info"><div class="t">Nenhuma rastreabilidade vinculada</div><div class="s">Vincule um controle existente ou gere um novo já conectado a esta ficha.</div></div>'
+        + '<div class="picker">'
+        + '<select id="link-picker"><option value="">Selecionar existente…</option>'
+        + unlinkedRast.map(function(x){ return '<option value="'+x.id+'">'+escapeHtml(fmtDateBR(x.r.data))+' · Rastr. '+escapeHtml(x.r.numero||"s/ nº")+'</option>'; }).join("")
+        + '</select>'
+        + '<button class="btn" id="do-link-rast">Vincular</button>'
+        + '<button class="btn primary" id="gen-rast">+ Gerar nova</button>'
+        + '</div></div>';
+    }
+
+    return ''
+      + '<div class="modal-head"><h2 id="modal-title">'+(id?"Editar ficha FVS":"Nova ficha FVS")+'</h2>'+statusBadgeFvs(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-body">'
+      + (anyReprovado && (d.naoConformidades||[]).length===0 ? '<div class="banner">Há item(ns) marcado(s) como reprovado (X). Considere registrar uma não conformidade abaixo.</div>' : '')
+      + '<fieldset><legend>Identificação</legend><div class="grid3">'
+        + field("Código FVS","codigo",d.codigo,"text")
+        + field("Nº da ficha","numero",d.numero,"text","ex.: 004-032")
+        + field("Descrição do serviço","descricao",d.descricao,"text")
+        + '</div><div class="grid2">'+field("Obra","obra",d.obra,"text")+field("Local / elemento","local",d.local,"text","ex.: 5º Pav. — Laje")+'</div></fieldset>'
+      + '<fieldset><legend>Pavimentos desta ficha</legend>'+pavimentosFieldHtml(d)+'</fieldset>'
+      + '<fieldset><legend>Datas e responsáveis</legend><div class="grid3">'
+        + field("Data de abertura","dataAbertura",d.dataAbertura,"date")
+        + field("Data de concretagem","dataConcretagem",d.dataConcretagem,"date")
+        + field("Data de fechamento","dataFechamento",d.dataFechamento,"date")
+        + '</div><div class="grid2">'+field("Inspecionado por","inspecionadoPor",d.inspecionadoPor,"text")+field("Engenheiro responsável","engenheiro",d.engenheiro,"text")+'</div></fieldset>'
+      + elementosHtml
+      + '<fieldset><legend>Checklist de verificação</legend>'+legendaHtml+checklistHtml+'</fieldset>'
+      + '<fieldset><legend>Não conformidades</legend>'+ncListFieldHtml(d)+'</fieldset>'
+      + '<fieldset><legend>Observações</legend>'+field("","observacoes",d.observacoes,"textarea")+'</fieldset>'
+      + '<fieldset><legend>Rastreabilidade de concreto vinculada</legend>'+linkHtml+'</fieldset>'
+      + lastUpdatedHtml(d)
+      + '</div>'
+      + '<div class="modal-foot">'
+        + '<div style="display:flex;gap:10px;">'
+        + '<button class="btn danger" id="btn-delete" '+(id?"":"disabled")+'>Excluir</button>'
+        + '<button class="btn" id="btn-export">Exportar Excel</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:10px;">'
+        + '<button class="btn" id="btn-save">Salvar</button>'
+        + '<button class="btn primary" id="btn-toggle-close">'+(d.fechado?"Reabrir ficha":"Fechar ficha")+'</button>'
+        + '</div></div>';
+  }
+
+  function rastModalHtml(d, id){
+    var linked = d.fvsId ? fvsMap.get(d.fvsId) : null;
+    var unlinkedFvs=[];
+    fvsMap.forEach(function(f,fid){ if(!f.rastreabilidadeId) unlinkedFvs.push({id:fid,f:f}); });
+
+    var linhasHtml = d.linhas.map(function(l,idx){
+      var gasto = diffMin(l.saidaUsina, l.lancFinal);
+      var over = gasto!=null && gasto>TEMPO_MAX_MIN;
+      return '<tr data-line="'+idx+'">'
+        + td(inp("seq",idx,l.seq,"number","width:60px"))
+        + td(inp("notaFiscal",idx,l.notaFiscal,"text"))
+        + td(inp("betoneira",idx,l.betoneira,"text"))
+        + td(inp("lacre",idx,l.lacre,"text"))
+        + td(inp("volBetoneira",idx,l.volBetoneira,"text","width:60px"))
+        + td(inp("volAcumulado",idx,l.volAcumulado,"text","width:60px"))
+        + td(inp("fornecedor",idx,l.fornecedor,"text"))
+        + td(inp("nSerieCP",idx,l.nSerieCP,"text"))
+        + td(inp("nCPs",idx,l.nCPs,"text","width:48px"))
+        + td(inp("slump",idx,l.slump,"text","width:56px"))
+        + td(inp("saidaUsina",idx,l.saidaUsina,"time"))
+        + td(inp("chegadaObra",idx,l.chegadaObra,"time"))
+        + td(inp("lancInicial",idx,l.lancInicial,"time"))
+        + td(inp("lancFinal",idx,l.lancFinal,"time"))
+        + td('<span class="'+(over?"overrun":"")+'" data-tempo-idx="'+idx+'">'+fmtMin(gasto)+'</span>')
+        + td(inp("aguaFolga",idx,l.aguaFolga,"text","width:50px"))
+        + td(inp("aguaLanc",idx,l.aguaLanc,"text","width:50px"))
+        + td(inp("pecas",idx,l.pecas,"text"))
+        + td('<button type="button" class="rm-line" data-rm-line="'+idx+'" title="Remover linha">✕</button>')
+        + '</tr>';
+    }).join("");
+
+    var anyOverrun = rastOverrun(d);
+
+    var linkHtml;
+    if(linked){
+      linkHtml = '<div class="link-card linked"><div class="info"><div class="t">Ficha '+escapeHtml(linked.codigo||"FVS")+' · '+escapeHtml(linked.numero||"s/ nº")+'</div>'
+        + '<div class="s">'+escapeHtml(fmtDateBR(linked.dataConcretagem))+' · '+statusBadgeFvs(linked)+'</div></div>'
+        + '<button class="btn" id="open-linked-fvs">Abrir</button>'
+        + '<button class="btn ghost danger" id="unlink-fvs">Desvincular</button></div>';
+    } else {
+      linkHtml = '<div class="link-card"><div class="info"><div class="t">Nenhuma ficha FVS vinculada</div><div class="s">Vincule uma ficha existente ou gere uma nova já conectada a este controle.</div></div>'
+        + '<div class="picker">'
+        + '<select id="link-picker-r"><option value="">Selecionar existente…</option>'
+        + unlinkedFvs.map(function(x){ return '<option value="'+x.id+'">'+escapeHtml(fmtDateBR(x.f.dataConcretagem))+' · '+escapeHtml(x.f.codigo)+' '+escapeHtml(x.f.numero||"s/ nº")+'</option>'; }).join("")
+        + '</select>'
+        + '<button class="btn" id="do-link-fvs">Vincular</button>'
+        + '<button class="btn primary" id="gen-fvs">+ Gerar nova</button>'
+        + '</div></div>';
+    }
+
+    return ''
+      + '<div class="modal-head"><h2 id="modal-title">'+(id?"Editar rastreabilidade":"Nova rastreabilidade")+'</h2>'+statusBadgeRast(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-body">'
+      + '<div class="banner" id="rast-overrun-banner" style="'+(anyOverrun?"":"display:none;")+'">Uma ou mais betonadas excederam o tempo máximo de lançamento (2h30 — NBR 12655). Registre a ação corretiva ao final.</div>'
+      + '<fieldset><legend>Identificação</legend><div class="grid3">'
+        + field("Nº do controle","numero",d.numero,"text","ex.: RC-018")
+        + field("Data","data",d.data,"date")
+        + field("Bloco / Pavimento","blocoPav",d.blocoPav,"text")
+        + '</div><div class="grid3">'
+        + field("Obra","obra",d.obra,"text")
+        + field("Projeto de referência","projetoReferencia",d.projetoReferencia,"text")
+        + field("Slump aprovado","slumpAprovado",d.slumpAprovado,"text","ex.: 12±2cm")
+        + '</div><div class="grid3">'
+        + field("FCK solicitado","fckSolicitado",d.fckSolicitado,"text","ex.: 30 MPa")
+        + '</div></fieldset>'
+      + '<fieldset><legend>Pavimentos deste controle</legend>'+pavimentosFieldHtml(d)+'</fieldset>'
+      + '<fieldset><legend>Betonadas <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— tempo máx. de lançamento: 2h30</span></legend>'
+        + '<div class="lines-wrap"><table class="lines"><thead><tr>'
+        + ['Seq','NF','Betoneira','Lacre','Vol. (m³)','Acum. (m³)','Fornecedor','Série CP','Nº CPs','Slump','Saída usina','Chegada obra','Lanç. inicial','Lanç. final','Tempo gasto','Água folga (L)','Água lanç. (L)','Peças concretadas',''].map(function(h){return '<th>'+h+'</th>';}).join("")
+        + '</tr></thead><tbody id="linhas-body">'+linhasHtml+'</tbody></table></div>'
+        + '<button type="button" class="btn ghost" id="add-line" style="margin-top:10px;">+ Adicionar betonada</button>'
+        + '</fieldset>'
+      + '<fieldset><legend>Mapeamento da concretagem <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— demarque na planta onde cada BT foi lançado</span></legend>'
+        + mapeamentoFieldHtml(d)
+        + '</fieldset>'
+      + '<fieldset><legend>Coleta e observações</legend><div class="grid2">'
+        + field("Responsável pela coleta","responsavelColeta",d.responsavelColeta,"text")
+        + field("Engenheiro responsável","engenheiro",d.engenheiro,"text")
+        + '</div>'+field("Observações / ações corretivas","acoesCorretivas",d.acoesCorretivas,"textarea")
+        + field("Data de fechamento","dataFechamento",d.dataFechamento,"date")
+        + '</fieldset>'
+      + '<fieldset><legend>Ficha FVS vinculada</legend>'+linkHtml+'</fieldset>'
+      + lastUpdatedHtml(d)
+      + '</div>'
+      + '<div class="modal-foot">'
+        + '<div style="display:flex;gap:10px;">'
+        + '<button class="btn danger" id="btn-delete" '+(id?"":"disabled")+'>Excluir</button>'
+        + '<button class="btn" id="btn-export">Exportar Excel</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:10px;">'
+        + '<button class="btn" id="btn-save">Salvar</button>'
+        + '<button class="btn primary" id="btn-toggle-close">'+(d.fechado?"Reabrir controle":"Fechar controle")+'</button>'
+        + '</div></div>';
+  }
+
+  // Monta o rótulo + linha da legenda de uma área demarcada, reaproveitado
+  // tanto no HTML inicial do modal quanto na atualização ao vivo (sem
+  // recriar o modal inteiro) depois de fechar/remover uma área.
+  function mapaLegendaLinhaHtml(a, ai, linhasFicha){
+    var linha = (linhasFicha||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
+    return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+a.cor+';"></span>'
+      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+'</span>'
+        + (linha && linha.notaFiscal ? '<span class="mapa-legenda-nf">NF '+escapeHtml(linha.notaFiscal)+'</span>' : '')
+      + '</span>'
+      + '<button type="button" class="mapa-rm-area" data-rm-area="'+ai+'" title="Remover área">✕</button></div>';
+  }
+  function mapaLegendaHtml(d){
+    var areas = (d.mapeamento && d.mapeamento.areas) || [];
+    if(areas.length===0) return '<div class="hint">Nenhuma área demarcada ainda. Toque em "+ Nova área" e marque os cantos do trecho concretado.</div>';
+    return '<div class="mapa-legenda">' + areas.map(function(a, ai){ return mapaLegendaLinhaHtml(a, ai, d.linhas); }).join("") + '</div>';
+  }
+  // Bloco de "mapeamento de concretagem": anexa a planta de forma (PDF) da
+  // rastreabilidade e, uma vez anexada, mostra a ferramenta de desenho
+  // (canvas com a planta renderizada por pdf.js + um SVG por cima pra
+  // marcar as áreas) — ver wireMapeamentoEvents() para toda a interação.
+  // Sem PDF ainda: só o botão de anexar. Com PDF: barra de zoom, área de
+  // desenho e a legenda das áreas já demarcadas.
+  function mapeamentoFieldHtml(d){
+    var mp = d.mapeamento || blankMapeamento();
+    if(!mp.plantaUrl){
+      var lista = mapaPlantasOrdenadas(d.pavimentos);
+      var pickerHtml = lista.length
+        ? '<div class="mapa-toolbar">'
+            + '<select id="mapa-planta-select" style="flex:1;min-width:180px;">'
+              + '<option value="">Selecione uma planta da biblioteca…</option>'
+              + lista.map(function(p){
+                  return '<option value="'+escapeHtml(p.id)+'">'+escapeHtml(p.nome)+(p.pavimento?" — "+escapeHtml(p.pavimento):"")+'</option>';
+                }).join("")
+            + '</select>'
+            + '<button type="button" class="btn primary small" id="mapa-planta-usar">Usar esta planta</button>'
+          + '</div>'
+        : '<div class="hint">Nenhuma planta cadastrada ainda na biblioteca — cadastre em "Plantas" no menu de navegação (assim ela fica disponível pra escolher em qualquer rastreabilidade), ou anexe um PDF só pra esta ficha abaixo.</div>';
+      return '<div class="hint">Escolha a planta de forma deste pavimento pra poder demarcar na tela onde o concreto foi lançado nesta rastreabilidade.</div>'
+        + pickerHtml
+        + '<div class="nc-anexo-add-bar" style="margin-top:8px;">'
+          + '<label class="btn ghost nc-anexo-add-label">+ Anexar um PDF só pra esta ficha'
+            + '<input type="file" accept="application/pdf" hidden id="input-planta">'
+          + '</label>'
+          + '<span class="nc-anexo-status" id="status-planta"></span>'
+        + '</div>';
+    }
+    return ''
+      + '<div class="mapa-toolbar">'
+        + '<span class="hint" style="margin:0;flex:1;min-width:120px;">'+escapeHtml(mp.plantaNome)+'</span>'
+        + '<a class="btn ghost small" href="'+escapeHtml(mp.plantaUrl)+'" target="_blank" rel="noopener">Abrir planta</a>'
+        + '<button type="button" class="btn ghost small" id="mapa-exportar-png">Exportar (PNG)</button>'
+        + '<label class="btn ghost small nc-anexo-add-label">Trocar planta<input type="file" accept="application/pdf" hidden id="input-planta"></label>'
+      + '</div>'
+      + '<div class="mapa-toolbar">'
+        + '<button type="button" class="btn ghost small" id="mapa-zoom-out">−</button>'
+        + '<span id="mapa-zoom-label" class="hint" style="margin:0;">100%</span>'
+        + '<button type="button" class="btn ghost small" id="mapa-zoom-in">+</button>'
+        + '<button type="button" class="btn primary small" id="mapa-add-area" style="margin-left:auto;">+ Nova área</button>'
+      + '</div>'
+      + '<div class="mapa-scroll"><div class="mapa-stage" id="mapa-stage">'
+        + '<canvas id="mapa-canvas" width="0" height="0"></canvas>'
+        + '<svg id="mapa-svg" preserveAspectRatio="none"></svg>'
+      + '</div></div>'
+      + '<div class="mapa-toolbar" id="mapa-draw-bar" hidden>'
+        + '<span class="hint" style="margin:0;">Toque nos cantos da área concretada (mínimo 3 pontos).</span>'
+        + '<button type="button" class="btn ghost small" id="mapa-undo-ponto">Desfazer ponto</button>'
+        + '<button type="button" class="btn ghost small" id="mapa-cancelar-area">Cancelar</button>'
+        + '<button type="button" class="btn primary small" id="mapa-fechar-area" disabled>Fechar área</button>'
+      + '</div>'
+      + '<div class="mapa-toolbar" id="mapa-seq-picker" hidden>'
+        + '<label for="mapa-seq-select" style="margin:0;">Essa área é do BT:</label>'
+        + '<select id="mapa-seq-select"></select>'
+        + '<button type="button" class="btn ghost small" id="mapa-seq-cancelar">Cancelar</button>'
+        + '<button type="button" class="btn primary small" id="mapa-seq-confirmar">Confirmar área</button>'
+      + '</div>'
+      + '<div class="hint" id="mapa-status" style="min-height:14px;"></div>'
+      + '<div id="mapa-legenda-host">'+mapaLegendaHtml(d)+'</div>';
+  }
+  function field(labelText, name, value, type, placeholder){
+    var id="f-"+name;
+    var lbl = labelText ? '<label for="'+id+'">'+escapeHtml(labelText)+'</label>' : '';
+    if(type==="textarea"){
+      return '<div class="field">'+lbl+'<textarea id="'+id+'" data-field="'+name+'" placeholder="'+escapeHtml(placeholder||"")+'">'+escapeHtml(value)+'</textarea></div>';
+    }
+    return '<div class="field">'+lbl+'<input id="'+id+'" data-field="'+name+'" type="'+type+'" value="'+escapeHtml(value)+'" placeholder="'+escapeHtml(placeholder||"")+'"></div>';
+  }
+  // Fotos/documentos anexados a uma não conformidade específica (evidência
+  // do problema, boletim, etc.) — ver comentário de CLOUDINARY_CLOUD_NAME
+  // no topo do arquivo pra como habilitar o envio.
+  function ncAnexosFieldHtml(nc, ni){
+    var anexos = ncAnexos(nc);
+    var listaHtml = anexos.length===0 ? "" : '<div class="nc-anexos-lista">' + anexos.map(function(a, ai){
+      var item = ncAnexoEhImagem(a)
+        ? '<a href="'+escapeHtml(a.url)+'" target="_blank" rel="noopener"><img src="'+escapeHtml(a.url)+'" alt="'+escapeHtml(a.nome)+'"></a>'
+        : '<a class="nc-anexo-doc" href="'+escapeHtml(a.url)+'" target="_blank" rel="noopener" title="'+escapeHtml(a.nome)+'">📄<span>'+escapeHtml(a.nome)+'</span></a>';
+      var tituloRemover = "Remover anexo (desvincula da ficha — o arquivo já enviado continua guardado no Cloudinary)";
+      return '<div class="nc-anexo-item">'+item+'<button type="button" class="nc-anexo-rm" data-rm-anexo="'+ni+':'+ai+'" title="'+escapeHtml(tituloRemover)+'">✕</button></div>';
+    }).join("") + '</div>';
+    return '<div class="nc-anexos">'
+      + listaHtml
+      + '<div class="nc-anexo-add-bar">'
+        + '<label class="btn ghost nc-anexo-add-label">+ Anexar foto/documento'
+          + '<input type="file" accept="image/*,.pdf" multiple data-nc-anexo-input="'+ni+'" hidden>'
+        + '</label>'
+        + '<span class="nc-anexo-status'+(ncAnexoErro[ni]?" err":"")+'" data-nc-anexo-status="'+ni+'">'+escapeHtml(ncAnexoErro[ni]||"")+'</span>'
+      + '</div>'
+    + '</div>';
+  }
+  // Bloco de "não conformidades" da ficha FVS: uma lista de itens (em vez do
+  // antigo bloco único), cada um com descrição, correção proposta, se foi
+  // concluída e a data de conclusão — permite registrar mais de uma não
+  // conformidade na mesma ficha e depois quantificá-las na tela "Não
+  // conformidades" (ver buildRelatorioNc()).
+  function ncListFieldHtml(d){
+    var ncs = d.naoConformidades || [];
+    var itensHtml = ncs.length===0
+      ? '<div class="hint">Nenhuma não conformidade registrada nesta ficha ainda.</div>'
+      : '<div class="nc-lista">' + ncs.map(function(nc, ni){
+          var diasTxt = "";
+          if(!nc.concluida){
+            var dias = diffDias(nc.dataRegistro, todayISO());
+            if(dias!=null) diasTxt = ' · '+dias+' dia(s) em aberto';
+          }
+          return '<div class="nc-item">'
+            + '<div class="nc-item-head">'
+              + '<span class="nc-item-titulo">Não conformidade '+(ni+1)+'</span>'
+              + (nc.concluida
+                  ? '<span class="pill concluido"><span class="dot"></span>Concluída</span>'
+                  : '<span class="pill aberto has-nc"><span class="dot"></span>Em aberto'+diasTxt+'</span>')
+              + '<button type="button" class="btn ghost danger" data-rm-nc="'+ni+'" title="Remover">✕ Remover</button>'
+            + '</div>'
+            + '<div class="grid2">'
+              + '<div class="field"><label>Descrição do produto/serviço não conforme</label><textarea data-nc-field="descricao" data-nc-idx="'+ni+'">'+escapeHtml(nc.descricao)+'</textarea></div>'
+              + '<div class="field"><label>Correção proposta</label><textarea data-nc-field="correcao" data-nc-idx="'+ni+'">'+escapeHtml(nc.correcao)+'</textarea></div>'
+            + '</div>'
+            + '<div class="grid3">'
+              + '<div class="field"><label>Data de registro</label><input type="date" data-nc-field="dataRegistro" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.dataRegistro||"")+'"></div>'
+              + '<div class="field"><label>Data de conclusão</label><input type="date" data-nc-field="dataConclusao" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.dataConclusao||"")+'" '+(nc.concluida?"":"disabled")+'></div>'
+              + '<div class="field"><label>Status</label><div class="toggle-row" style="margin-top:6px;margin-bottom:0;"><label class="switch"><input type="checkbox" data-nc-concluida="'+ni+'" '+(nc.concluida?"checked":"")+'><span class="track"></span><span class="thumb"></span></label><span>Concluída</span></div></div>'
+            + '</div>'
+            + ncAnexosFieldHtml(nc, ni)
+          + '</div>';
+        }).join("") + '</div>';
+    return itensHtml + '<div style="margin-top:10px;"><button type="button" class="btn" id="add-nc">+ Adicionar não conformidade</button></div>';
+  }
+  function inp(name, idx, value, type, style){
+    return '<input type="'+type+'" data-line-field="'+name+'" data-line-idx="'+idx+'" value="'+escapeHtml(value)+'" '+(style?'style="'+style+'"':'')+'>';
+  }
+  function td(html){ return '<td>'+html+'</td>'; }
+
+  /* ---------------- Excel export (SheetJS / xlsx-js-style) ---------------- */
+  var THIN={style:"thin",color:{rgb:"BFBFBF"}};
+  var BORDER_ALL={top:THIN,bottom:THIN,left:THIN,right:THIN};
+  function styleAddr(ws,r,c,style){
+    var addr = XLSX.utils.encode_cell({r:r,c:c});
+    if(!ws[addr]) ws[addr] = {t:"s", v:""};
+    ws[addr].s = Object.assign({}, ws[addr].s||{}, style);
+  }
+  function safeName(s){ return String(s||"sem_numero").replace(/[^\w-]+/g,"_").slice(0,40); }
+
+
+  // ---------------------------------------------------------------------------
+  // Exportação para Excel — geração via manipulação direta do XML (JSZip), sem
+  // passar pelo SheetJS/xlsx-js-style para ler+regravar o arquivo.
+  //
+  // Por quê: a biblioteca xlsx-js-style (edição gratuita) não preserva bordas,
+  // cores de preenchimento nem imagens/desenhos ao ler um arquivo existente e
+  // regravá-lo (mesmo pedindo {cellStyles:true}) — foi por isso que a logo da SIG
+  // sumia e, mais grave, todo o layout visual (faixas coloridas, bordas da
+  // tabela, células mescladas em negrito) saía diferente do modelo oficial.
+  //
+  // A solução: um arquivo .xlsx é só um .zip com arquivos XML dentro. Em vez de
+  // deixar uma biblioteca "reinterpretar" o arquivo, nós abrimos o .zip do
+  // modelo oficial (o base64 embutido), pegamos o texto bruto do XML da aba que
+  // interessa e da tabela de estilos, e fazemos apenas substituições cirúrgicas
+  // nesse texto: escrever o valor de uma célula, ou trocar o índice de estilo de
+  // uma célula por um novo estilo (clonado do original, só mudando a cor). Todo
+  // o resto do arquivo — bordas, fontes, a logo, os desenhos, a paginação —
+  // nunca é tocado, então fica garantidamente idêntico ao modelo.
+  // ---------------------------------------------------------------------------
+
+  function xmlEscape(s){
+    return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+  }
+  // Escreve um texto numa célula existente (endereço tipo "B4"), preservando o
+  // estilo (atributo s="N") que a célula já tinha. Usa t="inlineStr" (texto
+  // embutido direto na célula) em vez de shared-strings ou t="str" — mais simples
+  // de gerar e 100% aceito tanto pelo Excel quanto pelo LibreOffice.
+  function xmlSetCellText(xml, addr, text){
+    var re = new RegExp('<c r="'+addr+'"([^>]*?)(/>|>[\\s\\S]*?</c>)');
+    var m = re.exec(xml);
+    if(!m) return xml;
+    var attrs = m[1].replace(/\st="[^"]*"/, "");
+    var newCell = '<c r="'+addr+'"'+attrs+' t="inlineStr"><is><t xml:space="preserve">'+xmlEscape(text)+'</t></is></c>';
+    return xml.slice(0, m.index) + newCell + xml.slice(m.index + m[0].length);
+  }
+  function xmlGetCellStyleId(xml, addr){
+    var re = new RegExp('<c r="'+addr+'"([^>]*?)(?:/>|>)');
+    var m = re.exec(xml);
+    if(!m) return "0";
+    var sm = /\ss="(\d+)"/.exec(m[1]);
+    return sm ? sm[1] : "0";
+  }
+  function xmlSetCellStyleId(xml, addr, newStyleId){
+    var re = new RegExp('(<c r="'+addr+'")([^>]*?)((?:/>|>[\\s\\S]*?</c>))');
+    return xml.replace(re, function(full, head, attrs, tail){
+      attrs = /\ss="\d+"/.test(attrs) ? attrs.replace(/\ss="\d+"/, ' s="'+newStyleId+'"') : (attrs+' s="'+newStyleId+'"');
+      return head+attrs+tail;
+    });
+  }
+  function xfParts(xfXml){
+    var selfClose = /^<xf\b([^>]*)\/>$/.exec(xfXml);
+    if(selfClose) return {attrs: selfClose[1], children: null};
+    var open = /^<xf\b([^>]*)>([\s\S]*)<\/xf>$/.exec(xfXml);
+    return {attrs: open[1], children: open[2]};
+  }
+  function xfBuild(attrs, children){
+    return children==null ? ('<xf'+attrs+'/>') : ('<xf'+attrs+'>'+children+'</xf>');
+  }
+  function xfSetAttr(attrs, name, value){
+    var re = new RegExp('\\s'+name+'="[^"]*"');
+    return re.test(attrs) ? attrs.replace(re, ' '+name+'="'+value+'"') : (attrs+' '+name+'="'+value+'"');
+  }
+  function getXfByIndex(stylesXml, idx){
+    var m = /<cellXfs count="\d+"[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml);
+    var list = m[1].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) || [];
+    return list[parseInt(idx,10)] || '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>';
+  }
+  // Lê o tamanho (<sz val="...">) da fonte de índice fontId em <fonts> do
+  // styles.xml — usado para herdar o tamanho de letra já usado na célula
+  // original em vez de forçar um tamanho fixo (ver ensureColoredStyle).
+  function getFontSizeByFontId(stylesXml, fontId){
+    var m = /<fonts count="\d+"[^>]*>([\s\S]*?)<\/fonts>/.exec(stylesXml);
+    if(!m) return null;
+    var list = m[1].match(/<font\b[^>]*?(?:\/>|>[\s\S]*?<\/font>)/g) || [];
+    var fontXml = list[parseInt(fontId,10)];
+    if(!fontXml) return null;
+    var sm = /<sz val="([^"]+)"/.exec(fontXml);
+    return sm ? sm[1] : null;
+  }
+  function bumpBlock(stylesXml, tag, newEntryXml){
+    // Alguns modelos convertidos a partir de PDF (LibreOffice) gravam
+    // atributos extras nessas tags (ex.: <fonts count="17" x14ac:knownFonts="1">),
+    // então o count="N" nem sempre é seguido direto de ">".
+    var re = new RegExp('<'+tag+' count="(\\d+)"[^>]*>([\\s\\S]*?)</'+tag+'>');
+    var m = re.exec(stylesXml);
+    var n = parseInt(m[1],10);
+    var newXml = stylesXml.slice(0,m.index) + '<'+tag+' count="'+(n+1)+'">'+m[2]+newEntryXml+'</'+tag+'>' + stylesXml.slice(m.index+m[0].length);
+    return {xml:newXml, index:n};
+  }
+  // Clona o estilo de uma célula (base) trocando só a cor da fonte/preenchimento —
+  // usado para marcar visualmente o "X" nas colunas de status do checklist (NA/
+  // Aprovado/Reprovado/Reinspecionado) com a mesma cor da legenda impressa.
+  // "state" é um objeto {stylesXml, styleCache} compartilhado durante uma
+  // exportação inteira, para não duplicar o mesmo estilo repetidas vezes.
+  function ensureColoredStyle(state, baseStyleId, fillRgb, fontRgb, fontName){
+    fontName = fontName || "Calibri";
+    var key = "c|"+baseStyleId+"|"+fillRgb+"|"+fontRgb+"|"+fontName;
+    if(state.styleCache[key]!=null) return state.styleCache[key];
+    var parts = xfParts(getXfByIndex(state.stylesXml, baseStyleId));
+    // Herda o tamanho de fonte que a própria célula já tinha no modelo original,
+    // em vez de forçar um tamanho fixo — antes isso deixava as marcações do
+    // checklist (P/X/V/NA) menores do que o resto da ficha em quase todos os
+    // tipos de FVS, mesmo quando o modelo original usava 12pt/14pt ali.
+    var baseFontIdMatch = /\sfontId="(\d+)"/.exec(parts.attrs);
+    var baseFontSize = getFontSizeByFontId(state.stylesXml, baseFontIdMatch ? baseFontIdMatch[1] : "0") || "10";
+    var r1 = bumpBlock(state.stylesXml, "fonts", '<font><b/><sz val="'+baseFontSize+'"/><color rgb="FF'+fontRgb+'"/><name val="'+xmlEscape(fontName)+'"/></font>');
+    state.stylesXml = r1.xml; var newFontId = r1.index;
+    var r2 = bumpBlock(state.stylesXml, "fills", '<fill><patternFill patternType="solid"><fgColor rgb="FF'+fillRgb+'"/><bgColor indexed="64"/></patternFill></fill>');
+    state.stylesXml = r2.xml; var newFillId = r2.index;
+    var attrs = parts.attrs;
+    attrs = xfSetAttr(attrs, "fontId", newFontId);
+    attrs = xfSetAttr(attrs, "fillId", newFillId);
+    attrs = xfSetAttr(attrs, "applyFont", "true");
+    attrs = xfSetAttr(attrs, "applyFill", "true");
+    var newXf = xfBuild(attrs, parts.children);
+    var r3 = bumpBlock(state.stylesXml, "cellXfs", newXf);
+    state.stylesXml = r3.xml;
+    state.styleCache[key] = r3.index;
+    return r3.index;
+  }
+  // Clona o estilo de uma célula (base) ligando a quebra de linha automática —
+  // usado nos campos onde rótulo+valor dividem a mesma célula mesclada (ver
+  // explicação em exportRastXlsx) e nos blocos de texto livre da FVS.
+  function ensureWrapStyle(state, baseStyleId){
+    var key = "w|"+baseStyleId;
+    if(state.styleCache[key]!=null) return state.styleCache[key];
+    var baseXf = getXfByIndex(state.stylesXml, baseStyleId);
+    var parts = xfParts(baseXf);
+    var attrs = xfSetAttr(parts.attrs, "applyAlignment", "true");
+    var children = parts.children;
+    if(children==null){
+      children = '<alignment wrapText="true"/>';
+    } else if(/<alignment\b[^>]*\/>/.test(children)){
+      children = children.replace(/<alignment\b([^>]*)\/>/, function(full,a){
+        a = /wrapText="[^"]*"/.test(a) ? a.replace(/wrapText="[^"]*"/,'wrapText="true"') : a+' wrapText="true"';
+        return '<alignment'+a+'/>';
+      });
+    } else if(/<alignment\b[^>]*>[\s\S]*?<\/alignment>/.test(children)){
+      children = children.replace(/<alignment\b([^>]*)>/, function(full,a){
+        a = /wrapText="[^"]*"/.test(a) ? a.replace(/wrapText="[^"]*"/,'wrapText="true"') : a+' wrapText="true"';
+        return '<alignment'+a+'>';
+      });
+    } else {
+      children = '<alignment wrapText="true"/>' + children;
+    }
+    var newXf = xfBuild(attrs, children);
+    var r = bumpBlock(state.stylesXml, "cellXfs", newXf);
+    state.stylesXml = r.xml;
+    state.styleCache[key] = r.index;
+    return r.index;
+  }
+  function xmlSetRowHeight(xml, rowNum, pts){
+    var re = new RegExp('<row r="'+rowNum+'"([^>]*)>');
+    var m = re.exec(xml);
+    if(!m) return xml;
+    var attrs = m[1].replace(/\sht="[^"]*"/, "").replace(/\scustomHeight="[^"]*"/, "");
+    attrs += ' ht="'+pts+'" customHeight="true"';
+    return xml.slice(0, m.index) + '<row r="'+rowNum+'"'+attrs+'>' + xml.slice(m.index+m[0].length);
+  }
+  function colRowFromRef(ref){
+    var m = /^([A-Z]+)(\d+)$/.exec(ref);
+    var col=0; for(var i=0;i<m[1].length;i++) col = col*26 + (m[1].charCodeAt(i)-64);
+    return {col:col, row:parseInt(m[2],10)};
+  }
+  function xmlAddMerge(sheetXml, ref){
+    if(new RegExp('<mergeCell ref="'+ref+'"/>').test(sheetXml)) return sheetXml;
+    if(/<mergeCells count="(\d+)">/.test(sheetXml)){
+      return sheetXml.replace(/<mergeCells count="(\d+)">/, function(full, n){
+        return '<mergeCells count="'+(parseInt(n,10)+1)+'">';
+      }).replace('</mergeCells>', '<mergeCell ref="'+ref+'"/></mergeCells>');
+    } else {
+      return sheetXml.replace('</sheetData>', '</sheetData><mergeCells count="1"><mergeCell ref="'+ref+'"/></mergeCells>');
+    }
+  }
+  // O modelo original tem várias linhas mescladas separadamente (uma por linha,
+  // pensadas para preenchimento à mão) onde nós precisamos de um único bloco alto
+  // para o texto digitado quebrar linha normalmente — remove as mesclagens
+  // pequenas dentro do retângulo indicado (linhas/colunas 1-based) antes de
+  // adicionar a mesclagem única consolidada com xmlAddMerge.
+  function xmlRemoveMergesWithin(sheetXml, r1,c1,r2,c2){
+    if(!/<mergeCells /.test(sheetXml)) return sheetXml;
+    return sheetXml.replace(/<mergeCells count="(\d+)">([\s\S]*?)<\/mergeCells>/, function(full, n, body){
+      var kept = [];
+      var re = /<mergeCell ref="([^"]+)"\/>/g, mm;
+      while((mm = re.exec(body))){
+        var ref = mm[1];
+        var parts = ref.split(":");
+        var a = colRowFromRef(parts[0]), b = colRowFromRef(parts[1]||parts[0]);
+        var inside = (a.row>=r1 && b.row<=r2 && a.col>=c1 && b.col<=c2);
+        if(!inside) kept.push(mm[0]);
+      }
+      if(kept.length===0) return "";
+      return '<mergeCells count="'+kept.length+'">'+kept.join("")+'</mergeCells>';
+    });
+  }
+  // O modelo da Rastreabilidade não vem com paginação definida (imprime cortado
+  // em várias páginas retrato) — injeta orientação paisagem/ajuste de largura.
+  // O modelo da FVS-04 já traz essa configuração certa, então isso é ignorado.
+  function xmlAddPageSetupLandscape(sheetXml){
+    var xml = sheetXml;
+    if(/<pageSetup\b/.test(xml)) return xml;
+    if(!/<sheetPr>/.test(xml)){
+      xml = xml.replace(/(<worksheet[^>]*>)/, '$1<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+    }
+    var setup = '<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>';
+    if(/<pageMargins[^>]*\/>/.test(xml)){
+      xml = xml.replace(/(<pageMargins[^>]*\/>)/, "$1"+setup);
+    } else {
+      xml = xml.replace("</worksheet>", setup+"</worksheet>");
+    }
+    return xml;
+  }
+  function triggerDownload(blob, filename){
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+  }
+
+  /* ---------------- Excel export — modelos oficiais reais ---------------- */
+  // Os dois arquivos que o Matheus enviou (FVS-04 e FORM-15) ficam embutidos aqui como
+  // base64. Em vez de reconstruir a planilha do zero, abrimos o arquivo original de
+  // verdade com o SheetJS e só escrevemos os valores nas células certas — layout,
+  // bordas, textos fixos, legenda e numeração de página continuam exatamente como no
+  // modelo oficial; só os campos preenchidos pelo usuário entram no lugar certo.
+  var FVS_TEMPLATE_B64 = "/modelos/FVS_TEMPLATE_B64.xlsx";
+  var RAST_TEMPLATE_B64 = "/modelos/RAST_TEMPLATE_B64.xlsx";
+
+  // Modelos oficiais .xlsx (convertidos a partir dos .xls originais enviados) dos
+  // 10 novos tipos de FVS, embutidos como base64 do mesmo jeito que o FVS_TEMPLATE_B64
+  // acima — preservam 100% do layout, bordas, cores, logo e paginação originais;
+  // exportFvsXlsxFromTemplate() só escreve texto/cor nas células certas.
+  var FVS_TPL_locacao_obra = "/modelos/FVS_TPL_locacao_obra.xlsx";
+  var FVS_TPL_escavacao = "/modelos/FVS_TPL_escavacao.xlsx";
+  var FVS_TPL_estaca_metalica = "/modelos/FVS_TPL_estaca_metalica.xlsx";
+  var FVS_TPL_estaca_raiz = "/modelos/FVS_TPL_estaca_raiz.xlsx";
+  var FVS_TPL_estaca_helice = "/modelos/FVS_TPL_estaca_helice.xlsx";
+  var FVS_TPL_estaca_escavada = "/modelos/FVS_TPL_estaca_escavada.xlsx";
+  var FVS_TPL_estaca_franki = "/modelos/FVS_TPL_estaca_franki.xlsx";
+  var FVS_TPL_sapata_isolada = "/modelos/FVS_TPL_sapata_isolada.xlsx";
+  var FVS_TPL_radier_armado = "/modelos/FVS_TPL_radier_armado.xlsx";
+  var FVS_TPL_bloco = "/modelos/FVS_TPL_bloco.xlsx";
+  var FVS_TPL_impermeabilizacao_rigida = "/modelos/FVS_TPL_impermeabilizacao_rigida.xlsx";
+  var FVS_TPL_montagem_estrutura_metalica = "/modelos/FVS_TPL_montagem_estrutura_metalica.xlsx";
+  var FVS_TPL_parede_diafragma = "/modelos/FVS_TPL_parede_diafragma.xlsx";
+  var FVS_TPL_cortina_atirantada = "/modelos/FVS_TPL_cortina_atirantada.xlsx";
+  var FVS_TPL_preservacao_produto_acabado = "/modelos/FVS_TPL_preservacao_produto_acabado.xlsx";
+  var FVS_TPL_protensao_cabos = "/modelos/FVS_TPL_protensao_cabos.xlsx";
+  var FVS_TPL_guarda_corpo = "/modelos/FVS_TPL_guarda_corpo.xlsx";
+
+  // Exportação "genérica" para os tipos de FVS novos (Locação, Escavação,
+  // Estacas, Sapata, Radier, Bloco) que ainda não têm um modelo .xlsx
+  // pixel-perfect embutido — gera uma planilha simples, mas com todos os
+  // dados e o resultado do checklist por unidade, para não travar o botão
+  // "Exportar Excel" nesses tipos enquanto os modelos oficiais não são
+  // replicados (etapa futura).
+  // ---------------------------------------------------------------------------
+  // Exportação em réplica exata dos modelos oficiais dos 10 novos tipos de FVS.
+  //
+  // Cada linha de FVS_LAYOUTS abaixo mapeia, célula por célula, onde cada campo
+  // do app cai dentro do .xlsx oficial daquele tipo (extraído diretamente dos
+  // arquivos .xls originais enviados) — mesma técnica de patch cirúrgico de XML
+  // já usada em FVS_TEMPLATE_B64/exportFvsXlsx acima, só que parametrizada para
+  // não repetir a lógica 10 vezes. Croquis/desenhos dos modelos (ex.: caixa de
+  // "CROQUI" da Locação da Obra) nunca são tocados — ficam em branco, para
+  // preencher à mão ou anexar em papel, como o modelo original já previa.
+  //
+  // "single": ficha sem unidades (ex.: Locação da Obra) — 1 marcação por item,
+  //   em itemCells[i] (lista de endereços de célula daquele item; mais de 1
+  //   endereço quando o modelo mescla a célula de resposta em várias linhas).
+  // "dynamic": ficha com unidades (estacas/sapata/radier/bloco/trecho) — cada
+  //   unidade ocupa 1 coluna a partir de startCol; itemRows[i] é a lista de
+  //   linhas daquele item (mais de 1 número quando o modelo mescla o texto do
+  //   item em várias linhas); unidadesRow é a linha onde o nome de cada unidade
+  //   (ex.: "Estaca 3") é escrito, na mesma coluna da marcação.
+  function colLetter(n){
+    var s="";
+    while(n>0){ var m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); }
+    return s;
+  }
+  var FVS_LAYOUTS = {
+    locacao_obra: {
+      b64: FVS_TPL_locacao_obra, mode:"single",
+      header: [ {field:"obra", cell:"B4", prefix:"Obra: "}, {field:"local", cell:"H5", prefix:"LOCAL: "} ],
+      itemCells: [ ["H7","H8"], ["H9","H10"], ["H11"], ["H12"] ],
+      nc: { rows:[17,19], cols:{desc:[2,6], correcao:[7,13], data:[14,17]} },
+      obs: { rows:[21,24], cols:[2,17] },
+      footer: { row:25, cols:{ inspecionado:[2,5], dataAbertura:[6,8], engenheiro:[9,12], dataFechamento:[13,17] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da FVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da FVS: " } }
+    },
+    escavacao: {
+      b64: FVS_TPL_escavacao, mode:"dynamic", startCol:10, unidadesRow:7,
+      bannerFix: { removeRegion:[6,10,7,26], newMergeRef:"J6:Z6" },
+      header: [ {field:"obra", cell:"B5"}, {field:"local", cell:"J6", prefix:"LOCAL: "} ],
+      itemRows: [ [8],[9],[10],[11,12,13],[14],[15],[16] ],
+      nc: { rows:[20,24], cols:{desc:[1,8], correcao:[9,17], data:[18,26]} },
+      obs: { rows:[25,32], cols:[1,26] },
+      footer: { row:33, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,26] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    estaca_metalica: {
+      b64: FVS_TPL_estaca_metalica, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [8],[9],[10],[11],[12] ],
+      nc: { rows:[17,20], cols:{desc:[1,8], correcao:[9,16], data:[17,25]} },
+      obs: { rows:[21,27], cols:[1,25] },
+      footer: { row:29, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:null, dataFechamento:[17,25] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    estaca_raiz: {
+      b64: FVS_TPL_estaca_raiz, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"J4"} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13],[14],[15] ],
+      nc: { rows:[18,24], cols:{desc:[1,7], correcao:[8,15], data:[16,24]} },
+      obs: { rows:[25,31], cols:[1,24] },
+      footer: { row:32, cols:{ inspecionado:[1,4], dataAbertura:[5,9], engenheiro:[10,16], dataFechamento:[17,24] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    estaca_helice: {
+      b64: FVS_TPL_estaca_helice, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"J4"} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13],[14],[15] ],
+      nc: { rows:[18,24], cols:{desc:[1,7], correcao:[8,15], data:[16,24]} },
+      obs: { rows:[25,31], cols:[1,24] },
+      footer: { row:32, cols:{ inspecionado:[1,4], dataAbertura:[5,8], engenheiro:[9,16], dataFechamento:[17,24] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    estaca_franki: {
+      b64: FVS_TPL_estaca_franki, mode:"dynamic", startCol:13, unidadesRow:6,
+      bannerFix: { removeRegion:[6,10,6,26], newMergeRef:"J6:L6" },
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [7],[8],[9],[10],[11],[12] ],
+      nc: { rows:[16,20], cols:{desc:[1,8], correcao:[9,17], data:[18,26]} },
+      obs: { rows:[21,27], cols:[1,26] },
+      footer: { row:29, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,26] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    estaca_escavada: {
+      b64: FVS_TPL_estaca_escavada, mode:"dynamic", startCol:13, unidadesRow:6,
+      bannerFix: { removeRegion:[6,10,6,26], newMergeRef:"J6:L6" },
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17] ],
+      nc: { rows:[21,33], cols:{desc:[1,8], correcao:[9,17], data:[18,26]} },
+      obs: null,
+      footer: { row:34, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,26] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    sapata_isolada: {
+      b64: FVS_TPL_sapata_isolada, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"C4"}, {field:"local", cell:"L4"} ],
+      itemRows: [ [8,9],[10],[11],[12],[13],[14],[15],[16,17] ],
+      nc: { rows:[20,26], cols:{desc:[1,7], correcao:[8,15], data:[16,23]} },
+      obs: { rows:[27,33], cols:[1,23] },
+      footer: { row:34, cols:{ inspecionado:[1,5], dataAbertura:[6,9], engenheiro:[10,16], dataFechamento:[17,23] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ASST. ENGENHEIRO DA OBRA", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    radier_armado: {
+      b64: FVS_TPL_radier_armado, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13] ],
+      nc: { rows:[17,21], cols:{desc:[1,8], correcao:[9,17], data:[18,25]} },
+      obs: { rows:[22,28], cols:[1,25] },
+      footer: { row:30, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,25] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    bloco: {
+      b64: FVS_TPL_bloco, mode:"dynamic", startCol:10, unidadesRow:6,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"J5", prefix:"LOCAL: "} ],
+      itemRows: [ [7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17] ],
+      nc: { rows:[20,25], cols:{desc:[1,6], correcao:[7,12], data:[13,14]} },
+      obs: { rows:[26,33], cols:[1,14] },
+      footer: { row:34, cols:{ inspecionado:[1,4], dataAbertura:[5,8], engenheiro:[9,12], dataFechamento:[13,14] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da FVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da FVS: " } }
+    },
+    impermeabilizacao_rigida: {
+      b64: FVS_TPL_impermeabilizacao_rigida, mode:"dynamic", startCol:8, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"J5"} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13],[14],[15] ],
+      nc: { rows:[19,22], cols:{desc:[1,6], correcao:[7,15]} },
+      obs: { rows:[24,29], cols:[1,15] },
+      footer: { row:30, cols:{ inspecionado:[1,4], dataAbertura:[5,8], engenheiro:[9,15], dataFechamento:null },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da FVS: ", engenheiro:"ENGENHEIRO" } }
+    },
+    montagem_estrutura_metalica: {
+      b64: FVS_TPL_montagem_estrutura_metalica, mode:"dynamic", unidadesRow:6,
+      unitCols: [ [9,10,11], [13,14], [15,16] ],
+      header: [ {field:"obra", cell:"A4", prefix:"OBRA: "}, {field:"local", cell:"K5"} ],
+      itemRows: [ [7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19] ],
+      nc: { rows:[24,29], cols:{desc:[1,7], correcao:[8,13], data:[14,17]} },
+      obs: { rows:[31,34], cols:[1,17] },
+      footer: { row:36, cols:{ inspecionado:[1,4], dataAbertura:[5,9], engenheiro:null, dataFechamento:[14,17] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da FVS: ", dataFechamento:"Data de fechamento da FVS: " } }
+    },
+    parede_diafragma: {
+      b64: FVS_TPL_parede_diafragma, mode:"dynamic", startCol:10, unidadesRow:7,
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13],[14],[15],[16] ],
+      nc: { rows:[21,24], cols:{desc:[1,8], correcao:[9,17], data:[18,26]} },
+      obs: { rows:[26,31], cols:[1,26] },
+      footer: { row:33, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,26] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    cortina_atirantada: {
+      b64: FVS_TPL_cortina_atirantada, mode:"dynamic", startCol:10,
+      unidadesRow: [ {row:7, prefix:"PAINEL: "}, {row:22, prefix:"TIRANTE Nº "} ],
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"J6", prefix:"CORTINA: "} ],
+      itemRows: [ [8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20],[23],[24],[25],[26],[27],[28] ],
+      nc: { rows:[33,36], cols:{desc:[1,8], correcao:[9,17], data:[18,22]} },
+      obs: { rows:[38,43], cols:[1,22] },
+      footer: { row:45, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,22] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    protensao_cabos: {
+      b64: FVS_TPL_protensao_cabos, mode:"dynamic", startCol:10, unidadesRow:6,
+      bannerFix: { removeRegion:[6,10,6,23] },
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [7,8],[9],[10],[11],[12],[13],[14] ],
+      nc: { rows:[18,21], cols:{desc:[1,8], correcao:[9,15], data:[16,23]} },
+      obs: { rows:[23,27], cols:[1,23] },
+      footer: { row:28, cols:{ inspecionado:[1,4], dataAbertura:[5,8], engenheiro:[9,15], dataFechamento:[16,23] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    guarda_corpo: {
+      b64: FVS_TPL_guarda_corpo, mode:"dynamic", startCol:10, unidadesRow:6,
+      bannerFix: { removeRegion:[6,10,6,23] },
+      header: [ {field:"obra", cell:"B4"}, {field:"local", cell:"L5"} ],
+      itemRows: [ [7,8,9,10],[11],[12],[13],[14] ],
+      nc: { rows:[18,21], cols:{desc:[1,8], correcao:[9,15], data:[16,23]} },
+      obs: { rows:[23,28], cols:[1,23] },
+      footer: { row:29, cols:{ inspecionado:[1,4], dataAbertura:[5,8], engenheiro:[9,15], dataFechamento:[16,23] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    },
+    preservacao_produto_acabado: {
+      b64: FVS_TPL_preservacao_produto_acabado, mode:"single",
+      header: [ {field:"obra", cell:"B5"}, {field:"local", cell:"J6", prefix:"LOCAL: "} ],
+      itemCells: [
+        ["J8"],["J9"],["J10"],["J11"],["J12"],["J13"],["J14"],["J15"],["J16"],["J17"],
+        ["J18"],["J19"],["J20"],["J21"],["J22"],["J23"],["J24"],["J25"],["J26"],["J27"],
+        ["J28"],["J29"],["J30"],["J31"],["J32"],["J33"],["J34"],["J35"],["J36"],["J37"]
+      ],
+      nc: { rows:[41,47], cols:{desc:[1,8], correcao:[9,17], data:[18,26]} },
+      obs: { rows:[49,54], cols:[1,26] },
+      footer: { row:55, cols:{ inspecionado:[1,5], dataAbertura:[6,10], engenheiro:[11,17], dataFechamento:[18,26] },
+        labels:{ inspecionado:" Inspecionado  por: ", dataAbertura:"Data de abertura da RVS: ", engenheiro:"ENGENHEIRO", dataFechamento:"Data de fechamento da RVS: " } }
+    }
+  };
+
+  var STATUS_FILL_FVS = {NA:"E9E9E4", P:"DDEFE1", X:"F5DEDA", V:"E9E9E7"};
+  var STATUS_FONT_FVS = {NA:"666666", P:"1B5E20", X:"8E1B0F", V:"1A1A1A"};
+  var STATUS_FONT_NAME_FVS = {NA:"Calibri", P:"Wingdings 2", X:"Calibri", V:"Wingdings 2"};
+
+  function paintMark(sheetXml, state, addrs, v){
+    sheetXml = xmlSetCellText(sheetXml, addrs[0], v);
+    addrs.forEach(function(addr){
+      var base = xmlGetCellStyleId(sheetXml, addr);
+      var ns = ensureColoredStyle(state, base, STATUS_FILL_FVS[v], STATUS_FONT_FVS[v], STATUS_FONT_NAME_FVS[v]);
+      sheetXml = xmlSetCellStyleId(sheetXml, addr, ns);
+    });
+    return sheetXml;
+  }
+
+  function fillChecklistItemsTemplate(sheetXml, state, d, layout, tipoInfo){
+    var flat = 0;
+    if(layout.mode==="single"){
+      tipoInfo.checklist.forEach(function(cat, ci){
+        cat.itens.forEach(function(it, ii){
+          var key = ci+"-"+ii;
+          var v = (d.checklist[key]||{})["_unico"];
+          var addrs = layout.itemCells[flat];
+          if(v && STATUS_FILL_FVS[v] && addrs) sheetXml = paintMark(sheetXml, state, addrs, v);
+          flat++;
+        });
+      });
+    } else {
+      var unidades = d.unidades||[];
+      // colUnidade: por padrão, cada unidade ocupa 1 coluna a partir de
+      // startCol. Modelos com grade irregular (ex.: 3 vãos de largura
+      // desigual) podem informar layout.unitCols = [[c1,c2,...], ...] — um
+      // grupo de colunas por unidade; usamos sempre a 1ª coluna do grupo
+      // (a célula mesclada já cobre visualmente as demais).
+      function colUnidade(ui){
+        if(layout.unitCols){
+          var grp = layout.unitCols[ui];
+          return grp ? grp[0] : null;
+        }
+        return layout.startCol+ui;
+      }
+      if(layout.unidadesRow){
+        // unidadesRow pode ser um único número (padrão) ou uma lista de
+        // linhas — cada uma um número, ou {row, prefix} quando o modelo
+        // já tem um rótulo impresso na célula (ex.: "PAINEL:", "TIRANTE Nº")
+        // e o valor deve ser escrito logo após esse rótulo.
+        var uRows = Array.isArray(layout.unidadesRow) ? layout.unidadesRow : [layout.unidadesRow];
+        uRows.forEach(function(ur){
+          var rowNum = (ur && typeof ur === "object") ? ur.row : ur;
+          var prefix = (ur && typeof ur === "object" && ur.prefix) ? ur.prefix : "";
+          unidades.forEach(function(u, ui){
+            var col = colUnidade(ui);
+            if(col==null) return;
+            sheetXml = xmlSetCellText(sheetXml, colLetter(col)+rowNum, prefix+u);
+          });
+        });
+      }
+      tipoInfo.checklist.forEach(function(cat, ci){
+        cat.itens.forEach(function(it, ii){
+          var key = ci+"-"+ii;
+          var porUnidade = d.checklist[key]||{};
+          var rows = layout.itemRows[flat];
+          unidades.forEach(function(u, ui){
+            var v = porUnidade[u];
+            var col = colUnidade(ui);
+            if(v && STATUS_FILL_FVS[v] && rows && col!=null){
+              var addrs = rows.map(function(r){ return colLetter(col)+r; });
+              sheetXml = paintMark(sheetXml, state, addrs, v);
+            }
+          });
+          flat++;
+        });
+      });
+    }
+    return sheetXml;
+  }
+
+  // Concatena todas as não conformidades da ficha (agora uma lista, ver
+  // fichaNaoConformidades()) em texto de múltiplas linhas — o modelo impresso
+  // continua tendo só uma área fixa por campo (descrição/correção/data), então
+  // em vez de reservar uma linha por não conformidade no layout, cada célula
+  // recebe o texto de todas elas, numeradas, separadas por linha em branco.
+  function textoNcConcatenado(ncs, campo){
+    if(!ncs.length) return "";
+    if(ncs.length===1) return ncs[0][campo]||"";
+    return ncs.map(function(nc, i){ return (i+1)+") "+(nc[campo]||""); }).join("\n\n");
+  }
+  function fillNcObsFooterTemplate(sheetXml, state, d, layout){
+    var ncs = fichaNaoConformidades(d);
+    if(layout.nc && ncs.length){
+      var nc = layout.nc;
+      [["desc", textoNcConcatenado(ncs,"descricao")], ["correcao", textoNcConcatenado(ncs,"correcao")],
+       ["data", ncs.map(function(n){ return n.concluida && n.dataConclusao ? fmtDateBR(n.dataConclusao) : "Em aberto"; }).join("\n")]].forEach(function(pair){
+        var cc = nc.cols[pair[0]];
+        var addr = colLetter(cc[0])+nc.rows[0];
+        sheetXml = xmlSetCellText(sheetXml, addr, pair[1]);
+        sheetXml = xmlRemoveMergesWithin(sheetXml, nc.rows[0], cc[0], nc.rows[1], cc[1]);
+        sheetXml = xmlAddMerge(sheetXml, addr+":"+colLetter(cc[1])+nc.rows[1]);
+        var base = xmlGetCellStyleId(sheetXml, addr);
+        var ns = ensureWrapStyle(state, base);
+        sheetXml = xmlSetCellStyleId(sheetXml, addr, ns);
+      });
+    }
+    if(layout.obs && d.observacoes){
+      var obs = layout.obs;
+      var addr = colLetter(obs.cols[0])+obs.rows[0];
+      sheetXml = xmlSetCellText(sheetXml, addr, d.observacoes);
+      sheetXml = xmlRemoveMergesWithin(sheetXml, obs.rows[0], obs.cols[0], obs.rows[1], obs.cols[1]);
+      sheetXml = xmlAddMerge(sheetXml, addr+":"+colLetter(obs.cols[1])+obs.rows[1]);
+      var base = xmlGetCellStyleId(sheetXml, addr);
+      var ns = ensureWrapStyle(state, base);
+      sheetXml = xmlSetCellStyleId(sheetXml, addr, ns);
+    }
+    if(layout.footer){
+      var f = layout.footer, r = f.row, L = f.labels;
+      if(f.cols.inspecionado) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.inspecionado[0])+r, (L.inspecionado||"")+(d.inspecionadoPor||"")+"\n\n___________________________");
+      if(f.cols.dataAbertura) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.dataAbertura[0])+r, (L.dataAbertura||"")+(d.dataAbertura?fmtDateBR(d.dataAbertura):"_______ / _______ / _______"));
+      if(f.cols.engenheiro) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.engenheiro[0])+r, (L.engenheiro||"ENGENHEIRO")+": "+(d.engenheiro||"")+"\n\n__________________________________");
+      if(f.cols.dataFechamento) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.dataFechamento[0])+r, (L.dataFechamento||"")+(d.dataFechamento?fmtDateBR(d.dataFechamento):"_______/_______/_______"));
+    }
+    return sheetXml;
+  }
+
+  function exportFvsXlsxFromTemplate(d){
+    var layout = FVS_LAYOUTS[d.tipo];
+    var tipoInfo = getFvsTipo(d.tipo);
+    if(!layout || !tipoInfo){ exportFvsXlsxGenerico(d); return; }
+    carregarModelo(layout.b64).then(function(zip){
+      return Promise.all([
+        zip.file("xl/worksheets/sheet1.xml").async("string"),
+        zip.file("xl/styles.xml").async("string")
+      ]).then(function(res){
+        var sheetXml = res[0], stylesXml = res[1];
+        var state = { stylesXml: stylesXml, styleCache: {} };
+
+        if(layout.bannerFix){
+          // bannerFix pode ser um único ajuste ou uma lista deles (quando mais
+          // de uma faixa mesclada precisa ser desfeita antes de liberar as
+          // colunas de unidade para escrita individual).
+          var fixes = Array.isArray(layout.bannerFix) ? layout.bannerFix : [layout.bannerFix];
+          fixes.forEach(function(bf){
+            var rr = bf.removeRegion;
+            sheetXml = xmlRemoveMergesWithin(sheetXml, rr[0], rr[1], rr[2], rr[3]);
+            if(bf.newMergeRef) sheetXml = xmlAddMerge(sheetXml, bf.newMergeRef);
+          });
+        }
+
+        layout.header.forEach(function(h){
+          sheetXml = xmlSetCellText(sheetXml, h.cell, (h.prefix||"")+(d[h.field]||""));
+        });
+
+        sheetXml = fillChecklistItemsTemplate(sheetXml, state, d, layout, tipoInfo);
+        sheetXml = fillNcObsFooterTemplate(sheetXml, state, d, layout);
+
+        stylesXml = state.stylesXml;
+        zip.file("xl/worksheets/sheet1.xml", sheetXml);
+        zip.file("xl/styles.xml", stylesXml);
+        return zip.generateAsync({type:"blob"});
+      });
+    }).then(function(blob){
+      triggerDownload(blob, safeName(tipoInfo.codigo)+"_"+safeName(d.numero)+".xlsx");
+    }).catch(function(err){
+      console.error("Falha ao exportar FVS ("+d.tipo+"):", err);
+      alert("Não foi possível gerar o Excel desta ficha. Tente novamente.");
+    });
+  }
+
+
+  function exportFvsXlsxGenerico(d){
+    try{
+      var tipoInfo = getFvsTipo(d.tipo);
+      var isSingle = tipoInfo && tipoInfo.unidades && tipoInfo.unidades.mode==="single";
+      var unidades = isSingle ? ["Resultado"] : (d.unidades||[]).slice();
+
+      var rows = [];
+      rows.push([(tipoInfo?tipoInfo.codigo+" — "+tipoInfo.titulo:d.codigo+" — "+d.descricao)]);
+      rows.push(["Obra", d.obra||"", "Local", d.local||""]);
+      rows.push(["Nº da ficha", d.numero||"", "Data de abertura", d.dataAbertura?fmtDateBR(d.dataAbertura):""]);
+      rows.push(["Inspecionado por", d.inspecionadoPor||"", "Engenheiro responsável", d.engenheiro||""]);
+      rows.push(["Data de concretagem", d.dataConcretagem?fmtDateBR(d.dataConcretagem):"", "Data de fechamento", d.dataFechamento?fmtDateBR(d.dataFechamento):""]);
+      rows.push([]);
+
+      if(!isSingle && unidades.length===0){
+        rows.push(["(nenhuma unidade adicionada nesta ficha)"]);
+      } else if(tipoInfo){
+        rows.push(["Item","Método / Critério","Tolerância"].concat(unidades));
+        tipoInfo.checklist.forEach(function(cat, ci){
+          if(cat.cat) rows.push([cat.cat]);
+          cat.itens.forEach(function(it, ii){
+            var key=ci+"-"+ii;
+            var porGrupo = d.checklist[key] || {};
+            var line = [it.n||"", it.m||"", it.tol||""];
+            unidades.forEach(function(u){
+              var gk = isSingle ? "_unico" : u;
+              line.push(porGrupo[gk] || "");
+            });
+            rows.push(line);
+          });
+        });
+      }
+
+      rows.push([]);
+      var ncsGenerico = fichaNaoConformidades(d);
+      if(ncsGenerico.length){
+        rows.push(["Não conformidades ("+ncsGenerico.length+")"]);
+        ncsGenerico.forEach(function(nc, ni){
+          rows.push(["Não conformidade "+(ni+1)+" — descrição", nc.descricao||""]);
+          rows.push(["Não conformidade "+(ni+1)+" — correção proposta", nc.correcao||""]);
+          rows.push(["Não conformidade "+(ni+1)+" — situação", nc.concluida ? "Concluída em "+(nc.dataConclusao?fmtDateBR(nc.dataConclusao):"") : "Em aberto"]);
+        });
+      }
+      if(d.observacoes) rows.push(["Observações", d.observacoes]);
+
+      var ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [{wch:34},{wch:40},{wch:14}].concat(unidades.map(function(){ return {wch:16}; }));
+      if(ws["A1"]) ws["A1"].s = {font:{bold:true, sz:13}};
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, safeName(tipoInfo?tipoInfo.codigo:"FVS").slice(0,31));
+      var wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+      triggerDownload(new Blob([wbout], {type:"application/octet-stream"}), "FVS_"+safeName(d.codigo)+"_"+safeName(d.numero)+".xlsx");
+    }catch(err){
+      console.error("Falha ao exportar FVS (tipo novo):", err);
+      alert("Não foi possível gerar o Excel desta ficha. Tente novamente.");
+    }
+  }
+
+  function exportFvsXlsx(d){
+    if(d.tipo && d.tipo!=="fvs04"){
+      if(FVS_LAYOUTS[d.tipo]) exportFvsXlsxFromTemplate(d); else exportFvsXlsxGenerico(d);
+      return;
+    }
+    carregarModelo(FVS_TEMPLATE_B64).then(function(orig){
+      var sheetFile = "xl/worksheets/sheet3.xml"; // aba "FVS 04" do modelo oficial (as outras 2 abas são exemplos, descartadas abaixo)
+      return Promise.all([
+        orig.file(sheetFile).async("string"),
+        orig.file("xl/worksheets/_rels/sheet3.xml.rels").async("string"),
+        orig.file("xl/styles.xml").async("string"),
+        orig.file("xl/theme/theme1.xml").async("string"),
+        orig.file("xl/drawings/drawing3.xml").async("string"),
+        orig.file("xl/drawings/_rels/drawing3.xml.rels").async("string"),
+        orig.file("xl/media/image2.png").async("uint8array"),
+        orig.file("xl/sharedStrings.xml").async("string")
+      ]).then(function(res){
+        var sheetXml = res[0], sheetRelsXml = res[1], stylesXml = res[2], themeXml = res[3],
+            drawingXml = res[4], drawingRelsXml = res[5], imageBytes = res[6], sharedStringsXml = res[7];
+        var state = { stylesXml: stylesXml, styleCache: {} };
+
+        sheetXml = xmlSetCellText(sheetXml, "B4", (d.obra||"") + (d.numero ? "   |   Nº da ficha: "+d.numero : ""));
+        sheetXml = xmlSetCellText(sheetXml, "L5", (d.local||"") + (d.dataConcretagem ? "   |   Concretagem: "+fmtDateBR(d.dataConcretagem) : ""));
+
+        // O modelo reserva 5 blocos de colunas ao lado de cada item do checklist
+        // (cabeçalho "LOCAL:" na linha 6) — um por elemento estrutural. Cada
+        // bloco recebe seu cabeçalho fixo, e cada item do checklist é marcado
+        // com o resultado (NA/Aprovado/Reprovado/Reinspecionado, mesma cor da
+        // legenda impressa) só nos elementos marcados nesta ficha — os demais
+        // ficam em branco. Como cada bloco é uma mesclagem (ex: J6:L6), o estilo
+        // novo é aplicado em todas as colunas por trás dela, não só na primeira.
+        var STATUS_FILL = {NA:"E9E9E4", P:"DDEFE1", X:"F5DEDA", V:"E9E9E7"};
+        var STATUS_FONT = {NA:"666666", P:"1B5E20", X:"8E1B0F", V:"1A1A1A"};
+        // A legenda impressa do modelo oficial não usa a letra "P" nem "V" como
+        // texto comum — ela usa esses mesmos caracteres só que na fonte "Wingdings
+        // 2", que troca o glifo por um símbolo (✓ para aprovado, e o símbolo de
+        // reinspecionado/aprovado). Para a marcação do checklist bater com a
+        // legenda, usamos a mesma fonte nesses dois casos; NA e X continuam em
+        // texto normal (Calibri), igual à legenda também os mostra.
+        var STATUS_FONT_NAME = {NA:"Calibri", P:"Wingdings 2", X:"Calibri", V:"Wingdings 2"};
+
+        FVS_ELEMENTOS.forEach(function(el){
+          sheetXml = xmlSetCellText(sheetXml, el.cols[0]+"6", el.label.toUpperCase());
+        });
+
+        var flat = 0;
+        FVS_CHECKLIST.forEach(function(cat, ci){
+          cat.itens.forEach(function(it, ii){
+            var row = 7 + flat; // linha 7 do modelo = primeiro item do checklist
+            var key = ci+"-"+ii;
+            var porElemento = d.checklist[key] || {};
+            FVS_ELEMENTOS.forEach(function(el){
+              if(!(d.elementos||{})[el.key]) return; // elemento não avaliado nesta ficha — coluna fica em branco
+              var v = porElemento[el.key];
+              if(!v || !STATUS_FILL[v]) return;
+              var cols = el.cols;
+              sheetXml = xmlSetCellText(sheetXml, cols[0]+row, v);
+              cols.forEach(function(col){
+                var addr = col+row;
+                var baseStyle = xmlGetCellStyleId(sheetXml, addr);
+                var newStyle = ensureColoredStyle(state, baseStyle, STATUS_FILL[v], STATUS_FONT[v], STATUS_FONT_NAME[v]);
+                sheetXml = xmlSetCellStyleId(sheetXml, addr, newStyle);
+              });
+            });
+            flat++;
+          });
+        });
+
+        // O modelo traz o bloco de não-conformidade/observação pré-dividido em
+        // várias mesclagens pequenas (uma por linha, pensadas para preenchimento à
+        // mão) — troca por uma mesclagem única alta, com quebra de linha, para o
+        // texto digitado caber e alinhar como no restante do sistema.
+        var ncsFvs04 = fichaNaoConformidades(d);
+        if(ncsFvs04.length){
+          sheetXml = xmlSetCellText(sheetXml, "A29", textoNcConcatenado(ncsFvs04,"descricao"));
+          sheetXml = xmlSetCellText(sheetXml, "I29", textoNcConcatenado(ncsFvs04,"correcao"));
+          sheetXml = xmlSetCellText(sheetXml, "R29", ncsFvs04.map(function(n){ return n.concluida && n.dataConclusao ? fmtDateBR(n.dataConclusao) : "Em aberto"; }).join("\n"));
+          sheetXml = xmlRemoveMergesWithin(sheetXml, 29,1,33,8);
+          sheetXml = xmlAddMerge(sheetXml, "A29:H33");
+          sheetXml = xmlRemoveMergesWithin(sheetXml, 29,9,33,17);
+          sheetXml = xmlAddMerge(sheetXml, "I29:Q33");
+          sheetXml = xmlRemoveMergesWithin(sheetXml, 29,18,33,25);
+          sheetXml = xmlAddMerge(sheetXml, "R29:Y33");
+          ["A29","I29","R29"].forEach(function(addr){
+            var baseStyle = xmlGetCellStyleId(sheetXml, addr);
+            var newStyle = ensureWrapStyle(state, baseStyle);
+            sheetXml = xmlSetCellStyleId(sheetXml, addr, newStyle);
+          });
+        }
+
+        if(d.observacoes){
+          sheetXml = xmlSetCellText(sheetXml, "A35", d.observacoes);
+          sheetXml = xmlRemoveMergesWithin(sheetXml, 35,1,41,25);
+          sheetXml = xmlAddMerge(sheetXml, "A35:Y41");
+          var baseStyleObs = xmlGetCellStyleId(sheetXml, "A35");
+          var newStyleObs = ensureWrapStyle(state, baseStyleObs);
+          sheetXml = xmlSetCellStyleId(sheetXml, "A35", newStyleObs);
+        }
+
+        sheetXml = xmlSetCellText(sheetXml, "A42", " Inspecionado por: "+(d.inspecionadoPor||"")+"\n\n___________________________");
+        sheetXml = xmlSetCellText(sheetXml, "F42", "Data de abertura da FVS: \n\n"+(d.dataAbertura ? fmtDateBR(d.dataAbertura) : "_______ / _______ / _______"));
+        sheetXml = xmlSetCellText(sheetXml, "K42", "ENGENHEIRO: "+(d.engenheiro||"")+"\n\n__________________________________");
+        sheetXml = xmlSetCellText(sheetXml, "S42", "Data de fechamento da FVS: \n\n"+(d.dataFechamento ? fmtDateBR(d.dataFechamento) : "_______/_______/_______"));
+
+        stylesXml = state.stylesXml;
+
+        // O arquivo original traz 3 abas (2 são exemplos preenchidos de outra
+        // obra); montamos um pacote .xlsx novo e mínimo contendo só a aba "FVS 04"
+        // preenchida — reaproveitando sem qualquer alteração os arquivos internos
+        // de estilo, tema, logo e tabela de textos do modelo oficial.
+        var out = new JSZip();
+        out.file("[Content_Types].xml",
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'+
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+
+          '<Default Extension="xml" ContentType="application/xml"/>'+
+          '<Default Extension="png" ContentType="image/png"/>'+
+          '<Default Extension="jpeg" ContentType="image/jpeg"/>'+
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+          '<Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'+
+          '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+
+          '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'+
+          '<Override PartName="/xl/drawings/drawing3.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'+
+          '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'+
+          '</Types>');
+        out.file("_rels/.rels",
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'+
+          '</Relationships>');
+        out.file("xl/workbook.xml",
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+          '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'+
+          '<sheets><sheet name="FVS 04" sheetId="1" r:id="rId1"/></sheets></workbook>');
+        out.file("xl/_rels/workbook.xml.rels",
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>'+
+          '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'+
+          '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>'+
+          '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'+
+          '</Relationships>');
+        out.file(sheetFile, sheetXml);
+        out.file("xl/worksheets/_rels/sheet3.xml.rels", sheetRelsXml);
+        out.file("xl/styles.xml", stylesXml);
+        out.file("xl/theme/theme1.xml", themeXml);
+        out.file("xl/drawings/drawing3.xml", drawingXml);
+        out.file("xl/drawings/_rels/drawing3.xml.rels", drawingRelsXml);
+        out.file("xl/media/image2.png", imageBytes);
+        out.file("xl/sharedStrings.xml", sharedStringsXml);
+
+        return out.generateAsync({type:"blob"});
+      });
+    }).then(function(blob){
+      triggerDownload(blob, "FVS_"+safeName(d.codigo)+"_"+safeName(d.numero)+".xlsx");
+    }).catch(function(err){
+      console.error("Falha ao exportar FVS:", err);
+      alert("Não foi possível gerar o Excel da FVS. Tente novamente.");
+    });
+  }
+
+  function exportRastXlsx(d){
+    carregarModelo(RAST_TEMPLATE_B64).then(function(zip){
+      return Promise.all([
+        zip.file("xl/worksheets/sheet1.xml").async("string"),
+        zip.file("xl/styles.xml").async("string")
+      ]).then(function(res){
+        var sheetXml = res[0], stylesXml = res[1];
+        var state = { stylesXml: stylesXml, styleCache: {} };
+
+        sheetXml = xmlSetCellText(sheetXml, "N1", "NOME DA OBRA: "+(d.obra||""));
+        sheetXml = xmlSetCellText(sheetXml, "U1", (d.blocoPav ? "  "+d.blocoPav : ""));
+        sheetXml = xmlSetCellText(sheetXml, "D2", "Projeto de Referência: "+(d.projetoReferencia||""));
+        sheetXml = xmlSetCellText(sheetXml, "J2", "Slump (aprovado pela obra): "+(d.slumpAprovado||""));
+        sheetXml = xmlSetCellText(sheetXml, "L2", "FCK solicitado: "+(d.fckSolicitado||""));
+        // Rótulo+valor na mesma célula mesclada — o modelo não reserva uma célula
+        // em branco ao lado para o valor (pensado para preenchimento à mão, mais
+        // curto). Ativar quebra de linha e aumentar a altura das linhas 1 e 2 evita
+        // que o texto digitado pelo sistema corte ou sobreponha a célula vizinha.
+        ["N1","U1","D2","J2","L2"].forEach(function(addr){
+          var baseStyle = xmlGetCellStyleId(sheetXml, addr);
+          var newStyle = ensureWrapStyle(state, baseStyle);
+          sheetXml = xmlSetCellStyleId(sheetXml, addr, newStyle);
+        });
+        sheetXml = xmlSetRowHeight(sheetXml, 1, 34); // linha 1
+        sheetXml = xmlSetRowHeight(sheetXml, 2, 46); // linha 2
+
+        var ROWS = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]; // 17 betonadas no modelo impresso
+        (d.linhas||[]).slice(0, ROWS.length).forEach(function(l, idx){
+          var r = ROWS[idx];
+          var gasto = diffMin(l.saidaUsina, l.lancFinal);
+          var over = gasto!=null && gasto>TEMPO_MAX_MIN;
+          sheetXml = xmlSetCellText(sheetXml, "A"+r, l.seq||"");
+          sheetXml = xmlSetCellText(sheetXml, "C"+r, l.notaFiscal||"");
+          sheetXml = xmlSetCellText(sheetXml, "D"+r, l.betoneira||"");
+          sheetXml = xmlSetCellText(sheetXml, "E"+r, l.lacre||"");
+          sheetXml = xmlSetCellText(sheetXml, "F"+r, l.volBetoneira||"");
+          sheetXml = xmlSetCellText(sheetXml, "G"+r, l.volAcumulado||"");
+          sheetXml = xmlSetCellText(sheetXml, "H"+r, l.fornecedor||"");
+          sheetXml = xmlSetCellText(sheetXml, "I"+r, l.nSerieCP||"");
+          sheetXml = xmlSetCellText(sheetXml, "J"+r, l.nCPs||"");
+          sheetXml = xmlSetCellText(sheetXml, "K"+r, l.slump||"");
+          sheetXml = xmlSetCellText(sheetXml, "L"+r, l.saidaUsina||"");
+          sheetXml = xmlSetCellText(sheetXml, "M"+r, l.chegadaObra||"");
+          sheetXml = xmlSetCellText(sheetXml, "N"+r, l.lancInicial||"");
+          sheetXml = xmlSetCellText(sheetXml, "O"+r, l.lancFinal||"");
+          sheetXml = xmlSetCellText(sheetXml, "P"+r, fmtMin(gasto));
+          if(over){
+            var baseStyle = xmlGetCellStyleId(sheetXml, "P"+r);
+            var newStyle = ensureColoredStyle(state, baseStyle, "F5DEDA", "8E1B0F");
+            sheetXml = xmlSetCellStyleId(sheetXml, "P"+r, newStyle);
+          }
+          sheetXml = xmlSetCellText(sheetXml, "Q"+r, l.aguaFolga||"");
+          sheetXml = xmlSetCellText(sheetXml, "R"+r, l.aguaLanc||"");
+          sheetXml = xmlSetCellText(sheetXml, "S"+r, l.pecas||"");
+        });
+
+        sheetXml = xmlSetCellText(sheetXml, "L23", d.acoesCorretivas||"");
+        // A célula já vem com quebra de linha automática no próprio modelo
+        // (herdada do estilo original), mas a linha 23 é fixada em só 9pt de
+        // altura — o suficiente para uma anotação curta feita à mão, mas não
+        // para um texto de observações/ações corretivas mais longo digitado
+        // no sistema, que ficaria cortado visualmente mesmo com a quebra
+        // ligada. Aumenta só a altura dessa linha quando o texto não cabe,
+        // sem tocar em colunas, mesclagens ou qualquer outro elemento do
+        // layout da planilha.
+        if(d.acoesCorretivas && d.acoesCorretivas.length > 40){
+          var linhasEstimadasL23 = Math.ceil(d.acoesCorretivas.length / 70);
+          var alturaL23 = Math.min(90, Math.max(9, linhasEstimadasL23 * 13));
+          sheetXml = xmlSetRowHeight(sheetXml, 23, alturaL23);
+        }
+        if(d.dataFechamento) sheetXml = xmlSetCellText(sheetXml, "B25", fmtDateBR(d.dataFechamento));
+        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+(d.responsavelColeta||""));
+        sheetXml = xmlSetCellText(sheetXml, "S25", "  "+(d.engenheiro||""));
+        var baseStyleE25 = xmlGetCellStyleId(sheetXml, "E25");
+        var newStyleE25 = ensureWrapStyle(state, baseStyleE25);
+        sheetXml = xmlSetCellStyleId(sheetXml, "E25", newStyleE25);
+        sheetXml = xmlSetRowHeight(sheetXml, 25, 34); // linha 25
+
+        sheetXml = xmlAddPageSetupLandscape(sheetXml);
+
+        stylesXml = state.stylesXml;
+        zip.file("xl/worksheets/sheet1.xml", sheetXml);
+        zip.file("xl/styles.xml", stylesXml);
+
+        return zip.generateAsync({type:"blob"});
+      });
+    }).then(function(blob){
+      triggerDownload(blob, "Rastreabilidade_"+safeName(d.numero)+"_"+(d.data||"sem_data")+".xlsx");
+    }).catch(function(err){
+      console.error("Falha ao exportar Rastreabilidade:", err);
+      alert("Não foi possível gerar o Excel de Rastreabilidade. Tente novamente.");
+    });
+  }
+
+
+  // Atualiza o "tempo gasto"/alerta de estouro de cada betonada em tempo real,
+  // SEM recriar os campos de horário — só mexe no <span> do "Tempo gasto" de
+  // cada linha e no banner de estouro no topo do modal. Importante: um
+  // <input type="time"> já fica "completo" (e dispara "change") assim que o
+  // 1º dígito do minuto forma um valor válido (ex.: "2" vira "02"), ou seja,
+  // bem antes do usuário terminar de digitar o 2º dígito. Se essa atualização
+  // chamasse renderModal() (que recria todo o HTML do modal), o campo de
+  // horário seria destruído nesse meio tempo e o 2º dígito se perderia — foi
+  // exatamente esse o bug relatado ("só deixa digitar o 1º número dos
+  // minutos"). Por isso essa função nunca toca nos <input>, só no texto ao
+  // lado.
+  function refreshTemposGasto(){
+    if(!draft || draft.type!=="rast") return;
+    var m = document.getElementById("modal");
+    (draft.data.linhas||[]).forEach(function(l, idx){
+      var span = m.querySelector('[data-tempo-idx="'+idx+'"]');
+      if(!span) return;
+      var gasto = diffMin(l.saidaUsina, l.lancFinal);
+      var over = gasto!=null && gasto>TEMPO_MAX_MIN;
+      span.className = over ? "overrun" : "";
+      span.textContent = fmtMin(gasto);
+    });
+    var banner = m.querySelector("#rast-overrun-banner");
+    if(banner) banner.style.display = rastOverrun(draft.data) ? "" : "none";
+  }
+
+  /* ---------------- modal events ---------------- */
+  function wireModalEvents(){
+    var m=document.getElementById("modal");
+    m.querySelector("#modal-close").addEventListener("click", tentarFecharModal);
+
+    m.querySelectorAll("[data-field]").forEach(function(el){
+      el.addEventListener("input", function(){ draft.data[el.getAttribute("data-field")] = el.value; });
+    });
+
+    // Chips de "Pavimentos" — comum a FVS e Rastreabilidade (uma ficha pode
+    // cobrir mais de um pavimento; ver pavimentosFieldHtml()).
+    (function(){
+      var addPav=m.querySelector("#add-pavimento");
+      if(addPav) addPav.addEventListener("click", function(){
+        var inputEl=m.querySelector("#nova-pavimento");
+        var nome=(inputEl.value||"").trim();
+        if(!nome) return;
+        if(!draft.data.pavimentos) draft.data.pavimentos=[];
+        if(draft.data.pavimentos.indexOf(nome)!==-1){ alert("Esse pavimento já foi adicionado."); return; }
+        draft.data.pavimentos.push(nome);
+        renderModal();
+      });
+      var novaPavInput=m.querySelector("#nova-pavimento");
+      if(novaPavInput) novaPavInput.addEventListener("keydown", function(e){
+        if(e.key==="Enter"){ e.preventDefault(); m.querySelector("#add-pavimento").click(); }
+      });
+      m.querySelectorAll("[data-rm-pavimento]").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          var idx=+btn.getAttribute("data-rm-pavimento");
+          draft.data.pavimentos.splice(idx,1);
+          renderModal();
+        });
+      });
+    })();
+
+    if(draft.type==="fvs"){
+      m.querySelectorAll("[data-elemento]").forEach(function(el){
+        if(el.tagName==="INPUT"){
+          el.addEventListener("change", function(){
+            var key=el.getAttribute("data-elemento");
+            draft.data.elementos[key] = el.checked;
+            renderModal();
+          });
+        }
+      });
+      m.querySelectorAll("[data-check]").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          var key=btn.getAttribute("data-check"), elemento=btn.getAttribute("data-elemento"), v=btn.getAttribute("data-v");
+          if(!draft.data.checklist[key]) draft.data.checklist[key] = {};
+          draft.data.checklist[key][elemento] = (draft.data.checklist[key][elemento]===v) ? "" : v;
+          renderModal();
+        });
+      });
+      var addUnidade=m.querySelector("#add-unidade");
+      if(addUnidade) addUnidade.addEventListener("click", function(){
+        var inputEl=m.querySelector("#nova-unidade");
+        var nome=(inputEl.value||"").trim();
+        if(!nome) return;
+        if(!draft.data.unidades) draft.data.unidades=[];
+        if(draft.data.unidades.indexOf(nome)!==-1){ alert("Já existe uma unidade com esse nome."); return; }
+        draft.data.unidades.push(nome);
+        renderModal();
+      });
+      var novaUnidadeInput=m.querySelector("#nova-unidade");
+      if(novaUnidadeInput) novaUnidadeInput.addEventListener("keydown", function(e){
+        if(e.key==="Enter"){ e.preventDefault(); m.querySelector("#add-unidade").click(); }
+      });
+      m.querySelectorAll("[data-rm-unidade]").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          var idx=+btn.getAttribute("data-rm-unidade");
+          var nome=(draft.data.unidades||[])[idx];
+          draft.data.unidades.splice(idx,1);
+          if(nome){
+            Object.keys(draft.data.checklist||{}).forEach(function(k){
+              if(draft.data.checklist[k] && Object.prototype.hasOwnProperty.call(draft.data.checklist[k], nome)){
+                delete draft.data.checklist[k][nome];
+              }
+            });
+          }
+          renderModal();
+        });
+      });
+      // Lista de "não conformidades" desta ficha — ver ncListFieldHtml(). Os
+      // campos de texto/data usam "input" sem re-render (pra não perder o
+      // foco/cursor enquanto a pessoa digita, igual às linhas de
+      // rastreabilidade); adicionar, remover ou marcar "Concluída" muda a
+      // quantidade/aparência de itens, então esses sim re-renderizam.
+      var addNc=m.querySelector("#add-nc");
+      if(addNc) addNc.addEventListener("click", function(){
+        if(!Array.isArray(draft.data.naoConformidades)) draft.data.naoConformidades=[];
+        draft.data.naoConformidades.push(blankNaoConformidade());
+        renderModal();
+      });
+      m.querySelectorAll("[data-rm-nc]").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          var idx=+btn.getAttribute("data-rm-nc");
+          draft.data.naoConformidades.splice(idx,1);
+          renderModal();
+        });
+      });
+      m.querySelectorAll("[data-nc-field]").forEach(function(el){
+        el.addEventListener("input", function(){
+          var idx=+el.getAttribute("data-nc-idx"), f=el.getAttribute("data-nc-field");
+          draft.data.naoConformidades[idx][f]=el.value;
+        });
+      });
+      m.querySelectorAll("[data-nc-concluida]").forEach(function(chk){
+        chk.addEventListener("change", function(){
+          var idx=+chk.getAttribute("data-nc-concluida");
+          var nc = draft.data.naoConformidades[idx];
+          nc.concluida = chk.checked;
+          if(nc.concluida && !nc.dataConclusao) nc.dataConclusao = todayISO();
+          renderModal();
+        });
+      });
+      // Anexos (fotos/documentos) de cada não conformidade: enviar direto
+      // pro Cloudinary a partir do navegador (sem servidor), guardando só a
+      // URL retornada na própria não conformidade. Remover um anexo tenta
+      // excluir o arquivo de vez do Cloudinary via delete_by_token, mas só
+      // funciona nos 10 minutos após o envio (limite do próprio Cloudinary
+      // pra exclusão sem senha) — passado esse prazo, ou se a exclusão
+      // falhar por qualquer motivo, o anexo é desvinculado da ficha do
+      // mesmo jeito, só que o arquivo permanece guardado no Cloudinary.
+      m.querySelectorAll("[data-nc-anexo-input]").forEach(function(input){
+        input.addEventListener("change", async function(){
+          var idx = +input.getAttribute("data-nc-anexo-input");
+          var files = Array.prototype.slice.call(input.files||[]);
+          if(!files.length) return;
+          var statusEl = m.querySelector('[data-nc-anexo-status="'+idx+'"]');
+          delete ncAnexoErro[idx];
+          if(!cloudinaryConfigurado()){
+            ncAnexoErro[idx] = "Envio de anexos ainda não configurado neste sistema (falta ligar a conta do Cloudinary — ver comentário no topo do código).";
+            if(statusEl){ statusEl.textContent = ncAnexoErro[idx]; statusEl.className = "nc-anexo-status err"; }
+            input.value = "";
+            return;
+          }
+          var nc = draft.data.naoConformidades[idx];
+          for(var i=0;i<files.length;i++){
+            var file = files[i];
+            if(statusEl){ statusEl.textContent = "Enviando "+(i+1)+"/"+files.length+": "+file.name+"…"; statusEl.className = "nc-anexo-status"; }
+            try{
+              var anexo = await ncUploadAnexo(file);
+              if(!Array.isArray(nc.anexos)) nc.anexos = [];
+              nc.anexos.push(anexo);
+            } catch(ex){
+              console.error(ex);
+              ncAnexoErro[idx] = "Não foi possível enviar "+file.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
+            }
+          }
+          input.value = "";
+          renderModal();
+        });
+      });
+      m.querySelectorAll("[data-rm-anexo]").forEach(function(btn){
+        btn.addEventListener("click", async function(){
+          var partes = btn.getAttribute("data-rm-anexo").split(":");
+          var idx=+partes[0], ai=+partes[1];
+          var lista = ncAnexos(draft.data.naoConformidades[idx]);
+          lista.splice(ai,1);
+          renderModal();
+        });
+      });
+      var linkPicker=m.querySelector("#link-picker");
+      var doLink=m.querySelector("#do-link-rast");
+      if(doLink) doLink.addEventListener("click", async function(){
+        var rid=linkPicker.value; if(!rid) return;
+        await persistLink("fvs", draft.id, rid);
+      });
+      var genRast=m.querySelector("#gen-rast");
+      if(genRast) genRast.addEventListener("click", async function(){ await generateLinked("fvs"); });
+      var unlinkRast=m.querySelector("#unlink-rast");
+      if(unlinkRast) unlinkRast.addEventListener("click", async function(){ await removeLink("fvs", draft.id, draft.data.rastreabilidadeId); });
+      var openLinked=m.querySelector("#open-linked-rast");
+      if(openLinked) openLinked.addEventListener("click", function(){ var rid=draft.data.rastreabilidadeId; if(!tentarFecharModal()) return; openModal("rast", rid); });
+    } else {
+      m.querySelectorAll("[data-line-field]").forEach(function(el){
+        el.addEventListener("input", function(){
+          var idx=+el.getAttribute("data-line-idx"), f=el.getAttribute("data-line-field");
+          draft.data.linhas[idx][f]=el.value;
+          // Atualiza o "tempo gasto"/alerta de estouro em tempo real sem
+          // recriar nenhum <input> — ver refreshTemposGasto(). Não usar mais
+          // "change"/renderModal() aqui: um <input type="time"> já dispara
+          // "change" assim que o valor fica válido, o que acontece logo após
+          // o 1º dígito do minuto (ex.: "2" já forma "02"), muito antes do
+          // usuário terminar de digitar o 2º dígito — recriar o campo nesse
+          // instante é o que travava a digitação.
+          if(f==="saidaUsina"||f==="lancFinal") refreshTemposGasto();
+        });
+      });
+      m.querySelectorAll("[data-rm-line]").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          var idx=+btn.getAttribute("data-rm-line");
+          draft.data.linhas.splice(idx,1);
+          if(draft.data.linhas.length===0) draft.data.linhas.push(blankLinha(1));
+          renderModal();
+        });
+      });
+      var addLine=m.querySelector("#add-line");
+      if(addLine) addLine.addEventListener("click", function(){
+        draft.data.linhas.push(blankLinha(draft.data.linhas.length+1));
+        renderModal();
+      });
+      wireMapeamentoEvents(m);
+      var linkPickerR=m.querySelector("#link-picker-r");
+      var doLinkF=m.querySelector("#do-link-fvs");
+      if(doLinkF) doLinkF.addEventListener("click", async function(){
+        var fid=linkPickerR.value; if(!fid) return;
+        await persistLink("rast", draft.id, fid);
+      });
+      var genFvs=m.querySelector("#gen-fvs");
+      if(genFvs) genFvs.addEventListener("click", async function(){ await generateLinked("rast"); });
+      var unlinkFvs=m.querySelector("#unlink-fvs");
+      if(unlinkFvs) unlinkFvs.addEventListener("click", async function(){ await removeLink("rast", draft.id, draft.data.fvsId); });
+      var openLinkedF=m.querySelector("#open-linked-fvs");
+      if(openLinkedF) openLinkedF.addEventListener("click", function(){ var fid=draft.data.fvsId; if(!tentarFecharModal()) return; openModal("fvs", fid); });
+    }
+
+    m.querySelector("#btn-save").addEventListener("click", function(){ saveDraft(false); });
+    m.querySelector("#btn-export").addEventListener("click", async function(){
+      try{ await garantirLibs(); }catch(ex){ alert("Não foi possível carregar o gerador de Excel (verifique a internet)."); return; }
+      if(draft.type==="fvs") exportFvsXlsx(draft.data); else exportRastXlsx(draft.data);
+    });
+    m.querySelector("#btn-toggle-close").addEventListener("click", async function(){
+      if(salvando) return;
+      var d = draft;
+      var antesFechado = d.data.fechado, antesData = d.data.dataFechamento;
+      d.data.fechado = !d.data.fechado;
+      if(d.data.fechado && !d.data.dataFechamento) d.data.dataFechamento = todayISO();
+      var ok = await saveDraft(true);
+      // Não salvou: desfaz a troca aberta/fechada para a tela não mentir.
+      if(!ok && draft===d){ d.data.fechado = antesFechado; d.data.dataFechamento = antesData; renderModal(); }
+    });
+    var delBtn=m.querySelector("#btn-delete");
+    if(delBtn && draft.id) delBtn.addEventListener("click", async function(){
+      if(!confirm("Excluir definitivamente este registro?")) return;
+      var d = draft;
+      var col = d.type==="fvs" ? fvsCol : rastCol;
+      try{
+        await col.doc(d.id).delete();
+      }catch(ex){
+        console.error(ex);
+        alert("Não foi possível excluir: "+(ex && ex.message ? ex.message : "erro desconhecido")+".");
+        return;
+      }
+      // Limpa o vínculo do outro lado, para a ficha/rastreabilidade parceira
+      // não ficar apontando para um registro que não existe mais.
+      try{
+        if(d.type==="fvs" && d.data.rastreabilidadeId && rastMap.has(d.data.rastreabilidadeId)){
+          await rastCol.doc(d.data.rastreabilidadeId).update({ fvsId:null, updatedAt: nowISO() });
+        } else if(d.type==="rast" && d.data.fvsId && fvsMap.has(d.data.fvsId)){
+          await fvsCol.doc(d.data.fvsId).update({ rastreabilidadeId:null, updatedAt: nowISO() });
+        }
+      }catch(ex){ console.error("exclusão: falha ao limpar vínculo", ex); }
+      limparRascunho(d.chave);
+      closeModal();
+    });
+  }
+
+  /* ---------------- mapeamento de concretagem: planta (PDF) + desenho das áreas ----------------
+     Ferramenta de "por onde o concreto foi lançado hoje": a planta de forma
+     (PDF) é renderizada num <canvas> com pdf.js, e por cima dela um <svg>
+     transparente captura os toques pra desenhar um polígono (tocando nos
+     cantos da área concretada). Ao fechar o polígono, a pessoa escolhe a
+     qual sequência (BT) das "Betonadas" aquela área pertence — a área fica
+     salva com essa referência (draft.data.mapeamento.areas), não com a NF
+     copiada, então se a NF da sequência mudar depois, a legenda já mostra
+     a NF atualizada. Coordenadas dos pontos são normalizadas (0..1,
+     fração da largura/altura da planta), então continuam corretas
+     independente do zoom ou da resolução em que a planta foi desenhada. */
+  function wireMapeamentoEvents(m){
+    var mp = draft.data.mapeamento;
+    if(!mp) return;
+
+    var inputPlanta = m.querySelector("#input-planta");
+    if(inputPlanta) inputPlanta.addEventListener("change", async function(){
+      var file = inputPlanta.files[0];
+      if(!file) return;
+      var statusEl = m.querySelector("#status-planta");
+      if(!cloudinaryConfigurado()){
+        if(statusEl) statusEl.textContent = "Envio de plantas ainda não configurado neste sistema (falta ligar a conta do Cloudinary — ver comentário no topo do código).";
+        inputPlanta.value = "";
+        return;
+      }
+      if(mp.areas && mp.areas.length>0 && !confirm("Trocar a planta apaga as áreas já demarcadas nela. Continuar?")){
+        inputPlanta.value = "";
+        return;
+      }
+      if(statusEl){ statusEl.textContent = "Enviando "+file.name+"…"; statusEl.className="nc-anexo-status"; }
+      try{
+        var planta = await rastUploadPlanta(file);
+        mp.plantaUrl = planta.url;
+        mp.plantaNome = planta.nome;
+        mp.tipo = "pdf";
+        mp.pagina = 1;
+        mp.areas = [];
+        renderModal();
+      }catch(ex){
+        console.error(ex);
+        if(statusEl) statusEl.textContent = "Não foi possível enviar "+file.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
+      }
+    });
+
+    var btnUsarPlanta = m.querySelector("#mapa-planta-usar");
+    if(btnUsarPlanta) btnUsarPlanta.addEventListener("click", function(){
+      var sel = m.querySelector("#mapa-planta-select");
+      var id = sel ? sel.value : "";
+      if(!id){ alert("Selecione uma planta da lista."); return; }
+      var p = plantasMap.get(id);
+      if(!p) return;
+      mp.plantaUrl = p.url;
+      mp.plantaNome = p.nome;
+      mp.tipo = p.tipo || "imagem";
+      mp.pagina = 1;
+      mp.areas = [];
+      renderModal();
+    });
+
+    if(!mp.plantaUrl) return; // sem planta ainda, nada mais a fazer aqui
+
+    carregarPlantaNoCanvas(m);
+
+    var btnExportarPng = m.querySelector("#mapa-exportar-png");
+    if(btnExportarPng) btnExportarPng.addEventListener("click", function(){ exportarMapeamentoPng(m); });
+
+    var btnZoomOut = m.querySelector("#mapa-zoom-out");
+    var btnZoomIn = m.querySelector("#mapa-zoom-in");
+    if(btnZoomOut) btnZoomOut.addEventListener("click", function(){ aplicarZoomMapa(m, (mapaEstado?mapaEstado.zoomPct:100)-25); });
+    if(btnZoomIn) btnZoomIn.addEventListener("click", function(){ aplicarZoomMapa(m, (mapaEstado?mapaEstado.zoomPct:100)+25); });
+
+    var btnAddArea = m.querySelector("#mapa-add-area");
+    if(btnAddArea) btnAddArea.addEventListener("click", function(){
+      if(!mapaEstado) return;
+      mapaEstado.desenhando = true;
+      mapaEstado.pontosAtual = [];
+      var svgEl = m.querySelector("#mapa-svg");
+      if(svgEl) svgEl.classList.add("svg-ativo");
+      m.querySelector("#mapa-draw-bar").hidden = false;
+      btnAddArea.hidden = true;
+      atualizarBotaoFechar(m);
+      redesenharSvg(m);
+    });
+
+    // Toque num dedo só, em modo de desenho: marca um ponto do polígono.
+    // Dois dedos ao mesmo tempo: em vez de marcar ponto, funciona como
+    // "pinça" pra dar zoom (afastar/aproximar os dedos), já que o toque
+    // nativo de pinça do navegador fica desligado aqui (touch-action:none
+    // em .svg-ativo) pra não brigar com o toque de marcar pontos.
+    var svgEl = m.querySelector("#mapa-svg");
+    var mapaPointers = {};
+    var mapaPinchDistIni = null, mapaPinchZoomIni = null;
+    function mapaPinchIds(){ return Object.keys(mapaPointers); }
+    function mapaPinchAtualizar(){
+      var ids = mapaPinchIds();
+      if(ids.length!==2 || mapaPinchDistIni==null) return;
+      var p1 = mapaPointers[ids[0]], p2 = mapaPointers[ids[1]];
+      var distAtual = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+      if(!distAtual || !mapaPinchDistIni) return;
+      var novoPct = Math.round((mapaPinchZoomIni * (distAtual/mapaPinchDistIni)) / 5) * 5;
+      aplicarZoomMapa(m, novoPct);
+    }
+    if(svgEl) svgEl.addEventListener("pointerdown", function(ev){
+      if(!mapaEstado || !mapaEstado.desenhando) return;
+      ev.preventDefault();
+      mapaPointers[ev.pointerId] = { x:ev.clientX, y:ev.clientY };
+      var ids = mapaPinchIds();
+      if(ids.length===2){
+        var p1 = mapaPointers[ids[0]], p2 = mapaPointers[ids[1]];
+        mapaPinchDistIni = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+        mapaPinchZoomIni = mapaEstado.zoomPct;
+        return; // começou uma pinça de 2 dedos — não conta como toque de ponto
+      }
+      if(ids.length>2) return; // mais de 2 dedos ao mesmo tempo: ignora
+      var rect = svgEl.getBoundingClientRect();
+      if(!rect.width || !rect.height) return;
+      var xNorm = Math.min(1, Math.max(0, (ev.clientX-rect.left)/rect.width));
+      var yNorm = Math.min(1, Math.max(0, (ev.clientY-rect.top)/rect.height));
+      mapaEstado.pontosAtual.push([xNorm, yNorm]);
+      atualizarBotaoFechar(m);
+      redesenharSvg(m);
+    });
+    if(svgEl) svgEl.addEventListener("pointermove", function(ev){
+      if(!mapaPointers[ev.pointerId]) return;
+      mapaPointers[ev.pointerId] = { x:ev.clientX, y:ev.clientY };
+      mapaPinchAtualizar();
+    });
+    function mapaPinchSoltar(ev){
+      delete mapaPointers[ev.pointerId];
+      if(mapaPinchIds().length<2){ mapaPinchDistIni=null; mapaPinchZoomIni=null; }
+    }
+    if(svgEl){
+      svgEl.addEventListener("pointerup", mapaPinchSoltar);
+      svgEl.addEventListener("pointercancel", mapaPinchSoltar);
+      svgEl.addEventListener("pointerleave", mapaPinchSoltar);
+    }
+
+    var btnUndo = m.querySelector("#mapa-undo-ponto");
+    if(btnUndo) btnUndo.addEventListener("click", function(){
+      if(!mapaEstado) return;
+      mapaEstado.pontosAtual.pop();
+      atualizarBotaoFechar(m);
+      redesenharSvg(m);
+    });
+    var btnCancelarArea = m.querySelector("#mapa-cancelar-area");
+    if(btnCancelarArea) btnCancelarArea.addEventListener("click", function(){ sairDoModoDesenho(m); });
+    var btnFecharArea = m.querySelector("#mapa-fechar-area");
+    if(btnFecharArea) btnFecharArea.addEventListener("click", function(){
+      if(!mapaEstado || mapaEstado.pontosAtual.length<3) return;
+      abrirSeletorSequencia(m);
+    });
+    var btnSeqCancelar = m.querySelector("#mapa-seq-cancelar");
+    if(btnSeqCancelar) btnSeqCancelar.addEventListener("click", function(){
+      m.querySelector("#mapa-seq-picker").hidden = true;
+      m.querySelector("#mapa-draw-bar").hidden = false;
+    });
+    var btnSeqConfirmar = m.querySelector("#mapa-seq-confirmar");
+    if(btnSeqConfirmar) btnSeqConfirmar.addEventListener("click", function(){
+      if(!mapaEstado || mapaEstado.pontosAtual.length<3) return;
+      var sel = m.querySelector("#mapa-seq-select");
+      var seq = sel ? sel.value : "";
+      if(!seq){ alert("Selecione o BT dessa área."); return; }
+      if(!mp.areas) mp.areas=[];
+      mp.areas.push({ pontos: mapaEstado.pontosAtual.slice(), linhaSeq: seq, cor: mapaCorSequencia(seq) });
+      m.querySelector("#mapa-seq-picker").hidden = true;
+      sairDoModoDesenho(m);
+      atualizarLegendaMapa(m);
+    });
+
+    wireLegendaAreas(m);
+  }
+
+  // Carrega a planta da rastreabilidade aberta e desenha no <canvas>,
+  // ajustando o <svg> por cima pra ocupar exatamente a mesma área (mesma
+  // proporção largura/altura) — assim os pontos normalizados (0..1) caem
+  // sempre no lugar certo, em qualquer zoom. Reinicia mapaEstado.
+  // Duas origens possíveis (ver mp.tipo): "imagem" é uma planta escolhida da
+  // biblioteca (já vem comprimida como JPEG, ver comprimirPlantaEmImagem —
+  // só precisa desenhar a imagem, sem pdf.js); "pdf" é um PDF anexado manual
+  // só pra esta ficha (segue usando pdf.js pra renderizar a página, como
+  // sempre foi).
+  async function carregarPlantaNoCanvas(m){
+    try{ await garantirPdf(); }catch(ex){ console.error(ex); }
+    var mp = draft.data.mapeamento;
+    var canvas = m.querySelector("#mapa-canvas");
+    var svgEl = m.querySelector("#mapa-svg");
+    var stage = m.querySelector("#mapa-stage");
+    var statusEl = m.querySelector("#mapa-status");
+    if(!canvas || !svgEl || !stage || !mp || !mp.plantaUrl) return;
+    if(mp.tipo==="imagem"){
+      try{
+        if(statusEl) statusEl.textContent = "Carregando planta…";
+        var img = await new Promise(function(resolve, reject){
+          var im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = function(){ resolve(im); };
+          im.onerror = function(){ reject(new Error("falha ao carregar a imagem da planta")); };
+          im.src = mp.plantaUrl;
+        });
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        var ctxImg = canvas.getContext("2d");
+        ctxImg.drawImage(img, 0, 0);
+        svgEl.setAttribute("viewBox", "0 0 "+canvas.width+" "+canvas.height);
+        stage.style.aspectRatio = canvas.width+" / "+canvas.height;
+        mapaEstado = { zoomPct:100, desenhando:false, pontosAtual:[] };
+        aplicarZoomMapa(m, 100);
+        redesenharSvg(m);
+        if(statusEl) statusEl.textContent = "";
+      }catch(ex){
+        console.error("mapeamento: falha ao carregar a planta (imagem)", ex);
+        if(statusEl) statusEl.textContent = "Não foi possível carregar a planta pra desenhar aqui (o arquivo pode ser aberto normalmente pelo link \"Abrir planta\" acima).";
+      }
+      return;
+    }
+    if(!window.pdfjsLib){
+      if(statusEl) statusEl.textContent = "Não foi possível carregar o desenhador de plantas (biblioteca pdf.js não carregou — verifique a internet). O link \"Abrir planta\" acima continua funcionando normalmente.";
+      return;
+    }
+    try{
+      if(statusEl) statusEl.textContent = "Carregando planta…";
+      var pdf = await pdfjsLib.getDocument(mp.plantaUrl).promise;
+      var pagina = Math.min(Math.max(mp.pagina||1, 1), pdf.numPages);
+      var page = await pdf.getPage(pagina);
+      var viewportBase = page.getViewport({ scale:1 });
+      var alvoPx = 2000; // largura-alvo (px) do render, pra ficar nítido ao dar zoom
+      var escala = Math.min(3, alvoPx/viewportBase.width);
+      var viewport = page.getViewport({ scale:escala });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      var ctx = canvas.getContext("2d");
+      await page.render({ canvasContext:ctx, viewport:viewport }).promise;
+      svgEl.setAttribute("viewBox", "0 0 "+viewport.width+" "+viewport.height);
+      stage.style.aspectRatio = viewport.width+" / "+viewport.height;
+      mapaEstado = { zoomPct:100, desenhando:false, pontosAtual:[] };
+      aplicarZoomMapa(m, 100);
+      redesenharSvg(m);
+      if(statusEl) statusEl.textContent = "";
+    }catch(ex){
+      console.error("mapeamento: falha ao carregar a planta", ex);
+      if(statusEl) statusEl.textContent = "Não foi possível carregar a planta pra desenhar aqui (o arquivo pode ser aberto normalmente pelo link \"Abrir planta\" acima).";
+    }
+  }
+
+  function aplicarZoomMapa(m, pct){
+    if(!mapaEstado) return;
+    mapaEstado.zoomPct = Math.max(50, Math.min(400, pct));
+    var stage = m.querySelector("#mapa-stage");
+    if(stage) stage.style.width = mapaEstado.zoomPct+"%";
+    var label = m.querySelector("#mapa-zoom-label");
+    if(label) label.textContent = mapaEstado.zoomPct+"%";
+  }
+
+  function atualizarBotaoFechar(m){
+    var btn = m.querySelector("#mapa-fechar-area");
+    if(btn) btn.disabled = !mapaEstado || mapaEstado.pontosAtual.length<3;
+  }
+
+  function sairDoModoDesenho(m){
+    if(mapaEstado){ mapaEstado.desenhando=false; mapaEstado.pontosAtual=[]; }
+    var svgEl = m.querySelector("#mapa-svg");
+    if(svgEl) svgEl.classList.remove("svg-ativo");
+    var drawBar = m.querySelector("#mapa-draw-bar");
+    if(drawBar) drawBar.hidden = true;
+    var addBtn = m.querySelector("#mapa-add-area");
+    if(addBtn) addBtn.hidden = false;
+    redesenharSvg(m);
+  }
+
+  function abrirSeletorSequencia(m){
+    var sel = m.querySelector("#mapa-seq-select");
+    if(sel){
+      sel.innerHTML = (draft.data.linhas||[]).map(function(l){
+        var rotulo = "BT "+escapeHtml(l.seq) + (l.notaFiscal?" — NF "+escapeHtml(l.notaFiscal):"");
+        return '<option value="'+escapeHtml(l.seq)+'">'+rotulo+'</option>';
+      }).join("");
+    }
+    var drawBar = m.querySelector("#mapa-draw-bar");
+    if(drawBar) drawBar.hidden = true;
+    var picker = m.querySelector("#mapa-seq-picker");
+    if(picker) picker.hidden = false;
+  }
+
+  // Redesenha o SVG do zero: as áreas já salvas (polígono preenchido na cor
+  // da sequência + rótulo no centro) e, se estiver em modo de desenho, o
+  // contorno em progresso (pontos + linhas ainda aberto).
+  function redesenharSvg(m){
+    var svgEl = m.querySelector("#mapa-svg");
+    if(!svgEl) return;
+    var vb = (svgEl.getAttribute("viewBox")||"0 0 1 1").split(" ");
+    var vw = parseFloat(vb[2])||1, vh = parseFloat(vb[3])||1;
+    var ns = "http://www.w3.org/2000/svg";
+    while(svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+    function pt(p){ return (p[0]*vw)+","+(p[1]*vh); }
+
+    ((draft.data.mapeamento && draft.data.mapeamento.areas) || []).forEach(function(a){
+      if(!a.pontos || a.pontos.length<3) return;
+      var poly = document.createElementNS(ns, "polygon");
+      poly.setAttribute("points", a.pontos.map(pt).join(" "));
+      poly.setAttribute("fill", a.cor);
+      poly.setAttribute("fill-opacity", "0.32");
+      poly.setAttribute("stroke", a.cor);
+      poly.setAttribute("stroke-width", Math.max(2, vw*0.003));
+      svgEl.appendChild(poly);
+      var cx = a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length*vw;
+      var cy = a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length*vh;
+      var fontSize = Math.max(16, vw*0.022);
+      var texto = "BT "+a.linhaSeq;
+      var rot = document.createElementNS(ns, "rect");
+      var rw = texto.length*fontSize*0.62, rh = fontSize*1.5;
+      rot.setAttribute("x", cx-rw/2); rot.setAttribute("y", cy-rh/2);
+      rot.setAttribute("width", rw); rot.setAttribute("height", rh);
+      rot.setAttribute("rx", 4); rot.setAttribute("fill", "#ffffff"); rot.setAttribute("fill-opacity","0.85");
+      svgEl.appendChild(rot);
+      var txt = document.createElementNS(ns, "text");
+      txt.setAttribute("x", cx); txt.setAttribute("y", cy);
+      txt.setAttribute("text-anchor", "middle"); txt.setAttribute("dominant-baseline", "central");
+      txt.setAttribute("font-size", fontSize); txt.setAttribute("font-weight", "700"); txt.setAttribute("fill", a.cor);
+      txt.textContent = texto;
+      svgEl.appendChild(txt);
+    });
+
+    if(mapaEstado && mapaEstado.desenhando && mapaEstado.pontosAtual.length>0){
+      var pontos = mapaEstado.pontosAtual;
+      if(pontos.length>1){
+        var linha = document.createElementNS(ns, "polyline");
+        linha.setAttribute("points", pontos.map(pt).join(" "));
+        linha.setAttribute("fill", "none");
+        linha.setAttribute("stroke", "var(--accent-strong)");
+        linha.setAttribute("stroke-width", Math.max(2, vw*0.003));
+        linha.setAttribute("stroke-dasharray", (vw*0.006)+","+(vw*0.004));
+        svgEl.appendChild(linha);
+      }
+      pontos.forEach(function(p){
+        var c = document.createElementNS(ns, "circle");
+        c.setAttribute("cx", p[0]*vw); c.setAttribute("cy", p[1]*vh);
+        c.setAttribute("r", Math.max(4, vw*0.006));
+        c.setAttribute("fill", "#ffffff"); c.setAttribute("stroke", "#c0392b"); c.setAttribute("stroke-width", 2);
+        svgEl.appendChild(c);
+      });
+    }
+  }
+
+  function atualizarLegendaMapa(m){
+    var host = m.querySelector("#mapa-legenda-host");
+    if(!host) return;
+    host.innerHTML = mapaLegendaHtml(draft.data);
+    wireLegendaAreas(m);
+  }
+  function wireLegendaAreas(m){
+    m.querySelectorAll("[data-rm-area]").forEach(function(btn){
+      btn.onclick = function(){
+        var idx = +btn.getAttribute("data-rm-area");
+        draft.data.mapeamento.areas.splice(idx,1);
+        atualizarLegendaMapa(m);
+        redesenharSvg(m);
+      };
+    });
+  }
+
+  // Exporta o mapeamento atual (a planta já renderizada no <canvas> + as
+  // áreas marcadas + a legenda) como uma imagem PNG pra baixar — pra poder
+  // mandar por WhatsApp/e-mail ou imprimir depois de terminar as marcações.
+  // Redesenha a planta e cada área direto num <canvas> novo (mesma lógica de
+  // redesenharSvg, só que em 2D canvas em vez de SVG) e acrescenta um
+  // cabeçalho com o nº da rastreabilidade + a legenda embaixo.
+  function exportarMapeamentoPng(m){
+    var mp = draft.data.mapeamento;
+    var canvasBase = m.querySelector("#mapa-canvas");
+    var statusEl = m.querySelector("#mapa-status");
+    if(!canvasBase || !canvasBase.width || !mp || !mp.plantaUrl){
+      if(statusEl) statusEl.textContent = "Carregue a planta antes de exportar.";
+      return;
+    }
+    var areas = mp.areas || [];
+    var vw = canvasBase.width, vh = canvasBase.height;
+    var padMargem = 24, padTopo = 74, linhaLegenda = 28;
+    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + 20) : 36;
+    var out = document.createElement("canvas");
+    out.width = vw + padMargem*2;
+    out.height = padTopo + vh + alturaLegenda + padMargem;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, out.width, out.height);
+
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillText("Mapeamento da concretagem — Rastreabilidade "+(draft.data.numero||"(sem número)"), padMargem, 30);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "#666666";
+    ctx.fillText("Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"), padMargem, 52);
+
+    try{
+      ctx.drawImage(canvasBase, padMargem, padTopo);
+    }catch(ex){
+      console.error("exportarMapeamentoPng: falha ao desenhar a planta", ex);
+      if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem (falha ao ler a planta). Tente de novo depois de recarregar a página.";
+      return;
+    }
+
+    areas.forEach(function(a){
+      if(!a.pontos || a.pontos.length<3) return;
+      ctx.beginPath();
+      a.pontos.forEach(function(p, i){
+        var x = padMargem + p[0]*vw, y = padTopo + p[1]*vh;
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.closePath();
+      ctx.globalAlpha = 0.32; ctx.fillStyle = a.cor; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = a.cor; ctx.lineWidth = Math.max(2, vw*0.003); ctx.stroke();
+
+      var cx = padMargem + (a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length)*vw;
+      var cy = padTopo + (a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length)*vh;
+      var fontSize = Math.max(16, vw*0.022);
+      var texto = "BT "+a.linhaSeq;
+      ctx.font = "bold "+fontSize+"px sans-serif";
+      var rw = ctx.measureText(texto).width + fontSize, rh = fontSize*1.5;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillRect(cx-rw/2, cy-rh/2, rw, rh);
+      ctx.fillStyle = a.cor;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(texto, cx, cy);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    });
+
+    var yLeg = padTopo + vh + 28;
+    if(areas.length===0){
+      ctx.fillStyle = "#666666"; ctx.font = "13px sans-serif";
+      ctx.fillText("Nenhuma área demarcada.", padMargem, yLeg);
+    }else{
+      areas.forEach(function(a, ai){
+        var linha = (draft.data.linhas||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
+        var y = yLeg + ai*linhaLegenda;
+        ctx.fillStyle = a.cor;
+        ctx.fillRect(padMargem, y-13, 14, 14);
+        ctx.fillStyle = "#1a1a1a"; ctx.font = "bold 13px sans-serif";
+        ctx.fillText("BT "+a.linhaSeq + (linha && linha.notaFiscal ? "   ·   NF "+linha.notaFiscal : ""), padMargem+22, y-2);
+      });
+    }
+
+    out.toBlob(function(blob){
+      if(!blob){
+        if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem pra exportar.";
+        return;
+      }
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = "mapeamento_"+(draft.data.numero||"rastreabilidade").replace(/[^a-zA-Z0-9_-]+/g,"_")+".png";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    }, "image/png");
+  }
+
+  // Trava os botões do rodapé enquanto envia — evita o duplo toque que
+  // criava duas fichas iguais.
+  function setBotoesSalvando(ativo){
+    var m = document.getElementById("modal");
+    if(!m) return;
+    ["#btn-save","#btn-toggle-close","#btn-delete"].forEach(function(sel){
+      var b = m.querySelector(sel);
+      if(!b) return;
+      if(ativo){ b.dataset.txt = b.textContent; b.disabled = true; if(sel==="#btn-save") b.textContent = "Salvando…"; }
+      else { b.disabled = (sel==="#btn-delete" && !draft.id); if(b.dataset.txt) b.textContent = b.dataset.txt; }
+    });
+  }
+  // Salva a ficha aberta. Devolve true se salvou (ou se ficou na fila por
+  // falta de sinal) e false se deu erro — nunca mais falha em silêncio.
+  async function saveDraft(keepOpen){
+    if(!draft || salvando) return false;
+    salvando = true;
+    var d = draft;
+    d.data.updatedAt = nowISO();
+    d.data.updatedByEmail = currentUserEmail || d.data.updatedByEmail || "";
+    var col = d.type==="fvs" ? fvsCol : rastCol;
+    // O id é gerado antes de enviar: se a pessoa tocar de novo, ou se o envio
+    // ficar na fila sem sinal, continua sendo a MESMA ficha (sem duplicar).
+    if(!d.id) d.id = col.doc().id;
+    guardarRascunho(); // cópia no aparelho até o servidor confirmar
+    var chave = d.chave;
+    setBotoesSalvando(true);
+    var envio = col.doc(d.id).set(JSON.parse(JSON.stringify(d.data)));
+    var resultado;
+    try{
+      resultado = await Promise.race([
+        envio.then(function(){ return "ok"; }),
+        new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })
+      ]);
+    }catch(ex){
+      console.error("saveDraft", ex);
+      salvando = false;
+      if(draft===d) setBotoesSalvando(false);
+      var msg = (ex && ex.code==="permission-denied")
+        ? "sem permissão para gravar (sua sessão pode ter expirado — saia e entre de novo)"
+        : (ex && ex.message ? ex.message : "erro desconhecido");
+      alert("Não foi possível salvar: "+msg+".\n\nO que você preencheu continua guardado neste aparelho.");
+      return false;
+    }
+    if(resultado==="ok"){
+      limparRascunho(chave);
+    } else {
+      // Sem resposta do servidor em 10s (subsolo, sinal fraco): o Firestore
+      // mantém o envio na fila e manda sozinho quando a conexão voltar.
+      envio.then(function(){ limparRascunho(chave); }).catch(function(ex){ console.error("envio pendente falhou", ex); });
+      alert("Sem conexão com o servidor no momento.\n\nA ficha ficou guardada neste aparelho e será enviada automaticamente quando o sinal voltar. Se fechar o app antes disso, ao abrir de novo o sistema oferece recuperar.");
+    }
+    salvando = false;
+    if(draft===d){
+      d.orig = JSON.stringify(d.data);
+      if(!keepOpen) closeModal(); else renderModal();
+    }
+    return true;
+  }
+
+  async function persistLink(fromType, fromId, otherId){
+    try{
+      if(fromType==="fvs"){
+        draft.data.rastreabilidadeId = otherId;
+        if(!await saveDraft(true)) return;
+        await rastCol.doc(otherId).update({ fvsId: draft.id, updatedAt: nowISO() });
+      } else {
+        draft.data.fvsId = otherId;
+        if(!await saveDraft(true)) return;
+        await fvsCol.doc(otherId).update({ rastreabilidadeId: draft.id, updatedAt: nowISO() });
+      }
+    }catch(ex){ console.error(ex); alert("Não foi possível concluir o vínculo: "+(ex&&ex.message?ex.message:"erro desconhecido")+"."); }
+  }
+  async function removeLink(fromType, fromId, otherId){
+    try{
+      if(fromType==="fvs"){
+        draft.data.rastreabilidadeId=null;
+        if(!await saveDraft(true)) return;
+        if(otherId) await rastCol.doc(otherId).update({ fvsId:null, updatedAt: nowISO() });
+      } else {
+        draft.data.fvsId=null;
+        if(!await saveDraft(true)) return;
+        if(otherId) await fvsCol.doc(otherId).update({ rastreabilidadeId:null, updatedAt: nowISO() });
+      }
+    }catch(ex){ console.error(ex); alert("Não foi possível desfazer o vínculo: "+(ex&&ex.message?ex.message:"erro desconhecido")+"."); }
+  }
+  async function generateLinked(fromType){
+    if(!draft.id && !await saveDraft(true)) return;
+    if(fromType==="fvs"){
+      var f=draft.data;
+      var nr = blankRast();
+      nr.obra=f.obra; nr.blocoPav=f.local; nr.data=f.dataConcretagem||f.dataAbertura;
+      nr.fvsId = draft.id;
+      var ref = await rastCol.add(nr);
+      draft.data.rastreabilidadeId = ref.id;
+      await saveDraft(true);
+      closeModal(); openModal("rast", ref.id);
+    } else {
+      var r=draft.data;
+      var rastId=draft.id;
+      // Antes só criava direto no tipo padrão (FVS 04); agora pergunta qual tipo
+      // de ficha gerar, igual ao botão "+ Ficha FVS" do cabeçalho.
+      openTipoChooser(async function(tipoKey){
+        var nf = blankFvs(tipoKey);
+        nf.obra=r.obra; nf.local=r.blocoPav; nf.dataConcretagem=r.data; nf.dataAbertura=r.data;
+        nf.rastreabilidadeId = rastId;
+        var ref2 = await fvsCol.add(nf);
+        if(draft && draft.id===rastId){
+          draft.data.fvsId = ref2.id;
+          await saveDraft(true);
+        } else {
+          await rastCol.doc(rastId).update({ fvsId: ref2.id, updatedAt: nowISO() });
+        }
+        closeModal(); openModal("fvs", ref2.id);
+      });
+    }
+  }
+
+  /* ---------------- auth screen events ---------------- */
+  function wireAuth(){
+    document.getElementById("login-form").addEventListener("submit", function(e){
+      e.preventDefault();
+      var email=document.getElementById("login-email").value.trim();
+      var pass=document.getElementById("login-password").value;
+      var errEl=document.getElementById("login-error");
+      errEl.hidden=true;
+      var btn=document.getElementById("login-submit");
+      btn.disabled=true; btn.textContent="Entrando…";
+      auth.signInWithEmailAndPassword(email, pass).then(function(){
+        try{ localStorage.setItem("traco-integrado-last-email", email); }catch(ex){}
+      }).catch(function(err){
+        errEl.hidden=false;
+        errEl.textContent = authErrorMessage(err.code);
+      }).finally(function(){
+        btn.disabled=false; btn.textContent="Entrar";
+      });
+    });
+    document.getElementById("forgot-password").addEventListener("click", function(){
+      var email=document.getElementById("login-email").value.trim();
+      if(!email){ alert("Digite seu e-mail no campo acima e clique novamente para receber o link de redefinição de senha."); return; }
+      auth.sendPasswordResetEmail(email).then(function(){
+        alert("Enviamos um link de redefinição de senha para "+email+".");
+      }).catch(function(err){ alert("Não foi possível enviar: "+authErrorMessage(err.code)); });
+    });
+    document.getElementById("btn-logout").addEventListener("click", function(){ auth.signOut(); });
+    document.getElementById("theme-toggle").addEventListener("click", function(){
+      var root=document.documentElement;
+      var cur=root.getAttribute("data-theme");
+      var sysDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var effectiveCur = cur || (sysDark?"dark":"light");
+      var next = effectiveCur==="dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try{ localStorage.setItem("traco-integrado-theme", next); }catch(ex){}
+    });
+    try{
+      var savedTheme=localStorage.getItem("traco-integrado-theme");
+      if(savedTheme==="dark"||savedTheme==="light") document.documentElement.setAttribute("data-theme", savedTheme);
+    }catch(ex){}
+  }
+
+  /* ---------------- global events ---------------- */
+  function wireGlobal(){
+    document.getElementById("btn-new-fvs").addEventListener("click", function(){ openTipoChooser(); });
+    document.getElementById("btn-new-rast").addEventListener("click", function(){ openModal("rast", null); });
+    document.getElementById("btn-view-pavimento").addEventListener("click", function(){ showViewPavimento(); });
+    document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
+    document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
+    document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
+    document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
+    document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
+    document.getElementById("overlay").addEventListener("click", function(e){ if(e.target.id==="overlay") tentarFecharModal(); });
+    document.addEventListener("keydown", function(e){ if(e.key==="Escape" && !document.getElementById("overlay").hidden) tentarFecharModal(); });
+    // Guarda o rascunho no aparelho enquanto a pessoa digita (meio segundo
+    // depois da última tecla), não só quando a tela é redesenhada.
+    var timerRascunho = null;
+    function agendarRascunho(){
+      clearTimeout(timerRascunho);
+      timerRascunho = setTimeout(function(){ if(draftAlterado()) guardarRascunho(); }, 500);
+    }
+    document.getElementById("modal").addEventListener("input", agendarRascunho);
+    document.getElementById("modal").addEventListener("change", agendarRascunho);
+    // Fechar a aba/app com ficha não salva: o navegador pede confirmação.
+    window.addEventListener("beforeunload", function(e){
+      if(draftAlterado() || salvando){ guardarRascunho(); e.preventDefault(); e.returnValue = ""; }
+    });
+
+    document.getElementById("f-search").addEventListener("input", function(e){ filters.search=e.target.value; render(); });
+    document.getElementById("f-from").addEventListener("change", function(e){ filters.from=e.target.value; render(); });
+    document.getElementById("f-to").addEventListener("change", function(e){ filters.to=e.target.value; render(); });
+    document.getElementById("f-pavimento").addEventListener("change", function(e){ filters.pavimento=e.target.value; render(); });
+    document.getElementById("f-situacao").addEventListener("click", function(e){
+      var btn=e.target.closest("[data-sit]"); if(!btn) return;
+      document.querySelectorAll("#f-situacao .chip").forEach(function(c){ c.setAttribute("aria-pressed", c===btn ? "true":"false"); });
+      filters.sit = btn.getAttribute("data-sit");
+      render();
+    });
+
+    document.getElementById("board-body").addEventListener("click", function(e){
+      var t=e.target;
+      var openFvs=t.closest("[data-open-fvs]"); if(openFvs){ openModal("fvs", openFvs.getAttribute("data-open-fvs")); return; }
+      var openRast=t.closest("[data-open-rast]"); if(openRast){ openModal("rast", openRast.getAttribute("data-open-rast")); return; }
+      var genFvs=t.closest("[data-gen-fvs]"); if(genFvs){ openModal("rast", genFvs.getAttribute("data-gen-fvs")); return; }
+      var genRast=t.closest("[data-gen-rast]"); if(genRast){ openModal("fvs", genRast.getAttribute("data-gen-rast")); return; }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", function(){
+    wireGlobal();
+    wireAuth();
+    boot();
+  });
+})();
+
+/* ===== bloco 3 — PWA (instalar app) ===== */
+// PWA: registra o service worker (necessário para o navegador oferecer a
+  // instalação como app) e cuida do botão "Instalar app" no cabeçalho.
+  // Isolado num <script> à parte para não mexer no app principal acima.
+  (function(){
+    if("serviceWorker" in navigator){
+      window.addEventListener("load", function(){
+        navigator.serviceWorker.register("sw.js").catch(function(){});
+      });
+    }
+
+    var deferredPrompt = null;
+    var btn = null;
+
+    function isStandalone(){
+      return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    }
+    function isIOS(){
+      return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+    }
+    function showIosHint(){
+      if(document.getElementById("ios-install-hint")) return;
+      var hint = document.createElement("div");
+      hint.id = "ios-install-hint";
+      hint.innerHTML = '<b>Instalar no iPhone/iPad</b>'
+        + 'Toque em <strong>Compartilhar</strong> (ícone com a seta ⬆) na barra do Safari e depois em '
+        + '<strong>“Adicionar à Tela de Início”</strong>.'
+        + '<div><button type="button" class="btn ghost" id="ios-install-hint-close">Entendi</button></div>';
+      btn.parentElement.appendChild(hint);
+      document.getElementById("ios-install-hint-close").addEventListener("click", function(){
+        hint.remove();
+      });
+    }
+
+    window.addEventListener("beforeinstallprompt", function(e){
+      e.preventDefault();
+      deferredPrompt = e;
+      if(btn) btn.hidden = false;
+    });
+    window.addEventListener("appinstalled", function(){
+      if(btn) btn.hidden = true;
+      deferredPrompt = null;
+    });
+
+    document.addEventListener("DOMContentLoaded", function(){
+      btn = document.getElementById("btn-install-app");
+      if(!btn) return;
+      if(isStandalone()){ return; }
+      if(isIOS()){ btn.hidden = false; }
+      btn.addEventListener("click", function(){
+        var existingHint = document.getElementById("ios-install-hint");
+        if(existingHint){ existingHint.remove(); return; }
+        if(deferredPrompt){
+          deferredPrompt.prompt();
+          deferredPrompt.userChoice.finally(function(){ deferredPrompt = null; });
+        } else if(isIOS()){
+          showIosHint();
+        }
+      });
+    });
+  })();
