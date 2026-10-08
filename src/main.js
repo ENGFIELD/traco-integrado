@@ -989,8 +989,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
                      de assinaturas, assinar em lote, tarefas para estagiários)
        qualidade   — Jessica: só visualiza FVS, controle tecnológico e NCs
      A permissão de gravar continua nas regras do banco (Jessica: só leitura). */
-  var PERFIS_EMAIL = { "matheus.alves@sig.eng.br":"admin", "suellen.alves@sig.eng.br":"engenharia", "jessica.araujo@sig.eng.br":"qualidade" };
-  var ESTAGIARIOS = [{ email:"matheus.alves@sig.eng.br", nome:"Matheus Alves" }, { email:"", nome:"Alice" }];
+  var PERFIS_EMAIL = { "matheus.alves@sig.eng.br":"admin", "suellen.alves@sig.eng.br":"engenharia", "jessica.araujo@sig.eng.br":"qualidade", "alice.soares@sig.eng.br":"estagiario" };
+  var ESTAGIARIOS = [{ email:"matheus.alves@sig.eng.br", nome:"Matheus Alves" }, { email:"alice.soares@sig.eng.br", nome:"Alice Soares" }];
   var perfilAtual = "estagiario";
   function perfilDe(email){ return PERFIS_EMAIL[String(email||"").toLowerCase()] || "estagiario"; }
   function verEngenharia(){ return perfilAtual==="engenharia" || perfilAtual==="admin"; }
