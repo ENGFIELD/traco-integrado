@@ -68,6 +68,14 @@ test("v1.19 FVS travada: dá baixa em NC e acrescenta assinatura do estagiário;
   await assertFails(m.doc("fvs/t2").update({ assinaturas: [{ papel: "estagiario" }] }));
   await assertFails(m.doc("fvs/t2").update({ naoConformidades: [], numero: "6" }));
 });
+test("v1.25 tarefas: equipe cria e marca feita; Jessica só lê; ninguém apaga", async () => {
+  const m = db("suellen.alves@sig.eng.br");
+  await assertSucceeds(m.doc("tarefas/t1").set({ titulo: "Completar betonadas", status: "aberta" }));
+  await assertSucceeds(db("matheus.alves@sig.eng.br").doc("tarefas/t1").set({ status: "feita" }, { merge: true }));
+  await assertSucceeds(db("jessica.araujo@sig.eng.br").doc("tarefas/t1").get());
+  await assertFails(db("jessica.araujo@sig.eng.br").doc("tarefas/t2").set({ titulo: "x" }));
+  await assertFails(m.doc("tarefas/t1").delete());
+});
 test("fichas antigas (sem travada) continuam normais", async () => {
   const m = db("matheus.alves@sig.eng.br");
   await assertSucceeds(m.doc("fvs/antiga").set({ numero: "9" }));

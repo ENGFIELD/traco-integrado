@@ -585,6 +585,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   var cronErroAcesso = false, unsubCron = null, unsubCronProg = null, unsubCronEtapas = null;
   // v1.15: assinatura eletrônica de cada pessoa (assinaturas/<uid>) e cópias das FVS antes de cada nova revisão
   var assinCol = dbf.collection("assinaturas");
+  var tarefasCol = dbf.collection("tarefas"), tarefasMap = new Map(), unsubTarefas = null; // v1.25
   var fvsRevCol = dbf.collection("fvsRevisoes");
   var minhaAssinatura = null, unsubAssin = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
@@ -960,6 +961,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(viewCt && !viewCt.hidden) renderViewCt();
     var viewDash = document.getElementById("view-dashboard");
     if(viewDash && !viewDash.hidden) renderViewDashboard();
+    var viewEng = document.getElementById("view-engenharia");
+    if(viewEng && !viewEng.hidden) renderViewEngenharia();
     var viewPlantas = document.getElementById("view-plantas");
     if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
     var viewAco = document.getElementById("view-aco");
@@ -978,7 +981,201 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // alcançáveis passando por dentro de outra (ex.: Não Conformidades antes
   // só abria de dentro de "FVS por Pavimento") — agora qualquer tela pode
   // ser aberta a partir de qualquer outra, inclusive pelo menu do topo.
-  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma" };
+  /* ---------------- v1.25: perfis e painel da engenharia ----------------
+     Perfis pelo e-mail do login (quem não está na lista edita tudo, como
+     estagiário — ex.: Alice):
+       admin       — Matheus: controle total (vê também o painel da engenharia)
+       engenharia  — Suellen: abre no Painel da engenharia (indicadores, fila
+                     de assinaturas, assinar em lote, tarefas para estagiários)
+       qualidade   — Jessica: só visualiza FVS, controle tecnológico e NCs
+     A permissão de gravar continua nas regras do banco (Jessica: só leitura). */
+  var PERFIS_EMAIL = { "matheus.alves@sig.eng.br":"admin", "suellen.alves@sig.eng.br":"engenharia", "jessica.araujo@sig.eng.br":"qualidade" };
+  var ESTAGIARIOS = [{ email:"matheus.alves@sig.eng.br", nome:"Matheus Alves" }, { email:"", nome:"Alice" }];
+  var perfilAtual = "estagiario";
+  function perfilDe(email){ return PERFIS_EMAIL[String(email||"").toLowerCase()] || "estagiario"; }
+  function verEngenharia(){ return perfilAtual==="engenharia" || perfilAtual==="admin"; }
+
+  var filtrosEng = { tipo:"todos", periodo:"30", sel:{} };
+  function engPendentesAssinatura(){
+    var desde = filtrosEng.periodo==="todas" ? "" : ctSomarDias(todayISO(), -Number(filtrosEng.periodo));
+    var out = [];
+    var semEng = function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel==="engenheiro"; }); };
+    if(filtrosEng.tipo!=="rast") fvsMap.forEach(function(f, id){
+      var dt = f.dataConcretagem||f.dataAbertura||"";
+      if(f.travada || !semEng(f) || (desde && dt < desde)) return;
+      var st = fvsStatus(f);
+      out.push({ tipo:"fvs", id:id, d:f, data:dt, pronta:!!f.fechado, titulo:(f.codigo||"FVS")+" nº "+(f.numero||"s/ nº"),
+        sub:(fvsPavimentosList(f).join(", ")||f.local||"")+" · "+st.label, inspecao:!!assinaturaDoPapel(f, "tecnico") });
+    });
+    if(filtrosEng.tipo!=="fvs") rastMap.forEach(function(r, id){
+      var dt = r.data||"";
+      if(!semEng(r) || (desde && dt < desde)) return;
+      out.push({ tipo:"rast", id:id, d:r, data:dt, pronta:!!r.fechado, titulo:"Rastreabilidade "+fmtDateBR(dt),
+        sub:(r.blocoPav||(r.pavimentos||[])[0]||"")+" · "+(r.linhas||[]).length+" BT · "+rastStatus(r).label, inspecao:!!assinaturaDoPapel(r, "tecnico") });
+    });
+    out.sort(function(a,b){ return (b.pronta-a.pronta) || (b.data||"").localeCompare(a.data||""); });
+    return out;
+  }
+  function renderViewEngenharia(){
+    var c = document.getElementById("view-engenharia"); if(!c) return;
+    var hoje = todayISO(), pend = engPendentesAssinatura();
+    var todasPend = (function(){ var s = filtrosEng.tipo; filtrosEng.tipo = "todos"; var x = engPendentesAssinatura(); filtrosEng.tipo = s; return x; })();
+    var ncs = todasNaoConformidades().filter(function(n){ return !n.concluida; });
+    var ncVenc = ncs.filter(function(n){ return (n.prazo && n.prazo < hoje) || (n.diasAberto||0) >= 15; }).length;
+    var ctRows = ctRowsArray(), ctDec = ctRows.filter(function(r){ return ctSituacao(r)==="decidir"; }).length, ctAb = ctRows.filter(function(r){ return ctSituacao(r)==="abaixo"; }).length;
+    var tarefas = Array.from(tarefasMap.values()), tAbertas = tarefas.filter(function(t){ return t.status!=="feita"; });
+    var desde30 = ctSomarDias(hoje, -30), conc30 = 0, vol30 = 0;
+    rastMap.forEach(function(r){ if((r.data||"") >= desde30){ conc30++; (r.linhas||[]).forEach(function(l){ vol30 += Number(String(l.volBetoneira||"").replace(",", "."))||0; }); } });
+    var fvsCont = { aberta:0, aguardando:0, assinada:0 };
+    fvsMap.forEach(function(f){ if(f.travada) fvsCont.assinada++; else if(f.fechado) fvsCont.aguardando++; else fvsCont.aberta++; });
+    var fvsTot = fvsCont.aberta + fvsCont.aguardando + fvsCont.assinada || 1;
+    var ncIdade = { a:0, b:0, c:0 }; ncs.forEach(function(n){ var d = n.diasAberto||0; if(d < 7) ncIdade.a++; else if(d < 15) ncIdade.b++; else ncIdade.c++; });
+    var kpi = function(n, l, d, tom, ir){ return '<button type="button" class="dash-kpi-card tone-'+tom+'" '+ir+'><div class="n">'+n+'</div><div class="l">'+l+'</div><div class="d">'+d+'</div></button>'; };
+    var barra = function(rot, partes){
+      var tot = partes.reduce(function(s,p){ return s+p.n; }, 0) || 1;
+      return '<div class="eng-barra"><div class="eng-barra-rot">'+rot+'</div><div class="eng-barra-trilho">'
+        + partes.map(function(p){ return p.n ? '<i class="'+p.tom+'" style="width:'+(p.n*100/tot)+'%" title="'+escapeHtml(p.rot+': '+p.n)+'"></i>' : ''; }).join("")
+        + '</div><div class="eng-barra-leg">'+partes.map(function(p){ return '<span><i class="'+p.tom+'"></i>'+escapeHtml(p.rot)+' <b>'+p.n+'</b></span>'; }).join("")+'</div></div>';
+    };
+    var semAssin = !minhaAssinatura ? '<div class="banner">Cadastre a sua assinatura para assinar as fichas. <button type="button" class="btn small" data-cad-assin>Cadastrar assinatura</button></div>'
+      : (minhaAssinatura.papel!=="engenheiro" ? '<div class="banner">Seu cadastro de assinatura está como '+escapeHtml(PAPEIS_ASSIN[minhaAssinatura.papel]||minhaAssinatura.papel)+'. Para assinar como engenheira, troque a função em “Minha assinatura”. <button type="button" class="btn small" data-cad-assin>Minha assinatura</button></div>' : '');
+    var nSel = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; }).length;
+    var chipT = function(k, rot, n){ return '<button type="button" class="chip" data-eng-tipo="'+k+'" aria-pressed="'+(filtrosEng.tipo===k)+'">'+rot+' <span class="n">'+n+'</span></button>'; };
+    var lista = pend.length ? pend.map(function(x){
+      var k = x.tipo+"|"+x.id;
+      return '<div class="eng-item'+(x.pronta?"":" rascunho")+'"><label class="eng-chk"><input type="checkbox" data-eng-sel="'+escapeHtml(k)+'"'+(filtrosEng.sel[k]?" checked":"")+'></label>'
+        + '<div class="eng-item-tx"><span class="eng-tipo '+x.tipo+'">'+(x.tipo==="fvs"?"FVS":"Rastr.")+'</span><b>'+escapeHtml(x.titulo)+'</b>'
+        + '<small>'+escapeHtml(x.sub)+(x.data ? ' · '+escapeHtml(fmtDateBR(x.data)) : '')+'</small>'
+        + '<small class="'+(x.pronta?"ok":"warn")+'">'+(x.pronta ? "pronta para assinar" : "ainda em preenchimento")+(x.inspecao ? " · inspeção já assinou" : " · falta a inspeção")+'</small></div>'
+        + '<div class="eng-item-ac"><button type="button" class="btn small" data-eng-abrir="'+escapeHtml(k)+'">Abrir</button>'
+        + '<button type="button" class="btn small primary" data-eng-assinar="'+escapeHtml(k)+'"'+(minhaAssinatura && minhaAssinatura.papel==="engenheiro" ? "" : " disabled")+'>Assinar</button></div></div>';
+    }).join("") : '<div class="dash-vazio">Nada pendente de assinatura neste filtro. 👍</div>';
+    var opcoesPara = '<option value="estagiarios">Todos os estagiários</option>' + ESTAGIARIOS.map(function(e){ return '<option value="'+escapeHtml(e.email||e.nome)+'">'+escapeHtml(e.nome)+'</option>'; }).join("");
+    var tarefaLi = function(t){
+      var venc = t.status!=="feita" && t.prazo && t.prazo < hoje;
+      return '<div class="eng-tarefa'+(t.status==="feita"?" feita":"")+'"><div><b>'+escapeHtml(t.titulo)+'</b><small>Para: '+escapeHtml(t.paraNome||"estagiários")
+        + (t.prazo ? ' · prazo '+escapeHtml(fmtDateBR(t.prazo))+(venc ? ' <span class="ncx-tag bad">vencido</span>' : '') : '')
+        + (t.status==="feita" ? ' · feita por '+escapeHtml(t.feitaPor||"")+' em '+escapeHtml(fmtDateBR((t.feitaEm||"").slice(0,10))) : '')+'</small>'
+        + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div>'
+        + (t.status!=="feita" ? '<button type="button" class="btn small" data-tarefa-cancelar="'+escapeHtml(t._id)+'" title="Retirar a tarefa">Retirar</button>' : '')+'</div>';
+    };
+    c.innerHTML = '<div class="pav-header"><h2>Painel da engenharia</h2><span class="pav-total">'+escapeHtml(fmtDateBR(hoje))+'</span></div>'
+      + '<p class="view-desc">Indicadores da obra, fichas esperando a sua assinatura e tarefas para os estagiários.</p>'
+      + semAssin
+      + '<div class="dash-kpis">'
+        + kpi(todasPend.filter(function(x){ return x.pronta; }).length, "Prontas para assinar", todasPend.length+" sem a sua assinatura", "pendente", 'data-eng-ir="assin"')
+        + kpi(ncs.length, "NCs em aberto", ncVenc+" com prazo vencido ou +15 dias", ncs.length ? "nc" : "ok", 'data-goto-view="nc"')
+        + kpi(ctDec+ctAb, "Concreto: decidir", ctDec+" com justificativa · "+ctAb+" abaixo do fck", ctDec+ctAb ? "nc" : "ok", 'data-goto-view="ct"')
+        + kpi(tAbertas.length, "Tarefas em aberto", tAbertas.filter(function(t){ return t.prazo && t.prazo < hoje; }).length+" com prazo vencido", "info", 'data-eng-ir="tarefas"')
+      + '</div>'
+      + '<div class="dash-card" id="eng-assin"><div class="dash-card-h"><h3>Para assinar</h3><span class="hoje-cont">'+pend.length+'</span></div>'
+        + '<div class="eng-filtros"><div class="chips">'+chipT("todos", "Todas", todasPend.length)+chipT("fvs", "FVS", todasPend.filter(function(x){ return x.tipo==="fvs"; }).length)+chipT("rast", "Rastreabilidades", todasPend.filter(function(x){ return x.tipo==="rast"; }).length)+'</div>'
+          + '<select id="eng-periodo" aria-label="Período"><option value="30"'+(filtrosEng.periodo==="30"?" selected":"")+'>Últimos 30 dias</option><option value="90"'+(filtrosEng.periodo==="90"?" selected":"")+'>Últimos 90 dias</option><option value="todas"'+(filtrosEng.periodo==="todas"?" selected":"")+'>Todas</option></select></div>'
+        + '<div class="eng-lote"><button type="button" class="btn small" data-eng-sel-prontas>Selecionar as prontas</button><button type="button" class="btn small" data-eng-limpar>Limpar seleção</button>'
+          + '<button type="button" class="btn primary" data-eng-lote'+(nSel && minhaAssinatura && minhaAssinatura.papel==="engenheiro" ? "" : " disabled")+'>✍ Assinar selecionadas ('+nSel+')</button></div>'
+        + '<div class="eng-lista">'+lista+'</div></div>'
+      + '<div class="dash-grid">'
+        + '<div class="dash-card" id="eng-tarefas"><div class="dash-card-h"><h3>Tarefas para os estagiários</h3><span class="hoje-cont">'+tAbertas.length+' em aberto</span></div>'
+          + '<div class="eng-nova"><div class="field"><label for="eng-t-tit">O que fazer</label><input id="eng-t-tit" placeholder="ex.: completar betonadas da rastreabilidade de 05/10"></div>'
+          + '<div class="grid2"><div class="field"><label for="eng-t-para">Para</label><select id="eng-t-para">'+opcoesPara+'</select></div><div class="field"><label for="eng-t-prazo">Prazo</label><input type="date" id="eng-t-prazo"></div></div>'
+          + '<div class="field"><label for="eng-t-desc">Detalhes (opcional)</label><textarea id="eng-t-desc" rows="2"></textarea></div>'
+          + '<button type="button" class="btn primary" data-eng-tarefa>+ Enviar tarefa</button></div>'
+          + (tarefas.length ? tarefas.sort(function(a,b){ return (a.status==="feita")-(b.status==="feita") || String(b.criadoEm||"").localeCompare(String(a.criadoEm||"")); }).slice(0, 15).map(tarefaLi).join("") : '<div class="dash-vazio">Nenhuma tarefa enviada ainda.</div>')
+        + '</div>'
+        + '<div class="dash-card"><div class="dash-card-h"><h3>Indicadores</h3></div>'
+          + barra("Fichas FVS", [{ rot:"assinadas", n:fvsCont.assinada, tom:"ok" }, { rot:"fechadas aguardando assinatura", n:fvsCont.aguardando, tom:"warn" }, { rot:"em preenchimento", n:fvsCont.aberta, tom:"neutro" }])
+          + barra("NCs em aberto por idade", [{ rot:"até 7 dias", n:ncIdade.a, tom:"ok" }, { rot:"7 a 15 dias", n:ncIdade.b, tom:"warn" }, { rot:"mais de 15 dias", n:ncIdade.c, tom:"bad" }])
+          + '<div class="eng-num"><b>'+conc30+'</b> concretagens nos últimos 30 dias · <b>'+String(Math.round(vol30*10)/10).replace(".", ",")+' m³</b></div>'
+          + '<div class="eng-num">Controle tecnológico: '+escapeHtml(ctResumoConclusao())+'</div>'
+        + '</div>'
+      + '</div>';
+    pintarIcones(c);
+    var re = function(){ renderViewEngenharia(); };
+    c.querySelectorAll("[data-cad-assin]").forEach(function(b){ b.addEventListener("click", abrirMinhaAssinatura); });
+    c.querySelectorAll("[data-goto-view]").forEach(function(b){ b.addEventListener("click", function(){ switchView(b.getAttribute("data-goto-view")); }); });
+    c.querySelectorAll("[data-eng-ir]").forEach(function(b){ b.addEventListener("click", function(){ var el = document.getElementById("eng-"+b.getAttribute("data-eng-ir")); if(el) el.scrollIntoView({ behavior:"smooth" }); }); });
+    c.querySelectorAll("[data-eng-tipo]").forEach(function(b){ b.addEventListener("click", function(){ filtrosEng.tipo = b.getAttribute("data-eng-tipo"); re(); }); });
+    c.querySelector("#eng-periodo").addEventListener("change", function(e){ filtrosEng.periodo = e.target.value; re(); });
+    c.querySelectorAll("[data-eng-sel]").forEach(function(ch){ ch.addEventListener("change", function(){ filtrosEng.sel[ch.getAttribute("data-eng-sel")] = ch.checked; re(); }); });
+    c.querySelector("[data-eng-sel-prontas]").addEventListener("click", function(){ pend.forEach(function(x){ if(x.pronta) filtrosEng.sel[x.tipo+"|"+x.id] = true; }); re(); });
+    c.querySelector("[data-eng-limpar]").addEventListener("click", function(){ filtrosEng.sel = {}; re(); });
+    c.querySelectorAll("[data-eng-abrir]").forEach(function(b){ b.addEventListener("click", function(){ var p = b.getAttribute("data-eng-abrir").split("|"); openModal(p[0], p[1]); }); });
+    c.querySelectorAll("[data-eng-assinar]").forEach(function(b){ b.addEventListener("click", function(){ engAssinarLote([b.getAttribute("data-eng-assinar")], b); }); });
+    c.querySelector("[data-eng-lote]").addEventListener("click", function(ev){
+      var ks = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; });
+      engAssinarLote(ks, ev.currentTarget);
+    });
+    c.querySelector("[data-eng-tarefa]").addEventListener("click", function(ev){
+      var tit = c.querySelector("#eng-t-tit").value.trim();
+      if(!tit){ alert("Escreva o que precisa ser feito."); return; }
+      var para = c.querySelector("#eng-t-para"), nomePara = para.options[para.selectedIndex].text;
+      var dados = { titulo:tit, descricao:c.querySelector("#eng-t-desc").value.trim(), prazo:c.querySelector("#eng-t-prazo").value||"", para:para.value, paraNome:nomePara,
+        status:"aberta", criadoPor:currentUserEmail||"", criadoEm:nowISO(), atualizadoEm:nowISO() };
+      ev.currentTarget.disabled = true;
+      Promise.race([tarefasCol.add(dados), new Promise(function(r){ setTimeout(r, 8000); })]).then(re).catch(function(ex){ console.error(ex); alert("Não foi possível enviar a tarefa: "+(ex && ex.code==="permission-denied" ? "o banco ainda não aceita tarefas (falta publicar as regras)." : (ex && ex.message || "erro"))); re(); });
+    });
+    c.querySelectorAll("[data-tarefa-cancelar]").forEach(function(b){ b.addEventListener("click", function(){
+      if(!confirm("Retirar esta tarefa? Ela fica guardada como cancelada.")) return;
+      tarefasCol.doc(b.getAttribute("data-tarefa-cancelar")).set({ status:"feita", cancelada:true, feitaPor:currentUserEmail||"", feitaEm:nowISO(), atualizadoEm:nowISO() }, { merge:true });
+    }); });
+  }
+  // Assina como engenheira várias fichas de uma vez (FVS: também fecha e trava, como no botão da ficha)
+  async function engAssinarLote(chaves, botao){
+    if(!minhaAssinatura || minhaAssinatura.papel!=="engenheiro"){ alert("Para assinar como engenheira, cadastre a sua assinatura com a função Engenheiro(a)."); return; }
+    var itens = chaves.map(function(k){ var p = k.split("|"); return { tipo:p[0], id:p[1], d:(p[0]==="fvs" ? fvsMap : rastMap).get(p[1]) }; })
+      .filter(function(x){ return x.d && !(x.tipo==="fvs" && x.d.travada) && !(x.d.assinaturas||[]).some(function(a){ return a.papel==="engenheiro"; }); });
+    if(!itens.length){ alert("Nenhuma ficha selecionada precisa da sua assinatura."); return; }
+    var nF = itens.filter(function(x){ return x.tipo==="fvs"; }).length, nR = itens.length - nF;
+    var abertas = itens.filter(function(x){ return !x.d.fechado; }).length;
+    if(!confirm("Assinar "+itens.length+" ficha(s) como "+(PAPEIS_ASSIN.engenheiro)+"?\n\n"+(nF ? "• "+nF+" FVS — serão fechadas e travadas\n" : "")+(nR ? "• "+nR+" rastreabilidade(s)\n" : "")
+      +(abertas ? "\nAtenção: "+abertas+" ainda estão em preenchimento." : ""))) return;
+    var agora = nowISO(), uid = (auth.currentUser||{}).uid||"";
+    var assin = { papel:"engenheiro", nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"", email:currentUserEmail, uid:uid, em:agora, imagem:minhaAssinatura.imagem||"" };
+    if(botao){ botao.disabled = true; botao.textContent = "Assinando…"; }
+    try{
+      var envios = [];
+      for(var i=0;i<itens.length;i+=200){
+        var lote = dbf.batch();
+        itens.slice(i, i+200).forEach(function(x){
+          var d = x.d, dados = { assinaturas:(d.assinaturas||[]).concat([Object.assign({}, assin, x.tipo==="fvs" ? { revisao:d.revisao||0 } : {})]), updatedAt:agora, updatedByEmail:currentUserEmail||"" };
+          if(!d.engenheiro) dados.engenheiro = minhaAssinatura.nome||"";
+          if(x.tipo==="fvs"){
+            dados.fechado = true; if(!d.dataFechamento) dados.dataFechamento = todayISO();
+            dados.travada = true; dados.travadaEm = agora; dados.travadaPor = currentUserEmail||"";
+          }
+          lote.update((x.tipo==="fvs" ? fvsCol : rastCol).doc(x.id), dados);
+        });
+        envios.push(lote.commit());
+      }
+      var r = await Promise.race([Promise.all(envios).then(function(){ return "ok"; }), new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 12000); })]);
+      if(r==="pendente") alert("Sem conexão no momento — as assinaturas serão enviadas quando o sinal voltar. Mantenha o app aberto.");
+      filtrosEng.sel = {};
+    }catch(ex){
+      console.error(ex);
+      alert("Não foi possível assinar: "+(ex && ex.message ? ex.message : "erro desconhecido"));
+    }
+    renderViewEngenharia();
+  }
+  // Tarefas da engenharia para mim (estagiários / admin) — no Início
+  function minhasTarefas(){
+    var eu = String(currentUserEmail||"").toLowerCase(), out = [];
+    tarefasMap.forEach(function(t, id){
+      if(t.status==="feita") return;
+      var p = String(t.para||"").toLowerCase();
+      if(p==="estagiarios" || p===eu || (perfilAtual==="estagiario" && p && p.indexOf("@")===-1)) out.push(Object.assign({ _id:id }, t));
+    });
+    return out.sort(function(a,b){ return String(a.prazo||"9999").localeCompare(String(b.prazo||"9999")); });
+  }
+  function tarefasInicioHtml(){
+    if(perfilAtual==="engenharia" || perfilAtual==="qualidade") return "";
+    var l = minhasTarefas(); if(!l.length) return "";
+    var hoje = todayISO();
+    return '<div class="dash-card eng-minhas"><div class="dash-card-h"><h3>Tarefas da engenharia</h3><span class="hoje-cont">'+l.length+'</span></div>'
+      + l.map(function(t){ return '<div class="eng-tarefa"><div><b>'+escapeHtml(t.titulo)+'</b><small>'+(t.prazo ? 'prazo '+escapeHtml(fmtDateBR(t.prazo))+(t.prazo < hoje ? ' <span class="ncx-tag bad">vencido</span>' : '') : 'sem prazo')+' · pedida por '+escapeHtml(String(t.criadoPor||"").split("@")[0])+'</small>'
+        + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div><button type="button" class="btn small primary" data-tarefa-feita="'+escapeHtml(t._id)+'">✓ Feita</button></div>'; }).join("")
+      + '</div>';
+  }
+  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -988,7 +1185,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       b.setAttribute("aria-current", b.getAttribute("data-view")===nome ? "page" : "false");
     });
     window.scrollTo(0, 0);
-    if(nome==="dashboard") renderViewDashboard();
+    if(nome==="engenharia") renderViewEngenharia();
+    else if(nome==="dashboard") renderViewDashboard();
     else if(nome==="pavimento") renderViewPavimento();
     else if(nome==="nc") renderViewNc();
     else if(nome==="ct") renderViewCt();
@@ -1447,6 +1645,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '<button type="button" class="btn small dash-relatorio" data-relatorio-semana title="Resumo da semana em uma página A4 (imprimir ou salvar em PDF)"><svg class="ti-i" data-i="file"></svg>Resumo da semana</button>'
         + '<p class="dash-sub">'+escapeHtml(DEFAULT_OBRA)+'</p>'
       + '</div>'
+      + tarefasInicioHtml()
       + hojeHtml
       + kpisHtml
       + cartaoAvancoHtml()
@@ -1506,6 +1705,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       el.addEventListener("click", function(){ abrirFichaNf(el.getAttribute("data-hoje-ct")); });
     });
     container.querySelector("[data-relatorio-semana]").addEventListener("click", abrirRelatorioSemana);
+    container.querySelectorAll("[data-tarefa-feita]").forEach(function(b){ b.addEventListener("click", function(){
+      tarefasCol.doc(b.getAttribute("data-tarefa-feita")).set({ status:"feita", feitaPor:currentUserEmail||"", feitaEm:nowISO(), atualizadoEm:nowISO() }, { merge:true });
+    }); });
     var bt = container.querySelector("[data-hoje-tudo]");
     if(bt) bt.addEventListener("click", function(){ window.__hojeTudo = !window.__hojeTudo; renderViewDashboard(); });
     container.querySelectorAll("[data-abrir-rast]").forEach(function(el){
@@ -3800,6 +4002,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     currentUserEmail = user.email || "";
     somenteLeitura = ehSomenteLeitura(currentUserEmail);
     document.body.classList.toggle("somente-leitura", somenteLeitura);
+    perfilAtual = perfilDe(currentUserEmail);
+    document.body.setAttribute("data-perfil", perfilAtual);
     // v1.11: sem faixa de aviso (quebrava o layout); a conta só de visualização
     // vê tudo igual aos outros, só sem os botões de criar/alterar/apagar.
     definirUsuario(currentUserEmail);
@@ -3812,7 +4016,15 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       minhaAssinatura = snap.exists ? snap.data() : null;
       if(draft && draft.type==="fvs") renderModal();
     }, function(err){ console.warn("assinaturas:", err && err.code); });
+    // v1.25: tarefas da engenharia para os estagiários
+    if(unsubTarefas) unsubTarefas();
+    unsubTarefas = tarefasCol.onSnapshot(function(snap){
+      tarefasMap = new Map(); snap.docs.forEach(function(d){ tarefasMap.set(d.id, d.data()); });
+      var v = document.getElementById("view-engenharia");
+      if(v && !v.hidden) renderViewEngenharia(); else if(!document.getElementById("view-dashboard").hidden) renderViewDashboard();
+    }, function(err){ console.warn("tarefas:", err && err.code); });
     render();
+    if(perfilAtual==="engenharia") switchView("engenharia"); // a engenheira abre no painel dela
     // Dá tempo das fichas chegarem do servidor antes de oferecer o rascunho.
     setTimeout(oferecerRascunhoPendente, 2500);
   }
@@ -3827,6 +4039,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubCronProg){ unsubCronProg(); unsubCronProg=null; }
     if(unsubCronEtapas){ unsubCronEtapas(); unsubCronEtapas=null; }
     if(unsubAssin){ unsubAssin(); unsubAssin=null; } minhaAssinatura = null;
+    if(unsubTarefas){ unsubTarefas(); unsubTarefas=null; } tarefasMap = new Map();
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -6951,6 +7164,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     initAco({ col:acoCol, lista:acoListaComConcretagem, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
       nowISO:nowISO, usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return acoErroAcesso; }, lajes:acoLajes });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
+    document.getElementById("btn-nav-engenharia").addEventListener("click", function(){ switchView("engenharia"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
     document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
     document.getElementById("overlay").addEventListener("click", function(e){ if(e.target.id==="overlay") tentarFecharModal(); });
