@@ -93,7 +93,8 @@ svg.ti-i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-w
 .ti-bottom {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
   height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  /* v1.27: sempre numa linha só, qualquer que seja a quantidade de botões visíveis */
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   background: var(--surface); border-top: 1px solid var(--border);
 }
 .ti-bn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: none; background: none; font: 600 11.5px var(--font-body); color: var(--text-muted); cursor: pointer; }
@@ -753,3 +754,7 @@ body[data-perfil="qualidade"] .so-obra, body[data-perfil="qualidade"] .so-campo 
 #view-engenharia .eng-nova { padding-top: 12px; }
 #view-engenharia .eng-nova input, #view-engenharia .eng-nova textarea, #view-engenharia .eng-nova select { width: 100%; }
 #view-engenharia .eng-barra:first-of-type { margin-top: 14px; }
+
+/* v1.27: na barra de baixo, o "Painel" só aparece para a engenharia (no lugar do Início);
+   o admin abre o painel pelo menu lateral — a barra fica com 5 botões */
+body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
