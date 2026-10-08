@@ -705,3 +705,51 @@ input.campo-dup { border-color: var(--bad) !important; background: var(--bad-sof
 .mapa-aba small { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 196px; }
 .mapa-aba[aria-selected="true"] { border-color: var(--text); box-shadow: inset 0 -3px 0 var(--text); }
 .mapa-aba.nova { justify-content: center; font-weight: 700; font-size: 13px; border-style: dashed; color: var(--text-muted); }
+
+/* ---------- v1.25: perfis (engenharia / qualidade) e painel da engenharia ---------- */
+.so-eng { display: none !important; }
+body[data-perfil="engenharia"] .so-eng, body[data-perfil="admin"] .so-eng { display: flex !important; }
+body[data-perfil="engenharia"] .nao-eng { display: none !important; }
+/* engenheira: painel gerencial — sem os botões de preencher */
+body[data-perfil="engenharia"] .ti-side-novo, body[data-perfil="engenharia"] .ti-fab,
+body[data-perfil="engenharia"] [data-clicar="btn-new-fvs"], body[data-perfil="engenharia"] .so-campo { display: none !important; }
+/* qualidade (Jessica): só FVS, controle tecnológico e NCs */
+body[data-perfil="qualidade"] .so-obra, body[data-perfil="qualidade"] .so-campo { display: none !important; }
+.eng-filtros, .eng-lote { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.eng-filtros .chips { flex: 1 1 auto; }
+.eng-lote .btn.primary { margin-left: auto; }
+.eng-lista { display: flex; flex-direction: column; }
+.eng-item { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-top: 1px solid var(--border); }
+.eng-item.rascunho { opacity: .78; }
+.eng-chk input { width: 20px; height: 20px; }
+.eng-item-tx { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.eng-item-tx b { font-size: 14px; }
+.eng-item-tx small { font-size: 12px; color: var(--text-muted); }
+.eng-item-tx small.ok { color: var(--good); } .eng-item-tx small.warn { color: var(--warn); }
+.eng-tipo { align-self: flex-start; font: 700 10.5px var(--font-mono); padding: 1px 7px; border-radius: 999px; background: var(--surface-2); }
+.eng-tipo.rast { background: var(--warn-soft); color: var(--warn); }
+.eng-item-ac { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.eng-nova { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px dashed var(--border); }
+.eng-nova .btn { align-self: flex-start; }
+.eng-tarefa { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 9px 2px; border-top: 1px solid var(--border); }
+.eng-tarefa > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.eng-tarefa small { font-size: 12px; color: var(--text-muted); }
+.eng-tarefa.feita { opacity: .6; }
+.eng-barra { margin: 8px 0 14px; }
+.eng-barra-rot { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
+.eng-barra-trilho { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); }
+.eng-barra-trilho i, .eng-barra-leg i { display: block; }
+.eng-barra-leg { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--text-muted); }
+.eng-barra-leg span { display: inline-flex; align-items: center; gap: 5px; }
+.eng-barra-leg i { width: 10px; height: 10px; border-radius: 3px; }
+.eng-barra i.ok { background: var(--good); } .eng-barra i.warn { background: var(--warn); } .eng-barra i.bad { background: var(--bad); } .eng-barra i.neutro { background: var(--text-muted); opacity: .5; }
+.eng-num { font-size: 13.5px; margin: 6px 0; }
+@media (max-width: 560px) { .eng-item { flex-wrap: wrap; } .eng-item-ac { width: 100%; } }
+#view-engenharia .dash-card > .eng-filtros, #view-engenharia .dash-card > .eng-lote, #view-engenharia .eng-lista,
+#view-engenharia .eng-nova, #view-engenharia .dash-card > .eng-tarefa, #view-engenharia .eng-barra, #view-engenharia .eng-num,
+#view-engenharia .dash-card > .dash-vazio, .eng-minhas > .eng-tarefa { padding-inline: 16px; }
+#view-engenharia .eng-filtros { padding-top: 12px; }
+#view-engenharia .eng-num:last-child, #view-engenharia .eng-lista { padding-bottom: 12px; }
+#view-engenharia .eng-nova { padding-top: 12px; }
+#view-engenharia .eng-nova input, #view-engenharia .eng-nova textarea, #view-engenharia .eng-nova select { width: 100%; }
+#view-engenharia .eng-barra:first-of-type { margin-top: 14px; }

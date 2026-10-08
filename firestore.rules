@@ -104,6 +104,13 @@ service cloud.firestore {
       allow write: if podeEditar();
     }
 
+    // v1.25: tarefas que a engenharia passa para os estagiários
+    match /tarefas/{docId} {
+      allow read: if request.auth != null;
+      allow create, update: if podeEditar();
+      allow delete: if false;
+    }
+
     // Bloqueia qualquer outra coleção não prevista acima por padrão.
     match /{document=**} {
       allow read, write: if false;
