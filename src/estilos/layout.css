@@ -336,3 +336,35 @@ legend { font-size: 16px; }
 .ct-bt-id small { color: var(--text-muted); font-size: 12px; }
 .ct-idade.recuperou { background: var(--warn-soft); border-color: var(--warn); } .ct-idade.recuperou b { color: var(--warn); }
 .ct-aviso-fck.leve { background: var(--warn-soft); color: var(--warn); }
+
+/* ---------- Avanço da estrutura — corte do prédio (v1.5) ---------- */
+.dash-card-avanco { margin-bottom: 14px; }
+.cp { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 28px; padding: 16px; }
+.cp-desenho { flex: 0 0 auto; width: min(240px, 52vw); }
+.cp-svg { width: 100%; height: auto; display: block; }
+.cp-nivel { cursor: pointer; stroke-width: 1; transition: opacity .12s; }
+.cp-nivel:hover { opacity: .75; }
+.cp-liberado { fill: var(--accent-strong); stroke: var(--accent-strong); }
+.cp-concretado { fill: var(--good); stroke: var(--good); }
+.cp-execucao { fill: var(--warn-soft); stroke: var(--warn); }
+.cp-nada { fill: var(--surface-2); stroke: var(--border-strong); }
+.cp-solo { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.cp-seta { stroke: var(--bad); stroke-width: 2; }
+.cp-seta-p { fill: var(--bad); }
+.cp-info { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.cp-pct { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cp-pct b { font: 800 54px/1 var(--font-display); color: var(--accent-strong); }
+.cp-pct b small { font-size: 28px; }
+.cp-pct span { font-size: 13.5px; color: var(--text-muted); font-weight: 600; }
+.cp-ate { font-size: 15px; }
+.cp-barra { height: 10px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+.cp-barra i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--good), var(--accent-strong)); }
+.cp-leg { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+.cp-leg li { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; column-gap: 8px; font-size: 13.5px; font-weight: 600; }
+.cp-leg li i { width: 14px; height: 10px; border-radius: 2px; border: 1px solid transparent; }
+.cp-leg li i.cp-liberado { background: var(--accent-strong); } .cp-leg li i.cp-concretado { background: var(--good); }
+.cp-leg li i.cp-execucao { background: var(--warn-soft); border-color: var(--warn); } .cp-leg li i.cp-nada { background: var(--surface-2); border-color: var(--border-strong); }
+.cp-leg li b { font-family: var(--font-mono); }
+.cp-leg li small { grid-column: 2 / -1; font-size: 11.5px; color: var(--text-muted); font-weight: 500; }
+.cp-dica { font-size: 12px; color: var(--text-muted); }
+@media (max-width: 520px) { .cp-desenho { width: 100%; max-width: 260px; margin: 0 auto; } .cp-pct b { font-size: 46px; } }

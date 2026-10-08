@@ -14,6 +14,7 @@ import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
+import { corteHtml } from "./modulos/obra/corte-predio.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -652,12 +653,13 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(mLead) return parseInt(mLead[1],10);
     var mCod = v.match(/\(?\b(\d{3,4})\)?\b/);
     if(mCod && PAVIMENTO_CODIGOS[mCod[1]]!==undefined) return PAVIMENTO_CODIGOS[mCod[1]];
-    var mTipo = v.match(/(\d{1,2})\s*[ºo°.]?\s*pav(imento)?(\s*tipo)?\b/);
+    // v1.5: aceita também "⁰" e "ª" (ex.: "3⁰ Pavimento Tipo" estava ficando sem pavimento)
+    var mTipo = v.match(/(\d{1,2})\s*[ºo°⁰ª.]?\s*pav(imento)?(\s*tipo)?\b/);
     if(mTipo){
       var n = parseInt(mTipo[1],10);
       if(n>=1 && n<=17) return 6+n;
     }
-    var mEmb = v.match(/(\d{1,2})\s*[ºo°.]?\s*embasamento/);
+    var mEmb = v.match(/(\d{1,2})\s*[ºo°⁰ª.]?\s*embasamento/);
     if(mEmb){
       var ne = parseInt(mEmb[1],10);
       if(ne>=1 && ne<=5) return 1+ne;
@@ -908,6 +910,47 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     // visível no momento.
   }
 
+  /* ---------------- v1.5: avanço da estrutura (corte do prédio) ----------------
+     Níveis 00–27 da obra (mesma numeração usada em pavimentoRank). Um pavimento
+     conta como CONCRETADO quando existe rastreabilidade dele, e LIBERADO quando,
+     além disso, todas as FVS dele estão fechadas. A porcentagem é a fração dos
+     28 níveis já concretados. */
+  var NIVEIS_OBRA = (function(){
+    var n = ["Fundação", "Subsolo"], i;
+    for(i=1;i<=5;i++) n.push(i+"º Embasamento");
+    for(i=1;i<=17;i++) n.push(i+"º Pavimento Tipo");
+    return n.concat(["Cobertura", "Dependência", "Pavimento Técnico", "Telhado"]);
+  })();
+  // "Piso do 1° Embasamento / Piso do 1° Pavimento Tipo" vale para os dois níveis
+  function niveisDoTexto(lista){
+    var out = [];
+    (lista||[]).forEach(function(t){
+      String(t||"").split("/").forEach(function(parte){
+        var r = pavimentoRank(parte);
+        if(r < NIVEIS_OBRA.length && out.indexOf(r)===-1) out.push(r);
+      });
+    });
+    return out;
+  }
+  function avancoEstrutura(){
+    var niveis = NIVEIS_OBRA.map(function(nome, rank){ return { rank:rank, nome:nome, rast:0, fvs:0, fvsFechadas:0, status:"nada" }; });
+    rastMap.forEach(function(r){
+      niveisDoTexto((r.pavimentos && r.pavimentos.length) ? r.pavimentos : [r.blocoPav]).forEach(function(k){ niveis[k].rast++; });
+    });
+    fvsMap.forEach(function(f){
+      niveisDoTexto(fvsPavimentosList(f)).forEach(function(k){ niveis[k].fvs++; if(f.fechado) niveis[k].fvsFechadas++; });
+    });
+    var cont = { liberado:0, concretado:0, execucao:0, nada:0 }, topo = null;
+    niveis.forEach(function(n){
+      if(n.rast) n.status = (n.fvs && n.fvsFechadas===n.fvs) ? "liberado" : "concretado";
+      else if(n.fvs) n.status = "execucao";
+      cont[n.status]++;
+      if(n.rast) topo = n.rank;
+    });
+    var pct = Math.round((cont.liberado + cont.concretado) / niveis.length * 100);
+    return { niveis:niveis, cont:cont, topo:topo, pct:pct };
+  }
+
   /* ---------------- painel geral (tela inicial) ---------------- */
   function renderViewDashboard(){
     var container = document.getElementById("view-dashboard");
@@ -992,6 +1035,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + '<p class="dash-sub">'+escapeHtml(DEFAULT_OBRA)+'</p>'
       + '</div>'
       + kpisHtml
+      + '<div class="dash-card dash-card-avanco"><div class="dash-card-h"><h3>Avanço da estrutura</h3>'
+        + '<button type="button" class="mais" data-goto-view="pavimento">FVS por pavimento →</button></div>'
+        + corteHtml(avancoEstrutura()) + '</div>'
       + '<div class="dash-grid">'
         + cartao("Não conformidades abertas há mais tempo", "nc", "Todas", ncLista, "Nenhuma NC em aberto. 👍")
         + cartao("Corpos de prova com resultado atrasado", "ct", "Controle tecnológico", ctLista, "Nenhum resultado atrasado.")
@@ -999,6 +1045,15 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + cartao("Últimas concretagens", "board", "Rastreabilidades", rastLista, "Nenhuma rastreabilidade lançada ainda.")
       + '</div>';
     pintarIcones(container);
+    // corte do prédio: tocar num pavimento abre "FVS por pavimento" filtrado nele
+    container.querySelectorAll("[data-nivel]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var rank = +el.getAttribute("data-nivel");
+        var canon = pavimentosCanonicos(buildRows()).find(function(c){ return c.rank===rank; });
+        filtrosPav.pavimento = canon ? canon.label : "";
+        switchView("pavimento");
+      });
+    });
 
     container.querySelectorAll("[data-goto-view]").forEach(function(btn){
       btn.addEventListener("click", function(){
