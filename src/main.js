@@ -15,6 +15,7 @@ import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml } from "./modulos/obra/corte-predio.js";
+import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -503,6 +504,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // em vez de subir um PDF pesado de novo a cada ficha, economizando a cota
   // do Cloudinary discutida com o Matheus.
   var plantasCol = dbf.collection("plantas");
+  // v1.5: programação/recebimento de aço (ver src/modulos/aco/aco.js)
+  var acoCol = dbf.collection("entregasAco");
+  var acoMap = new Map(), acoErroAcesso = false, unsubAco = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
@@ -878,6 +882,8 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(viewDash && !viewDash.hidden) renderViewDashboard();
     var viewPlantas = document.getElementById("view-plantas");
     if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
+    var viewAco = document.getElementById("view-aco");
+    if(viewAco && !viewAco.hidden && !document.querySelector(".ct-ficha-ov")) renderViewAco(viewAco);
     // Bolinhas vermelhas do menu (v1.3)
     definirContador("nc", todasNaoConformidades().filter(function(i){ return !i.concluida; }).length);
     definirContador("ct", ctRowsArray().filter(ctTemPendencia).length);
@@ -890,7 +896,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // alcançáveis passando por dentro de outra (ex.: Não Conformidades antes
   // só abria de dentro de "FVS por Pavimento") — agora qualquer tela pode
   // ser aberta a partir de qualquer outra, inclusive pelo menu do topo.
-  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas" };
+  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -905,6 +911,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     else if(nome==="nc") renderViewNc();
     else if(nome==="ct") renderViewCt();
     else if(nome==="plantas") renderViewPlantas();
+    else if(nome==="aco") renderViewAco(document.getElementById("view-aco"));
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -1022,6 +1029,15 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         (x.r.linhas||[]).length+" betonada(s)"+(vol? " · "+String(Math.round(vol*10)/10).replace(".", ",")+" m³":""), fmtDateBR(x.r.data));
     }).join("");
 
+    // Próximas entregas de aço (atrasadas primeiro)
+    var hojeAco = todayISO();
+    var acoLista = proximasEntregas(Array.from(acoMap.values()), hojeAco, 5).map(function(e){
+      var st = acoSituacao(e, hojeAco), p = acoPeso(e);
+      return li('data-goto-view="aco"', "truck", st==="atrasada"?"bad":"info",
+        "Pedido "+(e.pedido||"s/ nº")+" · "+(e.fornecedor||""),
+        (e.destino||"sem destino")+(p? " · "+Math.round(p).toLocaleString("pt-BR")+" kg":""),
+        st==="atrasada" ? "atrasada" : fmtDateBR(e.dataPrevista), st==="atrasada"?"bad":"");
+    }).join("");
     var agora = new Date();
     var dataTxt = agora.toLocaleDateString("pt-BR", { weekday:"long", day:"2-digit", month:"long" });
     var h = agora.getHours(), saud = h<12 ? "Bom dia" : (h<18 ? "Boa tarde" : "Boa noite");
@@ -1043,6 +1059,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + cartao("Corpos de prova com resultado atrasado", "ct", "Controle tecnológico", ctLista, "Nenhum resultado atrasado.")
         + cartao("Fichas FVS em aberto", "board", "Todas as fichas", fvsLista, "Nenhuma ficha em aberto.")
         + cartao("Últimas concretagens", "board", "Rastreabilidades", rastLista, "Nenhuma rastreabilidade lançada ainda.")
+        + cartao("Próximas entregas de aço", "aco", "Entregas de aço", acoLista, "Nenhuma entrega de aço programada.")
       + '</div>';
     pintarIcones(container);
     // corte do prédio: tocar num pavimento abre "FVS por pavimento" filtrado nele
@@ -2634,6 +2651,15 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       snap.docs.forEach(function(d){ plantasMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    // Aço: se as regras do banco ainda não liberam esta coleção, a tela avisa
+    // em vez de marcar o app inteiro como "erro de sincronização".
+    if(unsubAco) unsubAco();
+    unsubAco = acoCol.onSnapshot(function(snap){
+      acoErroAcesso = false;
+      acoMap = new Map();
+      snap.docs.forEach(function(d){ acoMap.set(d.id, Object.assign({ id:d.id }, d.data())); });
+      render();
+    }, function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); });
   }
   function showApp(user){
     document.getElementById("auth-screen").hidden = true;
@@ -2653,6 +2679,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(unsubFvs){ unsubFvs(); unsubFvs=null; }
     if(unsubRast){ unsubRast(); unsubRast=null; }
     if(unsubCt){ unsubCt(); unsubCt=null; }
+    if(unsubAco){ unsubAco(); unsubAco=null; }
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -5322,6 +5349,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     document.getElementById("btn-view-pavimento").addEventListener("click", function(){ showViewPavimento(); });
     document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
+    document.getElementById("btn-view-aco").addEventListener("click", function(){ switchView("aco"); });
+    initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO,
+      nowISO:nowISO, usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return acoErroAcesso; } });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
     document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
@@ -5389,6 +5419,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       tela("Não conformidades", "nc", "alert");
       tela("Controle tecnológico do concreto", "ct", "flask");
       tela("Plantas", "plantas", "map");
+      tela("Entregas de aço", "aco", "truck");
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
       var fichas = [];

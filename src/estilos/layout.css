@@ -368,3 +368,28 @@ legend { font-size: 16px; }
 .cp-leg li small { grid-column: 2 / -1; font-size: 11.5px; color: var(--text-muted); font-weight: 500; }
 .cp-dica { font-size: 12px; color: var(--text-muted); }
 @media (max-width: 520px) { .cp-desenho { width: 100%; max-width: 260px; margin: 0 auto; } .cp-pct b { font-size: 46px; } }
+
+/* ---------- Entregas de aço (v1.5) ---------- */
+.aco-lista { display: flex; flex-direction: column; gap: 10px; }
+.aco-card { display: flex; align-items: center; gap: 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: 14px; box-shadow: var(--shadow); cursor: pointer; }
+.aco-card:hover { background: var(--surface-3); }
+.aco-card.atrasada { border-left-color: var(--bad); }
+.aco-card.entregue { border-left-color: var(--good); }
+.aco-card.cancelado { border-left-color: var(--border-strong); opacity: .7; }
+.aco-data { flex: none; width: 58px; text-align: center; display: flex; flex-direction: column; }
+.aco-data b { font: 700 18px var(--font-mono); }
+.aco-data small { font-size: 11px; color: var(--text-muted); }
+.aco-corpo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.aco-corpo b { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aco-corpo small { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aco-bitolas { font-family: var(--font-mono); }
+.aco-peso { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.aco-peso b { font: 700 15px var(--font-mono); }
+.aco-itens { display: flex; flex-direction: column; gap: 8px; }
+.aco-item { display: grid; grid-template-columns: 110px minmax(0, 1fr) 120px 44px; gap: 8px; align-items: end; }
+.aco-item .field { margin: 0; }
+@media (max-width: 640px) {
+  .aco-item { grid-template-columns: 1fr 1fr 44px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-3); }
+  .aco-item .field:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .aco-card { flex-wrap: wrap; } .aco-peso { flex-direction: row; align-items: center; width: 100%; justify-content: space-between; }
+}
