@@ -691,3 +691,6 @@ body.somente-leitura [data-assinar], body.somente-leitura [data-cad-assin], body
 .ct-mais { flex: 1 1 100%; }
 .ct-mais summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--text-muted); padding: 4px 0; }
 .ct-mais-corpo { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 6px; }
+
+/* v1.21: elemento repetido na mesma betonada */
+input.campo-dup { border-color: var(--bad) !important; background: var(--bad-soft) !important; }

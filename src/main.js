@@ -19,7 +19,7 @@ import { pintarIcones } from "./ui/icones.js";
 import { corteHtml, corteEtapaHtml } from "./modulos/obra/corte-predio.js";
 import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapas.js";
 import { rotuloArea, rotuloSvg, rotuloCanvas, OPAC_FUNDO } from "./modulos/rastreabilidade/rotulo-mapa.js";
-import { semRepetidas as pecasSemRepetidas, pecasRepetidas } from "./modulos/rastreabilidade/pecas.js";
+import { semRepetidas as pecasSemRepetidas, pecasRepetidas, repetidasNoTexto as pecasRepetidasNoTexto } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { lerPendencias, sugerirFvs, norm as normNc } from "./modulos/nc/pendencias.js";
 import { adicionarAssinaturasXlsx, centralizarImagemNaCaixa } from "./modulos/assinatura/xlsx-assinatura.js";
@@ -6061,14 +6061,24 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           // instante é o que travava a digitação.
           if(f==="saidaUsina"||f==="lancFinal") refreshTemposGasto();
         });
-        // v1.17: o mesmo elemento não pode ser concretado duas vezes na ficha
-        if(el.getAttribute("data-line-field")==="pecas") el.addEventListener("change", function(){
-          var idx=+el.getAttribute("data-line-idx");
-          var r = pecasSemRepetidas(draft.data.linhas, idx);
-          if(!r.repetidas.length) return;
-          draft.data.linhas[idx].pecas = r.texto; el.value = r.texto;
-          alert(r.repetidas.map(function(x){ return "“"+x.peca+"” já está na BT "+x.seq; }).join("\n")+"\n\nO mesmo elemento não pode ser lançado duas vezes nesta ficha — foi retirado.");
-        });
+        // v1.21: o mesmo elemento não pode se repetir NA MESMA BETONADA (mesma NF).
+        // Em BTs diferentes pode. O aviso aparece enquanto digita; ao sair do
+        // campo, a repetição é retirada.
+        if(el.getAttribute("data-line-field")==="pecas"){
+          var avisarRep = function(){
+            var rep = pecasRepetidasNoTexto(el.value);
+            el.classList.toggle("campo-dup", rep.length>0);
+            el.title = rep.length ? "Repetido nesta betonada: "+rep.join(", ") : "";
+          };
+          el.addEventListener("input", avisarRep); avisarRep();
+          el.addEventListener("change", function(){
+            var idx=+el.getAttribute("data-line-idx");
+            var r = pecasSemRepetidas(draft.data.linhas, idx);
+            if(!r.repetidas.length) return;
+            draft.data.linhas[idx].pecas = r.texto; el.value = r.texto; avisarRep();
+            alert(r.repetidas.map(function(x){ return "“"+x.peca+"” está repetido na BT "+x.seq; }).join("\n")+"\n\nNa mesma betonada cada elemento entra uma vez só — a repetição foi retirada.");
+          });
+        }
       });
       m.querySelectorAll("[data-rm-line]").forEach(function(btn){
         btn.addEventListener("click", function(){
@@ -6686,10 +6696,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // falta de sinal) e false se deu erro — nunca mais falha em silêncio.
   async function saveDraft(keepOpen){
     if(!draft || salvando) return false;
-    // v1.17: rastreabilidade não salva com elemento repetido nas peças concretadas
+    // v1.21: rastreabilidade não salva com elemento repetido na mesma betonada
     if(draft.type==="rast"){
       var rep = pecasRepetidas(draft.data.linhas);
-      if(rep.length){ alert("Elemento repetido nas peças concretadas:\n"+rep.map(function(x){ return "• "+x.peca+" — BT "+x.seqs.join(" e BT "); }).join("\n")+"\n\nCada elemento só pode aparecer uma vez na ficha. Corrija antes de salvar."); return false; }
+      if(rep.length){ alert("Elemento repetido na mesma betonada:\n"+rep.map(function(x){ return "• "+x.peca+" — BT "+x.seq; }).join("\n")+"\n\nNa mesma BT cada elemento entra uma vez só. Corrija antes de salvar."); return false; }
     }
     salvando = true;
     var d = draft;

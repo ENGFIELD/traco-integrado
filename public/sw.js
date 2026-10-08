@@ -8,7 +8,7 @@
 //  - Modelos .xlsx, ícones, manifest: rede primeiro, cache como reserva.
 //  - Firestore, Auth, Cloudinary e qualquer outro domínio, e tudo que não for
 //    GET: não passa pelo service worker (o Firestore tem o próprio cache).
-const VERSAO = "traco-v1.20";
+const VERSAO = "traco-v1.21";
 const CACHE_ASSETS = VERSAO + "-assets";
 const CACHE_PAGINAS = VERSAO + "-paginas";
 
