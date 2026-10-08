@@ -12,6 +12,7 @@
  */
 import { pintarIcones } from "../../ui/icones.js";
 import { lerPedidoPdf } from "./pedido-pdf.js";
+import { textoAviso, rotuloDaChave } from "./aco-cronograma.js";
 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const BITOLAS = ["5,0", "6,3", "8,0", "10,0", "12,5", "16,0", "20,0", "25,0", "32,0"];
@@ -27,7 +28,7 @@ const num = (v) => {
 };
 const numTela = (n) => (n == null || n === "" ? "" : String(n).replace(".", ","));
 
-let ctx = null; // { col, lista(): [{id,...}], fmtDateBR, todayISO, nowISO, usuario(), erroAcesso() }
+let ctx = null; // { col, lista(): [{id,...}], fmtDateBR, todayISO, nowISO, usuario(), erroAcesso(), lajes(): aco-cronograma }
 let filtro = { aba: "programadas", busca: "" };
 
 export function initAco(contexto) { ctx = contexto; }
@@ -78,6 +79,7 @@ export function renderViewAco(container) {
       <button type="button" class="dash-kpi-card tone-info" data-aco-aba="programadas"><div class="n">${Math.round(kgProg / 1000 * 10) / 10}<small style="font-size:15px"> t</small></div><div class="l">A receber</div><div class="d">${kg(kgProg)}</div></button>
       <button type="button" class="dash-kpi-card tone-ok" data-aco-aba="entregues"><div class="n">${Math.round(kgMes / 1000 * 10) / 10}<small style="font-size:15px"> t</small></div><div class="l">Recebido neste mês</div><div class="d">${entregues.length} entrega(s) no total</div></button>
     </div>
+    ${painelLajes()}
     <div class="ct-acoes">
       <button class="btn primary" type="button" data-aco-nova><svg class="ti-i" data-i="plus"></svg>Programar entrega</button>
       <button class="btn" type="button" data-aco-importar title="Importar o pedido do fornecedor"><svg class="ti-i" data-i="file"></svg>Importar pedido…</button>
@@ -110,6 +112,27 @@ export function renderViewAco(container) {
     if (f) importarPedido(f, container);
   });
   container.querySelectorAll("[data-aco-abrir]").forEach((c) => c.addEventListener("click", () => abrirFicha(c.dataset.acoAbrir, container)));
+  container.querySelectorAll("[data-aco-laje]").forEach((b) => b.addEventListener("click", () => {
+    const x = lajesAtuais[+b.dataset.acoLaje]; if (!x) return;
+    if (x.tipo === "sem") abrirFicha(null, container, { destino: rotuloDaChave(x.chave) + (/^\s*complemento/i.test(x.tarefa.nome) ? " — Complemento do piso" : " — Laje e Viga"), dataPrevista: addDias(x.tarefa.ini, -3) < ctx.todayISO() ? ctx.todayISO() : addDias(x.tarefa.ini, -3) });
+    else if (x.entregas[0]) abrirFicha(x.entregas.find((e) => e.status !== "entregue") ? x.entregas.find((e) => e.status !== "entregue").id : x.entregas[0].id, container);
+  }));
+}
+
+// v1.10: aço × cronograma — lajes que começam nos próximos 21 dias
+let lajesAtuais = [];
+function painelLajes() {
+  lajesAtuais = ctx.lajes ? ctx.lajes() : [];
+  if (!lajesAtuais.length) return "";
+  const tom = { sem: "bad", atrasada: "bad", tarde: "warn", ok: "ok" };
+  const probl = lajesAtuais.filter((x) => x.tipo !== "ok").length;
+  return `<div class="dash-card aco-lajes"><div class="dash-card-h"><h3>Aço × cronograma · lajes dos próximos 21 dias</h3>
+      <span class="hoje-cont">${probl ? probl + " precisam de atenção" : "tudo programado"}</span></div>
+    ${lajesAtuais.map((x, i) => { const t = textoAviso(x, ctx.fmtDateBR);
+      return `<div class="dash-li" data-aco-laje="${i}"><span class="ic ${tom[x.tipo]}"><svg class="ti-i" data-i="${x.tipo === "ok" ? "check" : "truck"}"></svg></span>
+        <span class="tx"><b>${esc(t.titulo)}</b><small>${esc(t.sub)}</small></span>
+        <span class="dir ${x.tipo === "ok" ? "" : "bad"}">${x.tipo === "sem" ? "programar" : x.tipo === "ok" ? x.tarefa.pct + "%" : "ver"}</span></div>`; }).join("")}
+  </div>`;
 }
 
 function cartao(e, hoje) {
