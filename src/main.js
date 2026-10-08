@@ -1482,12 +1482,21 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       }
       if(!linhas.length) throw new Error("nenhuma linha com Nota de Remessa foi encontrada na planilha");
 
-      var novos=0, atualizados=0;
+      var novos=0, atualizados=0, preservados=0;
       var ops = linhas.map(function(row){
         var id = "nf_"+safeName(row.notaRemessa);
         var existente = ctMap.get(id);
         if(existente) atualizados++; else novos++;
-        var data = Object.assign({}, row, {
+        // v1.5: célula VAZIA na planilha não apaga o que foi lançado pelo site
+        // (ex.: resultado de 28 dias preenchido na obra antes do laboratório
+        // atualizar a planilha). Célula preenchida na planilha continua valendo.
+        if(existente){
+          Object.keys(row).forEach(function(k){
+            var vazio = row[k]==null || String(row[k]).trim()==="";
+            if(vazio && existente[k]!=null && String(existente[k]).trim()!==""){ row[k] = existente[k]; preservados++; }
+          });
+        }
+        var data = Object.assign({}, existente||{}, row, {
           criadoEm: (existente && existente.criadoEm) ? existente.criadoEm : nowISO(),
           atualizadoEm: nowISO(),
           atualizadoPor: currentUserEmail||""
@@ -1507,7 +1516,8 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         ultimoArquivo: file.name||"", ultimoTotalLinhas: linhas.length
       }, {merge:true});
 
-      ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s).", "ok");
+      ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s)"
+        +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")+".", "ok");
     } catch(ex){
       console.error(ex);
       ctSetStatus("Não foi possível importar: "+(ex && ex.message ? ex.message : "erro desconhecido")+".", "err");
