@@ -22,7 +22,7 @@ import { rotuloArea, rotuloSvg, rotuloCanvas, OPAC_FUNDO } from "./modulos/rastr
 import { semRepetidas as pecasSemRepetidas, pecasRepetidas } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { lerPendencias, sugerirFvs, norm as normNc } from "./modulos/nc/pendencias.js";
-import { adicionarAssinaturasXlsx } from "./modulos/assinatura/xlsx-assinatura.js";
+import { adicionarAssinaturasXlsx, centralizarImagemNaCaixa } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje, concretadasPorChave as acoConcretadasPorChave, chegouPelaConcretagem as acoChegouPelaConcretagem } from "./modulos/aco/aco-cronograma.js";
 import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, definirEtapasManuais, etapasDaObra, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, semanaDe, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
@@ -4873,6 +4873,20 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var newCell = '<c r="'+addr+'"'+attrs+' t="inlineStr"><is><t xml:space="preserve">'+xmlEscape(text)+'</t></is></c>';
     return xml.slice(0, m.index) + newCell + xml.slice(m.index + m[0].length);
   }
+  // v1.20: texto com partes de tamanhos diferentes na mesma célula — o rótulo do
+  // modelo continua pequeno e o valor preenchido sai em letra legível.
+  // partes: [{ t:"texto", sz:9, b:true, fonte:"Calibri" }]
+  function xmlSetCellRich(xml, addr, partes){
+    var re = new RegExp('<c r="'+addr+'"([^>]*?)(/>|>[\\s\\S]*?</c>)');
+    var m = re.exec(xml);
+    if(!m) return xml;
+    var attrs = m[1].replace(/\st="[^"]*"/, "");
+    var runs = partes.filter(function(p){ return p.t; }).map(function(p){
+      return '<r><rPr>'+(p.b?'<b/>':'')+'<sz val="'+(p.sz||9)+'"/><rFont val="'+(p.fonte||"Calibri")+'"/></rPr><t xml:space="preserve">'+xmlEscape(p.t)+'</t></r>';
+    }).join("");
+    var newCell = '<c r="'+addr+'"'+attrs+' t="inlineStr"><is>'+runs+'</is></c>';
+    return xml.slice(0, m.index) + newCell + xml.slice(m.index + m[0].length);
+  }
   function xmlGetCellStyleId(xml, addr){
     var re = new RegExp('<c r="'+addr+'"([^>]*?)(?:/>|>)');
     var m = re.exec(xml);
@@ -5737,20 +5751,16 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         var sheetXml = res[0], stylesXml = res[1];
         var state = { stylesXml: stylesXml, styleCache: {} };
 
-        sheetXml = xmlSetCellText(sheetXml, "N1", "NOME DA OBRA: "+(d.obra||""));
+        // v1.20: o modelo da SIG usa letra de 5 a 6,5 pt nesses campos (feitos para
+        // escrever à mão). O rótulo continua como no modelo e o valor preenchido sai
+        // em 9 pt negrito, legível na impressão, sem mudar as alturas das linhas.
+        var rotulo = function(t, sz){ return { t:t, sz:sz||5.5, b:true }; };
+        var valor = function(t){ return { t:t||"", sz:9, b:true }; };
+        sheetXml = xmlSetCellRich(sheetXml, "N1", [rotulo("NOME DA OBRA: ", 6.5), valor(d.obra)]);
         sheetXml = xmlSetCellText(sheetXml, "U1", (d.blocoPav ? "  "+d.blocoPav : ""));
-        sheetXml = xmlSetCellText(sheetXml, "D2", "Projeto de Referência: "+(d.projetoReferencia||""));
-        sheetXml = xmlSetCellText(sheetXml, "J2", "Slump (aprovado pela obra): "+(d.slumpAprovado||""));
-        sheetXml = xmlSetCellText(sheetXml, "L2", "FCK solicitado: "+(d.fckSolicitado||""));
-        // Rótulo+valor na mesma célula mesclada — o modelo não reserva uma célula
-        // em branco ao lado para o valor (pensado para preenchimento à mão, mais
-        // curto). Ativar quebra de linha e aumentar a altura das linhas 1 e 2 evita
-        // que o texto digitado pelo sistema corte ou sobreponha a célula vizinha.
-        // v1.19: texto numa linha só ("reduzir para caber"), alturas do modelo da SIG
-        // intactas — antes a quebra de linha deformava a impressão.
-        ["N1","U1","D2","J2","L2"].forEach(function(addr){
-          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureAlignStyle(state, xmlGetCellStyleId(sheetXml, addr), { wrapText:"0", shrinkToFit:"1" }));
-        });
+        sheetXml = xmlSetCellRich(sheetXml, "D2", [rotulo("Projeto de Referência: "), valor(d.projetoReferencia)]);
+        sheetXml = xmlSetCellRich(sheetXml, "J2", [rotulo("Slump (aprovado pela obra): "), valor(d.slumpAprovado)]);
+        sheetXml = xmlSetCellRich(sheetXml, "L2", [rotulo("FCK solicitado: "), valor(d.fckSolicitado)]);
 
         var ROWS = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]; // 17 betonadas no modelo impresso
         (d.linhas||[]).slice(0, ROWS.length).forEach(function(l, idx){
@@ -5797,17 +5807,19 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           sheetXml = xmlSetRowHeight(sheetXml, 23, alturaL23);
         }
         if(d.dataFechamento) sheetXml = xmlSetCellText(sheetXml, "B25", fmtDateBR(d.dataFechamento));
-        // v1.19: nome numa linha só, no alto do campo; a assinatura (imagem) fica logo
-        // ABAIXO do nome de cada um — coleta (estagiário/técnico) e engenheiro(a).
+        // v1.20: rótulo do modelo → nome (9 pt) logo ABAIXO → assinatura embaixo do nome.
+        // Coleta (estagiário/técnico) em E25:J25; engenheiro(a) em K25 — o nome não vai
+        // mais para a caixa ao lado (S25), fica embaixo do próprio rótulo.
         var assinT = assinaturaDoPapel(d, "tecnico"), assinE = assinaturaDoPapel(d, "engenheiro");
-        var quando = function(a){ if(!a || !a.em) return ""; var t = new Date(a.em); return isNaN(t) ? "" : " (assinado em "+t.toLocaleDateString("pt-BR")+")"; };
-        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+textoAssinado(d, "tecnico", d.responsavelColeta)+quando(assinT));
-        sheetXml = xmlSetCellText(sheetXml, "S25", textoAssinado(d, "engenheiro", d.engenheiro)+quando(assinE));
-        ["E25","K25","S25"].forEach(function(addr){
-          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureAlignStyle(state, xmlGetCellStyleId(sheetXml, addr), { wrapText:"0", shrinkToFit:"1", vertical:"top" }));
+        var quando = function(a){ if(!a || !a.em) return ""; var t = new Date(a.em); return isNaN(t) ? "" : "   assinado eletronicamente em "+t.toLocaleDateString("pt-BR"); };
+        sheetXml = xmlSetCellRich(sheetXml, "E25", [rotulo("RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA):", 5.5), valor("\n"+textoAssinado(d, "tecnico", d.responsavelColeta)), { t:quando(assinT), sz:6 }]);
+        sheetXml = xmlSetCellRich(sheetXml, "K25", [rotulo("NOME ENGENHEIRO RESPONSÁVEL (LETRA DE FORMA):", 5.5), valor("\n"+textoAssinado(d, "engenheiro", d.engenheiro)), { t:quando(assinE), sz:6 }]);
+        sheetXml = xmlSetCellText(sheetXml, "S25", "");
+        ["E25","K25"].forEach(function(addr){
+          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureAlignStyle(state, xmlGetCellStyleId(sheetXml, addr), { wrapText:"1", vertical:"top", indent:"0" }));
         });
-        // com assinatura, a linha 25 ganha altura para a imagem caber embaixo do nome
-        sheetXml = xmlSetRowHeight(sheetXml, 25, (assinT || assinE) ? 52 : 18);
+        // nome + espaço para a assinatura embaixo dele
+        sheetXml = xmlSetRowHeight(sheetXml, 25, (assinT || assinE) ? 62 : 30);
 
         sheetXml = xmlAddPageSetupLandscape(sheetXml);
 
@@ -5816,7 +5828,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         zip.file("xl/styles.xml", stylesXml);
 
         // v1.18: imagem das assinaturas — coleta (E25:J25) e engenheiro (S25:Y25)
-        return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinaturasParaXlsx(d, [5,10], [19,25], 25).map(function(a){ return Object.assign(a, { pe:0.96, alt:0.62 }); }))
+        // v1.20: logo da SIG centralizada na caixa A1:C1
+        var desenho = zip.file("xl/drawings/drawing1.xml");
+        var centralizar = desenho ? desenho.async("string").then(function(dx){
+          zip.file("xl/drawings/drawing1.xml", centralizarImagemNaCaixa(dx, sheetXml, 1, 3, 1));
+        }) : Promise.resolve();
+        return centralizar.then(function(){
+          return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinaturasParaXlsx(d, [5,10], [11,18], 25).map(function(a){ return Object.assign(a, { pe:0.97, alt:0.5 }); }));
+        })
           .then(function(){ return zip.generateAsync({type:"blob"}); });
       });
     }).then(function(blob){

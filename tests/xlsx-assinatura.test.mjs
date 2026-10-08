@@ -2,7 +2,7 @@
 import fs from "fs";
 import zlib from "zlib";
 import JSZip from "jszip";
-import { adicionarAssinaturasXlsx, tamanhoPng, larguraColunas } from "../src/modulos/assinatura/xlsx-assinatura.js";
+import { adicionarAssinaturasXlsx, tamanhoPng, larguraColunas, centralizarImagemNaCaixa } from "../src/modulos/assinatura/xlsx-assinatura.js";
 
 let falhas = 0;
 const ok = (c, m) => { console.log((c ? "ok   " : "FALHA") + " " + m); if (!c) falhas++; };
@@ -49,6 +49,16 @@ ok(!!z2.file("xl/drawings/drawing1.xml") && /drawing1\.xml" ContentType/.test(aw
 const vazio = new JSZip();
 await adicionarAssinaturasXlsx(vazio, "x.xml", []);
 ok(true, "sem assinatura: não mexe em nada");
+
+// v1.20: logo centralizada na caixa
+{
+  const aba = '<worksheet><cols><col min="1" max="3" width="10" customWidth="1"/></cols><sheetData><row r="1" ht="25" customHeight="1"/></sheetData></worksheet>';
+  const dr = '<xdr:wsDr><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>140207</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47307</xdr:rowOff></xdr:from><xdr:ext cx="553212" cy="208491"/></xdr:oneCellAnchor></xdr:wsDr>';
+  const out = centralizarImagemNaCaixa(dr, aba, 1, 3, 1);
+  const offX = Number(/<xdr:colOff>(\d+)/.exec(out)[1]), offY = Number(/<xdr:rowOff>(\d+)/.exec(out)[1]);
+  const larg = larguraColunas(aba, 1, 3);
+  ok(Math.abs(offX * 2 + 553212 - larg) < 2 && Math.abs(offY * 2 + 208491 - 25 * 12700) < 2, "logo no centro da caixa A1:C1");
+}
 
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);
