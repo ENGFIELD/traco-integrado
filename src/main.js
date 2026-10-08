@@ -5083,6 +5083,22 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // O modelo da Rastreabilidade não vem com paginação definida (imprime cortado
   // em várias páginas retrato) — injeta orientação paisagem/ajuste de largura.
   // O modelo da FVS-04 já traz essa configuração certa, então isso é ignorado.
+  // quantas linhas um texto ocupa numa caixa de ~larg caracteres (quebra por palavra, como o Excel)
+  function linhasQuebradas(texto, larg){
+    var total = 0;
+    String(texto||"").split(/\n/).forEach(function(par){
+      var n = 1, atual = 0;
+      par.split(/\s+/).filter(Boolean).forEach(function(w){
+        var t = w.length;
+        if(atual === 0) atual = t;
+        else if(atual + 1 + t <= larg) atual += 1 + t;
+        else { n++; atual = t; }
+        while(atual > larg){ n++; atual -= larg; }
+      });
+      total += n;
+    });
+    return Math.max(1, total);
+  }
   function xmlAddPageSetupLandscape(sheetXml){
     var xml = sheetXml;
     if(/<pageSetup\b/.test(xml)) return xml;
@@ -5799,6 +5815,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           sheetXml = xmlSetCellText(sheetXml, "Q"+r, l.aguaFolga||"");
           sheetXml = xmlSetCellText(sheetXml, "R"+r, l.aguaLanc||"");
           sheetXml = xmlSetCellText(sheetXml, "S"+r, l.pecas||"");
+          // v1.23: peças concretadas longas quebram em várias linhas na caixa S:Y —
+          // a linha da betonada cresce para mostrar todas (antes ficavam escondidas)
+          var nLinhas = linhasQuebradas(l.pecas||"", 33);
+          if(nLinhas > 1) sheetXml = xmlSetRowHeight(sheetXml, r, Math.min(90, nLinhas * 12.75 + 1.5));
         });
 
         sheetXml = xmlSetCellText(sheetXml, "L23", d.acoesCorretivas||"");
