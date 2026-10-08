@@ -22,7 +22,7 @@ import "../../estilos/editor-mapa.css";
 import { garantirPdf } from "../../libs.js";
 import { rotuloArea, rotuloSvg } from "./rotulo-mapa.js";
 
-const ZOOM_MAX = 12;          // em relação ao "caber na tela"
+const ZOOM_MAX = 30;          // em relação ao "caber na tela" (v1.17: 12 → 30, o zoom agora fica nítido)
 const TOQUE_MAX_MOV = 10;     // px — acima disso é arrasto, não toque
 const TOQUE_MAX_MS = 450;
 const LUPA_MS = 280;          // segurar o dedo parado por esse tempo abre a lupa (modo "Nova área")
@@ -57,6 +57,7 @@ export async function abrirEditorMapa(opts) {
     <div class="edmapa-palco" data-palco>
       <div class="edmapa-mundo" data-mundo>
         <canvas data-canvas></canvas>
+        <canvas class="edmapa-detalhe" data-detalhe hidden></canvas>
         <svg data-svg preserveAspectRatio="none"></svg>
       </div>
       <div class="edmapa-carregando" data-carregando>Carregando planta…</div>
@@ -79,6 +80,7 @@ export async function abrirEditorMapa(opts) {
   const base = raiz.querySelector("[data-base]");
   const salvoEl = raiz.querySelector("[data-salvo]");
   const lupa = raiz.querySelector("[data-lupa]");
+  const detalhe = raiz.querySelector("[data-detalhe]");
 
   // ---------- estado ----------
   let W = 1, H = 1;                    // tamanho da planta em px
@@ -86,6 +88,8 @@ export async function abrirEditorMapa(opts) {
   let modo = "ver";                    // "ver" | "desenhar" | "escolher-bt"
   let pontos = [];                     // área em desenho (normalizada)
   let salvando = false, salvarDeNovo = false;
+  // v1.17: zoom nítido — página do PDF guardada para redesenhar só o trecho visível
+  let pagPdf = null, escalaBase = 1, detInfo = null, detTimer = null, detTarefa = null, detGeracao = 0;
 
   // ---------- carregar planta ----------
   try {
@@ -109,6 +113,7 @@ export async function abrirEditorMapa(opts) {
       // limitada a ~11 MP (limite de canvas do iPhone é 16,7 MP).
       const alvo = Math.min(4000, Math.floor(Math.sqrt(11e6 * v1.width / v1.height)));
       const vp = pag.getViewport({ scale: alvo / v1.width });
+      pagPdf = pag; escalaBase = alvo / v1.width;
       W = canvas.width = Math.floor(vp.width);
       H = canvas.height = Math.floor(vp.height);
       const ctx = canvas.getContext("2d");
@@ -136,6 +141,7 @@ export async function abrirEditorMapa(opts) {
       rafPendente = false;
       mundo.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
       desenhar();
+      agendarDetalhe();
     });
   }
   function ajustar() {
@@ -167,6 +173,45 @@ export async function abrirEditorMapa(opts) {
     const x = (clientX - r.left - tx) / s / W;
     const y = (clientY - r.top - ty) / s / H;
     return [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+  }
+
+  // ---------- zoom nítido (v1.17) ----------
+  // A planta de base tem resolução fixa (~4000 px); ao aproximar, ela fica
+  // borrada. Parado o gesto, redesenhamos do próprio PDF só o trecho que está
+  // na tela, na resolução da tela, e colocamos por cima (no mesmo lugar da planta).
+  function agendarDetalhe() {
+    if (!pagPdf) return;
+    clearTimeout(detTimer);
+    detTimer = setTimeout(renderDetalhe, 180);
+  }
+  async function renderDetalhe() {
+    const dpr = window.devicePixelRatio || 1;
+    let dens = s * dpr; // px do detalhe por px da planta de base
+    if (dens <= 1.1) { detalhe.hidden = true; detInfo = null; return; }
+    const r = palco.getBoundingClientRect();
+    let x0 = Math.max(0, -tx / s), y0 = Math.max(0, -ty / s);
+    let x1 = Math.min(W, (r.width - tx) / s), y1 = Math.min(H, (r.height - ty) / s);
+    if (x1 <= x0 || y1 <= y0) return;
+    const mx = (x1 - x0) * 0.15, my = (y1 - y0) * 0.15; // folga para arrastar um pouco sem perder nitidez
+    x0 = Math.max(0, x0 - mx); y0 = Math.max(0, y0 - my); x1 = Math.min(W, x1 + mx); y1 = Math.min(H, y1 + my);
+    const lim = 14e6; // limite de canvas do iPhone (~16,7 MP)
+    if ((x1 - x0) * (y1 - y0) * dens * dens > lim) dens = Math.sqrt(lim / ((x1 - x0) * (y1 - y0)));
+    if (dens <= 1.1) { detalhe.hidden = true; detInfo = null; return; }
+    const ger = ++detGeracao;
+    if (detTarefa) { try { detTarefa.cancel(); } catch (ex) { /* já terminou */ } }
+    const off = document.createElement("canvas");
+    off.width = Math.ceil((x1 - x0) * dens); off.height = Math.ceil((y1 - y0) * dens);
+    const c = off.getContext("2d");
+    c.fillStyle = "#fff"; c.fillRect(0, 0, off.width, off.height);
+    const vp = pagPdf.getViewport({ scale: escalaBase * dens, offsetX: -x0 * dens, offsetY: -y0 * dens });
+    detTarefa = pagPdf.render({ canvasContext: c, viewport: vp });
+    try { await detTarefa.promise; } catch (ex) { return; } // cancelado por um gesto novo
+    if (ger !== detGeracao) return;
+    detalhe.width = off.width; detalhe.height = off.height;
+    detalhe.getContext("2d").drawImage(off, 0, 0);
+    Object.assign(detalhe.style, { left: x0 + "px", top: y0 + "px", width: (x1 - x0) + "px", height: (y1 - y0) + "px" });
+    detalhe.hidden = false;
+    detInfo = { x0, y0, x1, y1, dens };
   }
 
   // ---------- desenho (SVG em coordenadas da planta; traços com espessura fixa na tela) ----------
@@ -310,7 +355,13 @@ export async function abrirEditorMapa(opts) {
     const c = lupa.getContext("2d");
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.fillStyle = "#fff"; c.fillRect(0, 0, lupa.width, lupa.height);
-    try { c.imageSmoothingEnabled = true; c.drawImage(canvas, ox, oy, lado, lado, 0, 0, lupa.width, lupa.height); } catch (ex) { /* planta ainda não carregou */ }
+    try {
+      c.imageSmoothingEnabled = true;
+      const d = detInfo;
+      if (d && !detalhe.hidden && ox >= d.x0 && oy >= d.y0 && ox + lado <= d.x1 && oy + lado <= d.y1)
+        c.drawImage(detalhe, (ox - d.x0) * d.dens, (oy - d.y0) * d.dens, lado * d.dens, lado * d.dens, 0, 0, lupa.width, lupa.height);
+      else c.drawImage(canvas, ox, oy, lado, lado, 0, 0, lupa.width, lupa.height);
+    } catch (ex) { /* planta ainda não carregou */ }
     const P = (p) => [(p[0] * W - ox) * k, (p[1] * H - oy) * k];
     c.lineWidth = 2 * dpr;
     mp.areas.forEach((a) => {
@@ -438,6 +489,7 @@ export async function abrirEditorMapa(opts) {
   function fechar() {
     if (modo !== "ver" && pontos.length && !confirm("Descartar a área que está sendo desenhada?")) return;
     delete window.__edmapaFechar;
+    clearTimeout(detTimer); detGeracao++;
     window.removeEventListener("resize", aoRedimensionar);
     document.documentElement.classList.remove("edmapa-aberto");
     raiz.remove();

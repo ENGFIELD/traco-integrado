@@ -18,7 +18,8 @@ import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml, corteEtapaHtml } from "./modulos/obra/corte-predio.js";
 import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapas.js";
-import { rotuloArea, rotuloSvg, rotuloCanvas } from "./modulos/rastreabilidade/rotulo-mapa.js";
+import { rotuloArea, rotuloSvg, rotuloCanvas, OPAC_FUNDO } from "./modulos/rastreabilidade/rotulo-mapa.js";
+import { semRepetidas as pecasSemRepetidas, pecasRepetidas } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { adicionarAssinaturasXlsx } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
@@ -4383,6 +4384,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '<div class="mapa-toolbar">'
         + '<span class="hint" style="margin:0;flex:1;min-width:120px;">'+escapeHtml(mp.plantaNome)+'</span>'
         + '<a class="btn ghost small" href="'+escapeHtml(mp.plantaUrl)+'" target="_blank" rel="noopener">Abrir planta</a>'
+        + '<button type="button" class="btn small primary" id="mapa-exportar-pdf" title="Planta original em vetor: nítida em qualquer zoom e na impressão">Exportar PDF (imprimir)</button>'
         + '<button type="button" class="btn ghost small" id="mapa-exportar-png">Exportar (PNG)</button>'
         + '<label class="btn ghost small nc-anexo-add-label">Trocar planta<input type="file" accept="application/pdf" hidden id="input-planta"></label>'
         + '<button type="button" class="btn ghost small danger" id="mapa-remover-planta">Remover planta</button>'
@@ -5655,6 +5657,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           // instante é o que travava a digitação.
           if(f==="saidaUsina"||f==="lancFinal") refreshTemposGasto();
         });
+        // v1.17: o mesmo elemento não pode ser concretado duas vezes na ficha
+        if(el.getAttribute("data-line-field")==="pecas") el.addEventListener("change", function(){
+          var idx=+el.getAttribute("data-line-idx");
+          var r = pecasSemRepetidas(draft.data.linhas, idx);
+          if(!r.repetidas.length) return;
+          draft.data.linhas[idx].pecas = r.texto; el.value = r.texto;
+          alert(r.repetidas.map(function(x){ return "“"+x.peca+"” já está na BT "+x.seq; }).join("\n")+"\n\nO mesmo elemento não pode ser lançado duas vezes nesta ficha — foi retirado.");
+        });
       });
       m.querySelectorAll("[data-rm-line]").forEach(function(btn){
         btn.addEventListener("click", function(){
@@ -5788,6 +5798,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
 
     carregarPlantaNoCanvas(m);
 
+    var btnExportarPdf = m.querySelector("#mapa-exportar-pdf");
+    if(btnExportarPdf) btnExportarPdf.addEventListener("click", function(){ exportarMapeamentoPdf(m, btnExportarPdf); });
     var btnExportarPng = m.querySelector("#mapa-exportar-png");
     if(btnExportarPng) btnExportarPng.addEventListener("click", function(){ exportarMapeamentoPng(m); });
 
@@ -5976,7 +5988,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var pagina = Math.min(Math.max(mp.pagina||1, 1), pdf.numPages);
       var page = await pdf.getPage(pagina);
       var viewportBase = page.getViewport({ scale:1 });
-      var alvoPx = 2000; // largura-alvo (px) do render, pra ficar nítido ao dar zoom
+      var alvoPx = 3000; // largura-alvo (px) do render, pra ficar nítido ao dar zoom (v1.17: 2000 → 3000)
       var escala = Math.min(3, alvoPx/viewportBase.width);
       var viewport = page.getViewport({ scale:escala });
       canvas.width = viewport.width;
@@ -6135,6 +6147,36 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       return canvasBase;
     }
   }
+  // v1.17: PDF vetorial — a própria página do projeto + áreas e rótulos (mapa-pdf.js)
+  async function exportarMapeamentoPdf(m, botao){
+    var mp = draft.data.mapeamento, statusEl = m.querySelector("#mapa-status");
+    if(!mp || !mp.plantaUrl){ if(statusEl) statusEl.textContent = "Carregue a planta antes de exportar."; return; }
+    if(mp.tipo==="imagem"){ if(statusEl) statusEl.textContent = "Esta planta é uma imagem (não PDF): use “Exportar (PNG)”."; return; }
+    if(botao) botao.disabled = true;
+    if(statusEl) statusEl.textContent = "Gerando o PDF…";
+    try{
+      await garantirPdf();
+      var resp = await fetch(mp.plantaUrl);
+      if(!resp.ok) throw new Error("não consegui baixar a planta (HTTP "+resp.status+")");
+      var bytes = await resp.arrayBuffer();
+      var pdfjsDoc = await pdfjsLib.getDocument({ data:new Uint8Array(bytes.slice(0)) }).promise;
+      var pagina = Math.min(Math.max(mp.pagina||1, 1), pdfjsDoc.numPages);
+      var page = await pdfjsDoc.getPage(pagina);
+      var mod = await import("./modulos/rastreabilidade/mapa-pdf.js");
+      var areas = (mp.areas||[]).filter(function(a){ return a.pontos && a.pontos.length>=3; });
+      var nfDe = function(a){ var l = (draft.data.linhas||[]).find(function(x){ return String(x.seq)===String(a.linhaSeq); }); return l && l.notaFiscal ? String(l.notaFiscal).trim() : ""; };
+      var out = await mod.mapaEmPdf({ bytes:bytes, pagina:pagina, pdfjsPage:page, areas:areas,
+        textos:function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; },
+        titulo:"Mapeamento da concretagem — "+rastRotulo(draft.data),
+        subtitulo:"Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"),
+        legenda:areas.map(function(a){ return { cor:a.cor, texto:"BT "+a.linhaSeq+(nfDe(a) ? " · NF "+nfDe(a) : "") }; }) });
+      triggerDownload(new Blob([out], { type:"application/pdf" }), "mapeamento_"+(draft.data.data||"sem_data")+"_"+safeName(draft.data.blocoPav||"").slice(0,30)+".pdf");
+      if(statusEl) statusEl.textContent = "PDF gerado ("+Math.round(out.length/1024)+" KB) — mesma qualidade da planta original.";
+    }catch(ex){
+      console.error("exportar mapeamento PDF", ex);
+      if(statusEl) statusEl.textContent = "Não foi possível gerar o PDF: "+(ex && ex.message ? ex.message : "erro desconhecido")+". Use “Exportar (PNG)”.";
+    }finally{ if(botao) botao.disabled = false; }
+  }
   async function exportarMapeamentoPng(m){
     var mp = draft.data.mapeamento;
     var canvasBase = m.querySelector("#mapa-canvas");
@@ -6240,6 +6282,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // falta de sinal) e false se deu erro — nunca mais falha em silêncio.
   async function saveDraft(keepOpen){
     if(!draft || salvando) return false;
+    // v1.17: rastreabilidade não salva com elemento repetido nas peças concretadas
+    if(draft.type==="rast"){
+      var rep = pecasRepetidas(draft.data.linhas);
+      if(rep.length){ alert("Elemento repetido nas peças concretadas:\n"+rep.map(function(x){ return "• "+x.peca+" — BT "+x.seqs.join(" e BT "); }).join("\n")+"\n\nCada elemento só pode aparecer uma vez na ficha. Corrija antes de salvar."); return false; }
+    }
     salvando = true;
     var d = draft;
     d.data.updatedAt = nowISO();
