@@ -1,6 +1,6 @@
 # Publicar em produção. Roda em dois casos:
-#  1) automático: quando uma mudança entra na branch main (o Claude só faz
-#     isso quando o dono diz "publica" / "pode publicar" — ver CLAUDE.md);
+#  1) automático: quando uma mudança entra na branch main (o Claude faz o
+#     merge assim que os testes passam — autorização do dono, ver CLAUDE.md);
 #  2) manual: Actions → Run workflow, digitando PUBLICAR.
 # Antes de publicar: testes, build e BACKUP do
 # banco (guardado como anexo privado do workflow por 30 dias). Depois marca a
@@ -36,11 +36,28 @@ jobs:
       CI: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # histórico para saber se firestore.rules mudou
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            scripts/package-lock.json
       - run: npm ci
+      # regras do banco: publica se pedido no "Run workflow" OU se o arquivo mudou neste push
+      - name: As regras do banco mudaram?
+        id: regras
+        run: |
+          if [ "${{ github.event.inputs.regras }}" = "true" ]; then echo "publicar=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          ANTES="${{ github.event.before }}"
+          if [ -n "$ANTES" ] && git cat-file -e "$ANTES^{commit}" 2>/dev/null \
+             && git diff --name-only "$ANTES" "${{ github.sha }}" | grep -qx 'firestore.rules'; then
+            echo "publicar=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publicar=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Testes
         run: npm test
       - name: Build
@@ -69,11 +86,17 @@ jobs:
       # biblioteca oficial (scripts/publicar-regras.js). O "firebase deploy
       # --only firestore:rules" dava 403: ele usa uma API de teste que a conta
       # do GitHub não tem permissão de usar.
+      - name: Cache do emulador
+        if: steps.regras.outputs.publicar == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: emuladores-firebase-13
       - name: Testar regras do banco (emulador)
-        if: github.event.inputs.regras == 'true'
+        if: steps.regras.outputs.publicar == 'true'
         run: npx --yes firebase-tools@13 emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras-v1 "node --test tests/regras/regras-v1.test.mjs"
       - name: Publicar regras do banco
-        if: github.event.inputs.regras == 'true'
+        if: steps.regras.outputs.publicar == 'true'
         run: node scripts/publicar-regras.js
 
       - name: Marcar a versão publicada
