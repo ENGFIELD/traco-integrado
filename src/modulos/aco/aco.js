@@ -36,6 +36,8 @@ export function initAco(contexto) { ctx = contexto; }
 export function situacao(e, hoje) {
   if (e.status === "entregue") return "entregue";
   if (e.status === "cancelado") return "cancelado";
+  // v1.18: o pavimento já foi concretado (rastreabilidade) → o aço chegou; não cobra
+  if (e._concretadoEm) return "concretada";
   return e.dataPrevista && e.dataPrevista < hoje ? "atrasada" : "programada";
 }
 export function pesoTotal(e) {
@@ -56,7 +58,7 @@ export function renderViewAco(container) {
   const em7 = addDias(hoje, 7);
   const prog = todas.filter((e) => situacao(e, hoje) === "programada");
   const atras = todas.filter((e) => situacao(e, hoje) === "atrasada");
-  const entregues = todas.filter((e) => e.status === "entregue");
+  const entregues = todas.filter((e) => e.status === "entregue" || situacao(e, hoje) === "concretada");
   const mes = hoje.slice(0, 7);
   const kgMes = entregues.filter((e) => (e.dataEntrega || "").slice(0, 7) === mes).reduce((s, e) => s + pesoTotal(e), 0);
   const kgProg = prog.concat(atras).reduce((s, e) => s + pesoTotal(e), 0);
@@ -137,9 +139,11 @@ function painelLajes() {
 
 function cartao(e, hoje) {
   const st = situacao(e, hoje);
-  const pill = { programada: "pendente", atrasada: "has-nc", entregue: "concluido", cancelado: "vinculo" }[st];
-  const rot = { programada: "Programada", atrasada: "Atrasada", entregue: "Entregue", cancelado: "Cancelada" }[st];
-  const quando = st === "entregue" ? "entregue em " + ctx.fmtDateBR(e.dataEntrega) : "prevista " + ctx.fmtDateBR(e.dataPrevista);
+  const pill = { programada: "pendente", atrasada: "has-nc", entregue: "concluido", cancelado: "vinculo", concretada: "concluido" }[st];
+  const rot = { programada: "Programada", atrasada: "Atrasada", entregue: "Entregue", cancelado: "Cancelada", concretada: "Chegou (concretado)" }[st];
+  const quando = st === "entregue" ? "entregue em " + ctx.fmtDateBR(e.dataEntrega)
+    : st === "concretada" ? "pavimento concretado em " + ctx.fmtDateBR(e._concretadoEm) + " — o aço já chegou"
+    : "prevista " + ctx.fmtDateBR(e.dataPrevista);
   const bitolas = (e.itens || []).filter((i) => i.bitola).map((i) => "Ø" + i.bitola).join(" · ")
     || [...new Set((e.itens || []).map((i) => i.elemento).filter((x) => x && x !== "Auxiliar"))].join(" · ");
   return `<div class="aco-card ${st}" data-aco-abrir="${esc(e.id)}">

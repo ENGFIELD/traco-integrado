@@ -52,5 +52,17 @@ ok(por("Teto do 3º Pavimento") && por("Teto do 3º Pavimento").tipo === "atrasa
 ok(por("Teto do 6º Pavimento") && por("Teto do 6º Pavimento").tipo === "sem", "6º pav: só entrega cancelada → sem aço");
 ok(!por("Teto do 9º Pavimento"), "9º pav: fora da janela de 30 dias");
 ok(!por("Teto do 1º Pavimento"), "lajes concluídas ficam de fora");
+// v1.18: pavimento concretado = aço chegou
+{
+  const { chaveDoNivel, concretadasPorChave, chegouPelaConcretagem } = await import("../src/modulos/aco/aco-cronograma.js");
+  ok(chaveDoNivel(10) === "pav:3", "piso do 4º pavimento (nível 10) = laje teto do 3º (pav:3)");
+  ok(chaveDoNivel(7) === "emb:5" && chaveDoNivel(3) === "emb:1" && chaveDoNivel(2) === "subsolo", "embasamentos e subsolo");
+  const conc = concretadasPorChave([{ data: "2026-10-05", niveis: [10] }]);
+  ok(chegouPelaConcretagem({ status: "programado", dataPrevista: "2026-10-01", destino: "3º Pavimento" }, conc) === "2026-10-05", "entrega atrasada do 3º pav: chegou pela concretagem");
+  ok(chegouPelaConcretagem({ status: "programado", dataPrevista: "2026-10-01", destino: "5º Pavimento" }, conc) === "", "outro pavimento continua cobrado");
+  ok(chegouPelaConcretagem({ status: "programado", dataPrevista: "2026-12-30", destino: "3º Pavimento" }, conc) === "", "concretagem muito antes da entrega não conta");
+  const r2 = acoParaLajes(cr, entregas, hoje, { antecedencia: 30, concretadas: conc });
+  ok(!r2.find((x) => x.tarefa.nome === "Teto do 3º Pavimento"), "laje do 3º concretada: sai dos avisos");
+}
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);
