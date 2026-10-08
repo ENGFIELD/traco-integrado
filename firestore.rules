@@ -12,39 +12,56 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // v1.9: contas só de visualização (leem tudo, não gravam nada). Enquanto
+    // os papéis da v2 (firestore.v2.rules) não entram em produção, a lista
+    // fica aqui. Para liberar edição, tire o e-mail da lista e publique.
+    function somenteLeitura() {
+      return request.auth.token.get('email', '').lower() in ['jessica.araujo@sig.eng.br'];
+    }
+    function podeEditar() {
+      return request.auth != null && !somenteLeitura();
+    }
+
     // Fichas FVS
     match /fvs/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Controles de rastreabilidade de concreto (FORM-15)
     match /rastreabilidade/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Resultados de ensaio dos corpos de prova (Controle Tecnológico do Concreto)
     match /controleTecnologico/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Biblioteca de plantas de forma
     match /plantas/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Programação e recebimento de aço (v1.5)
     match /entregasAco/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Cronograma da obra: versão atual + histórico de versões enviadas (v1.5)
     match /cronogramas/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Cópia da última planilha importada, usada como modelo de exportação (v1.8)
     match /planilhasModelo/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if podeEditar();
     }
 
     // Bloqueia qualquer outra coleção não prevista acima por padrão.

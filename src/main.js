@@ -26,6 +26,37 @@ window.firebase = firebase;
 firebase.initializeApp(firebaseConfig);
 var auth = firebase.auth();
 var dbf = firebase.firestore();
+
+/* v1.9: contas só de visualização (mesma lista de firestore.rules). As regras
+   do banco são a garantia; aqui o app esconde os botões de edição e recusa
+   qualquer gravação na hora, com aviso claro (sem isso, com o cache offline, a
+   gravação "parecia" salva até o servidor recusar). */
+var CONTAS_SOMENTE_LEITURA = ["jessica.araujo@sig.eng.br"];
+var somenteLeitura = false;
+function ehSomenteLeitura(email){
+  email = String(email||"").toLowerCase();
+  // teste local: localStorage "traco-teste-leitura" = "1" simula a conta de visualização
+  try{ if(/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && localStorage.getItem("traco-teste-leitura")==="1") return true; }catch(e){}
+  return CONTAS_SOMENTE_LEITURA.indexOf(email) !== -1;
+}
+var ultimoAvisoLeitura = 0;
+function recusarGravacao(){
+  if(Date.now() - ultimoAvisoLeitura > 4000){
+    ultimoAvisoLeitura = Date.now();
+    setTimeout(function(){ alert("Seu acesso é somente para visualização — nada foi alterado."); }, 0);
+  }
+  var e = new Error("acesso somente para visualização"); e.code = "permission-denied";
+  return Promise.reject(e);
+}
+(function(){
+  var fs = firebase.firestore;
+  [[fs.DocumentReference.prototype, ["set","update","delete"]], [fs.CollectionReference.prototype, ["add"]], [fs.WriteBatch.prototype, ["commit"]]].forEach(function(par){
+    par[1].forEach(function(m){
+      var original = par[0][m];
+      par[0][m] = function(){ return somenteLeitura ? recusarGravacao() : original.apply(this, arguments); };
+    });
+  });
+})();
 // Rodando no próprio PC (http://localhost): usa os Firebase Emulators com uma
 // CÓPIA dos dados, nunca o banco real. No site publicado isto não se aplica.
 if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
@@ -2953,6 +2984,16 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("app-root").hidden = false;
     document.getElementById("user-name").textContent = user.displayName || user.email || "";
     currentUserEmail = user.email || "";
+    somenteLeitura = ehSomenteLeitura(currentUserEmail);
+    document.body.classList.toggle("somente-leitura", somenteLeitura);
+    var faixa = document.getElementById("faixa-somente-leitura");
+    if(somenteLeitura && !faixa){
+      faixa = document.createElement("div");
+      faixa.id = "faixa-somente-leitura"; faixa.className = "faixa-somente-leitura";
+      faixa.textContent = "Acesso somente para visualização — você pode consultar e exportar, mas não alterar dados.";
+      var raiz = document.getElementById("app-root");
+      raiz.insertBefore(faixa, raiz.firstChild);
+    } else if(!somenteLeitura && faixa) faixa.remove();
     definirUsuario(currentUserEmail);
     atualizarIndicadorConexao();
     subscribeCollections();
@@ -5339,6 +5380,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // Redesenha o SVG do zero: as áreas já salvas (polígono preenchido na cor
   // da sequência + rótulo no centro) e, se estiver em modo de desenho, o
   // contorno em progresso (pontos + linhas ainda aberto).
+  // "NF: 12345" da betonada ligada à área (vazio se a BT não tem NF)
+  function nfDaArea(a){
+    var l = (draft && draft.data && draft.data.linhas || []).find(function(x){ return String(x.seq)===String(a.linhaSeq); });
+    var nf = l && String(l.notaFiscal||"").trim();
+    return nf ? "NF: "+nf : "";
+  }
   function redesenharSvg(m){
     var svgEl = m.querySelector("#mapa-svg");
     if(!svgEl) return;
@@ -5360,19 +5407,27 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var cx = a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length*vw;
       var cy = a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length*vh;
       var fontSize = Math.max(16, vw*0.022);
-      var texto = "BT "+a.linhaSeq;
+      var texto = "BT "+a.linhaSeq, nf = nfDaArea(a), fs2 = fontSize*0.8;
       var rot = document.createElementNS(ns, "rect");
-      var rw = texto.length*fontSize*0.62, rh = fontSize*1.5;
+      var rw = Math.max(texto.length*fontSize*0.62, nf.length*fs2*0.6)+fontSize*0.4, rh = nf ? fontSize*2.6 : fontSize*1.5;
       rot.setAttribute("x", cx-rw/2); rot.setAttribute("y", cy-rh/2);
       rot.setAttribute("width", rw); rot.setAttribute("height", rh);
       rot.setAttribute("rx", 4); rot.setAttribute("fill", "#ffffff"); rot.setAttribute("fill-opacity","0.85");
       svgEl.appendChild(rot);
       var txt = document.createElementNS(ns, "text");
-      txt.setAttribute("x", cx); txt.setAttribute("y", cy);
+      txt.setAttribute("x", cx); txt.setAttribute("y", nf ? cy-fontSize*0.55 : cy);
       txt.setAttribute("text-anchor", "middle"); txt.setAttribute("dominant-baseline", "central");
       txt.setAttribute("font-size", fontSize); txt.setAttribute("font-weight", "700"); txt.setAttribute("fill", a.cor);
       txt.textContent = texto;
       svgEl.appendChild(txt);
+      if(nf){
+        var txt2 = document.createElementNS(ns, "text");
+        txt2.setAttribute("x", cx); txt2.setAttribute("y", cy+fontSize*0.65);
+        txt2.setAttribute("text-anchor", "middle"); txt2.setAttribute("dominant-baseline", "central");
+        txt2.setAttribute("font-size", fs2); txt2.setAttribute("font-weight", "600"); txt2.setAttribute("fill", "#1a1a1a");
+        txt2.textContent = nf;
+        svgEl.appendChild(txt2);
+      }
     });
 
     if(mapaEstado && mapaEstado.desenhando && mapaEstado.pontosAtual.length>0){
@@ -5467,14 +5522,18 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var cx = padMargem + (a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length)*vw;
       var cy = padTopo + (a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length)*vh;
       var fontSize = Math.max(16, vw*0.022);
-      var texto = "BT "+a.linhaSeq;
+      var texto = "BT "+a.linhaSeq, nf = nfDaArea(a), fs2 = Math.round(fontSize*0.8);
       ctx.font = "bold "+fontSize+"px sans-serif";
-      var rw = ctx.measureText(texto).width + fontSize, rh = fontSize*1.5;
+      var w1 = ctx.measureText(texto).width;
+      ctx.font = "600 "+fs2+"px sans-serif";
+      var w2 = nf ? ctx.measureText(nf).width : 0;
+      var rw = Math.max(w1, w2) + fontSize, rh = nf ? fontSize*2.6 : fontSize*1.5;
       ctx.fillStyle = "rgba(255,255,255,0.85)";
       ctx.fillRect(cx-rw/2, cy-rh/2, rw, rh);
-      ctx.fillStyle = a.cor;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(texto, cx, cy);
+      ctx.fillStyle = a.cor; ctx.font = "bold "+fontSize+"px sans-serif";
+      ctx.fillText(texto, cx, nf ? cy-fontSize*0.55 : cy);
+      if(nf){ ctx.fillStyle = "#1a1a1a"; ctx.font = "600 "+fs2+"px sans-serif"; ctx.fillText(nf, cx, cy+fontSize*0.65); }
       ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     });
 

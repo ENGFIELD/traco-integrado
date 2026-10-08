@@ -178,12 +178,20 @@ export async function abrirEditorMapa(opts) {
       svg.appendChild(el("polygon", { points: a.pontos.map(pt).join(" "), fill: a.cor, "fill-opacity": 0.32, stroke: a.cor, "stroke-width": 2.5 * px }));
       const cx = a.pontos.reduce((t, p) => t + p[0], 0) / a.pontos.length * W;
       const cy = a.pontos.reduce((t, p) => t + p[1], 0) / a.pontos.length * H;
-      const fs = 15 * px, rotulo = "BT " + a.linhaSeq;
-      const rw = rotulo.length * fs * 0.62 + fs, rh = fs * 1.6;
+      // rótulo: "BT 1" e, embaixo, a nota fiscal da betonada ("NF: 12345")
+      const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
+      const nf = lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "";
+      const fs = 15 * px, fs2 = 12 * px, rotulo = "BT " + a.linhaSeq;
+      const rw = Math.max(rotulo.length * fs * 0.62, nf.length * fs2 * 0.6) + fs, rh = nf ? fs * 2.75 : fs * 1.6;
       svg.appendChild(el("rect", { x: cx - rw / 2, y: cy - rh / 2, width: rw, height: rh, rx: 4 * px, fill: "#fff", "fill-opacity": 0.9 }));
-      const t = el("text", { x: cx, y: cy, "text-anchor": "middle", "dominant-baseline": "central", "font-size": fs, "font-weight": 700, fill: a.cor });
+      const t = el("text", { x: cx, y: nf ? cy - fs * 0.55 : cy, "text-anchor": "middle", "dominant-baseline": "central", "font-size": fs, "font-weight": 700, fill: a.cor });
       t.textContent = rotulo;
       svg.appendChild(t);
+      if (nf) {
+        const t2 = el("text", { x: cx, y: cy + fs * 0.7, "text-anchor": "middle", "dominant-baseline": "central", "font-size": fs2, "font-weight": 600, fill: "#1a1a1a" });
+        t2.textContent = nf;
+        svg.appendChild(t2);
+      }
     });
     if (pontos.length) {
       if (pontos.length > 1) {

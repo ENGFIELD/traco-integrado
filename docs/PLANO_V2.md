@@ -274,6 +274,8 @@ Depois vem a **Fase 3** (offline completo, PWA, layout mobile da prévia, fotos 
 | 2.2 | ✅ Concluída no emulador em 07/10/2026: `firestore.v2.rules` + **40 testes** (`npm run test:regras`, 40/40 ok); `scripts/usuarios.js definir-papeis` (simulação conferida contra as 4 contas reais, **nada gravado em produção**). |
 | 2.3 | Próxima: repositório com auditoria, lixeira, versão e horário do servidor no app (só emulador) |
 
+**Levar para a v2 (2.4–2.6), surgidos nas v1.5–v1.9:** coleções `entregasAco`, `cronogramas` (inclui `progresso` e `p_<data>`) e `planilhasModelo` precisam entrar em `firestore.v2.rules`; a lista de contas só de visualização que está em `firestore.rules` (v1.9, Jéssica) passa a ser o papel `visualizador`.
+
 **Limitação conhecida da 2.2:** hoje as NCs ficam dentro da ficha FVS (lista `naoConformidades`). Por isso a regra "só Engenheiro/Admin encerra NC" é garantida **pela tela**, não pelo banco. Ela passa a ser garantida pelo banco quando as NCs ganharem coleção própria (Fase 4.2).
 
 ## 9. Decisões (aprovadas pelo Matheus em 07/10/2026)

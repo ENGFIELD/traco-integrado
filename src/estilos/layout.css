@@ -469,3 +469,25 @@ legend { font-size: 16px; }
 .cr-pct-modal input[type=range] { width: 100%; margin: 6px 0 10px; }
 .metas-avanco { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; font-size: 13px; }
 .metas-avanco .cr-barra { flex: 0 0 140px; }
+
+/* v1.9: conta só de visualização — some com tudo que cria, altera ou apaga */
+.faixa-somente-leitura { background: #fff4d6; color: #6b4e00; border-bottom: 1px solid #f0d58a; padding: 7px 16px; font-size: 13px; text-align: center; }
+body.somente-leitura .ti-fab, body.somente-leitura [data-abrir-novo],
+body.somente-leitura #btn-save, body.somente-leitura #btn-delete, body.somente-leitura #add-line, body.somente-leitura #add-nc,
+body.somente-leitura #add-pavimento, body.somente-leitura #add-unidade, body.somente-leitura [data-rm-nc],
+body.somente-leitura #ct-btn-nova, body.somente-leitura #ct-btn-importar, body.somente-leitura [data-ct-lancar], body.somente-leitura [data-ct-salvar],
+body.somente-leitura [data-rm-planta], body.somente-leitura #mapa-remover-planta, body.somente-leitura [data-acao="nova-area"],
+body.somente-leitura [data-aco-nova], body.somente-leitura [data-aco-importar], body.somente-leitura [data-salvar], body.somente-leitura [data-receber],
+body.somente-leitura [data-cr-enviar], body.somente-leitura [data-pct-salvar], body.somente-leitura [data-pct-arquivo] { display: none !important; }
+body.somente-leitura .cr-prog-edit .cr-lapis { display: none; }
+
+/* v1.9: correções de layout no celular — campos de data e botões das
+   rastreabilidades empurravam a tela para o lado (rolagem horizontal) */
+.datefield, .ct-periodo { min-width: 0; max-width: 100%; }
+.datefield input[type="date"], .ct-periodo input[type="date"] { min-width: 0; flex: 1 1 0; }
+.ct-grupo-rast { min-width: 0; max-width: 100%; }
+.ct-rast-link { max-width: 100%; white-space: normal; text-align: left; }
+@media (max-width: 759px) {
+  .datefield { flex: 1 1 100%; }
+  .ct-grupo-rast { flex: 1 1 100%; }
+}
