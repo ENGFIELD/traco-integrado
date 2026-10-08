@@ -162,3 +162,15 @@ export async function adicionarAssinaturasXlsx(zip, sheetPath, assinaturas) {
   zip.file(drawingRelsPath, drawingRels);
   zip.file("[Content_Types].xml", ct);
 }
+
+/** v1.20: centraliza a 1ª imagem do desenho (ex.: logo da SIG) na caixa das colunas
+ * c0..c1 (1-based) da linha r (1-based). Devolve o XML do desenho alterado. */
+export function centralizarImagemNaCaixa(drawingXml, sheetXml, c0, c1, r) {
+  return drawingXml.replace(/<xdr:oneCellAnchor>([\s\S]*?)<\/xdr:oneCellAnchor>/, (anc, corpo) => {
+    const ext = /<xdr:ext cx="(\d+)" cy="(\d+)"\/>/.exec(corpo);
+    if (!ext) return anc;
+    const larg = larguraColunas(sheetXml, c0, c1), alt = alturaLinha(sheetXml, r) * EMU_PT;
+    const offX = Math.max(0, Math.round((larg - Number(ext[1])) / 2)), offY = Math.max(0, Math.round((alt - Number(ext[2])) / 2));
+    return anc.replace(/<xdr:from>[\s\S]*?<\/xdr:from>/, `<xdr:from><xdr:col>${c0 - 1}</xdr:col><xdr:colOff>${offX}</xdr:colOff><xdr:row>${r - 1}</xdr:row><xdr:rowOff>${offY}</xdr:rowOff></xdr:from>`);
+  });
+}
