@@ -65,9 +65,16 @@ jobs:
 
       - name: Publicar site
         run: npx --yes firebase-tools@13 deploy --only hosting --project traco-integrado-sig --non-interactive
+      # v1.15: as regras são testadas no emulador antes e publicadas pela
+      # biblioteca oficial (scripts/publicar-regras.js). O "firebase deploy
+      # --only firestore:rules" dava 403: ele usa uma API de teste que a conta
+      # do GitHub não tem permissão de usar.
+      - name: Testar regras do banco (emulador)
+        if: github.event.inputs.regras == 'true'
+        run: npx --yes firebase-tools@13 emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras-v1 "node --test tests/regras/regras-v1.test.mjs"
       - name: Publicar regras do banco
         if: github.event.inputs.regras == 'true'
-        run: npx --yes firebase-tools@13 deploy --only firestore:rules --project traco-integrado-sig --non-interactive
+        run: node scripts/publicar-regras.js
 
       - name: Marcar a versão publicada
         run: |
