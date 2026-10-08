@@ -1,4 +1,4 @@
-<title>Prévia: etapas e FVS</title>
+<title>Plano: etapas e FVS</title>
 <style>
   :root{
     --bg:#F2F0EA; --surface:#FFFFFF; --surface-2:#EAE7DD; --border:#D9D4C6; --text:#1E1E1C; --muted:#6B675E;
@@ -58,111 +58,177 @@
  .c-ok{ background:var(--good-soft); color:var(--good);} .c-and{ background:var(--info-soft); color:var(--info);}
  .c-sem{ background:var(--warn-soft); color:var(--warn);} .c-nc{ background:var(--bad-soft); color:var(--bad);}
  .c-nada{ background:var(--surface-2); color:var(--muted);}
- .secao-intro{ color:var(--muted); margin:-4px 0 14px; max-width:70ch; }
+ .secao-intro{ color:var(--muted); margin:-4px 0 14px; max-width:72ch; }
  .lista-fvs{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr)); gap:6px; }
- code{ font-size:12.5px; background:var(--surface-2); padding:1px 5px; border-radius:5px; }
+ .fase{ display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+ .fase small{ color:var(--muted); font-weight:500; font-size:14px; }
+ .ideia.larga{ grid-column:1 / -1; }
+ .novo{ font-size:11px; font-weight:800; letter-spacing:.06em; padding:2px 7px; border-radius:99px; background:var(--info-soft); color:var(--info); }
+ /* corte por etapa */
+ .abas{ display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; scrollbar-width:thin; }
+ .abas button{ flex:0 0 auto; font:inherit; font-size:13px; font-weight:600; padding:7px 12px; border-radius:99px; border:1px solid var(--border); background:var(--surface); color:var(--text); cursor:pointer; display:flex; gap:6px; align-items:center; }
+ .abas button small{ color:var(--muted); font-weight:700; font-variant-numeric:tabular-nums; }
+ .abas button[aria-selected="true"]{ background:var(--accent); color:var(--bg); border-color:var(--accent); }
+ .abas button[aria-selected="true"] small{ color:var(--bg); opacity:.8; }
+ .abas button:focus-visible, .btn:focus-visible{ outline:2px solid var(--info); outline-offset:2px; }
+ .corte{ display:grid; grid-template-columns:minmax(0,230px) minmax(0,1fr); gap:18px; align-items:start; margin-top:12px; }
+ @media (max-width:640px){ .corte{ grid-template-columns:1fr; } .corte svg{ max-width:260px; } }
+ .corte svg{ width:100%; height:auto; display:block; }
+ .corte rect{ cursor:pointer; }
+ .n-ok{ fill:var(--good); } .n-sem{ fill:var(--warn); } .n-and{ fill:var(--info); } .n-nada{ fill:var(--surface-2); stroke:var(--border); stroke-width:.6; }
+ .n-na{ fill:none; stroke:var(--border); stroke-width:.6; stroke-dasharray:2 2; }
+ .n-sel{ stroke:var(--text); stroke-width:1.6; }
+ .solo{ stroke:var(--muted); stroke-width:1; stroke-dasharray:4 3; }
+ .prev{ stroke:var(--bad); stroke-width:1.4; stroke-dasharray:3 2; }
+ .pct-grande{ font-size:44px; font-weight:750; line-height:1; font-variant-numeric:tabular-nums; }
+ .pct-grande small{ font-size:20px; }
+ .barra{ height:8px; background:var(--surface-2); border-radius:99px; overflow:hidden; margin:10px 0; }
+ .barra i{ display:block; height:100%; background:var(--good); border-radius:99px; transition:width .3s; }
+ .info-linha{ margin:4px 0; }
+ .info-linha.atraso b{ color:var(--bad); } .info-linha.ok b{ color:var(--good); }
+ .leg2{ list-style:none; padding:0; margin:10px 0 0; display:grid; gap:4px; font-size:13px; }
+ .leg2 li{ display:flex; gap:8px; align-items:center; } .leg2 i{ width:12px; height:12px; border-radius:3px; flex:none; }
+ .leg2 b{ margin-left:auto; font-variant-numeric:tabular-nums; }
+ .toque{ margin-top:10px; padding:8px 10px; border-radius:10px; background:var(--surface-2); font-size:13px; min-height:36px; }
+ @media (prefers-reduced-motion:reduce){ .barra i{ transition:none; } }
+ /* assinatura */
+ .pad{ border:1.5px dashed var(--border); border-radius:12px; background:var(--surface); touch-action:none; width:100%; height:160px; display:block; cursor:crosshair; }
+ .pad-acoes{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+ .pad-acoes button, .pad-acoes label{ cursor:pointer; }
+ .rodape-fvs{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
+ .rodape-fvs > div{ border-top:1.5px solid var(--text); padding-top:6px; font-size:12.5px; min-width:0; }
+ .rodape-fvs img{ display:block; height:46px; max-width:100%; object-fit:contain; margin:-52px 0 6px; }
+ .rodape-fvs .vazio{ height:46px; margin:-52px 0 6px; }
+ /* auditoria */
+ .aud{ background:var(--surface); border:1px solid var(--border); border-radius:var(--raio); overflow:hidden; }
+ .aud > div{ display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1.6fr) auto; gap:12px; padding:12px 16px; border-top:1px solid var(--border); align-items:center; }
+ .aud > div:first-child{ border-top:0; }
+ .aud .cab{ font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+ @media (max-width:640px){ .aud > div{ grid-template-columns:1fr; gap:4px; } .aud .cab{ display:none; } }
+ .org{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr)); gap:12px; }
+ .org div{ background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px; }
+ .org b{ display:block; margin-bottom:4px; } .org p{ margin:0; color:var(--muted); }
+ .ordem{ background:var(--surface); border:1px solid var(--border); border-radius:var(--raio); padding:14px 18px; }
+ .ordem ol{ margin:6px 0 0; padding-left:20px; } .ordem li{ margin:5px 0; }
 </style>
 
 <div class="wrap">
   <header>
     <div>
-      <h1>Traço Integrado: etapas da obra × FVS</h1>
-      <p class="sub">Ideias que ligam o cronograma (fundação, estrutura, alvenaria, instalações, revestimentos…) às fichas de verificação. Nada aqui está no ar: escolha o que quer e eu implemento. Os nomes e números dos exemplos são ilustrativos.</p>
+      <h1>Plano: etapas da obra × FVS</h1>
+      <p class="sub">Plano para ligar o cronograma (fundação, estrutura, alvenaria, instalações, revestimentos…) às fichas de verificação, com a assinatura da engenheira e o que a auditoria exige. Está dividido em 4 fases, na ordem em que faz sentido fazer. Os números dos exemplos são ilustrativos.</p>
     </div>
-    <span class="selo">PRÉVIA · NÃO PUBLICADA</span>
+    <span class="selo">PLANO · NÃO PUBLICADO</span>
   </header>
 
   <div class="feito">
-    <b>O que o sistema já tem e que estas ideias aproveitam</b>
+    <b>O que o sistema já tem e que o plano aproveita</b>
     <ul>
       <li>Cronograma do MS Project com grupos (etapas), caminho crítico, metas da semana e % lançado no app.</li>
       <li>18 tipos de FVS: locação, escavação, 6 tipos de estaca, sapata, radier, bloco, FVS 04 (forma, armação e concretagem), parede diafragma, cortina, protensão, impermeabilização rígida, estrutura metálica, guarda-corpo e preservação do acabado.</li>
-      <li>Lista oficial de 28 níveis: Fundação, Subsolo, 5 embasamentos, 17 pavimentos tipo, cobertura e telhado.</li>
+      <li>O corte do prédio no Início, com os 28 níveis (Fundação, Subsolo, 5 embasamentos, 17 tipos, cobertura e telhado). Hoje ele mostra só a estrutura.</li>
       <li>Rastreabilidade, CT e aço já ligados ao pavimento.</li>
     </ul>
-    <p style="margin:8px 0 0;color:var(--muted)">O que falta: o cronograma e as FVS ainda não se conversam, e as etapas depois da estrutura (alvenaria, instalações, revestimentos) ainda não têm ficha.</p>
   </div>
 
-  <h2>Ligar o cronograma às FVS</h2>
-  <p class="secao-intro">Cada atividade do cronograma passa a saber qual FVS ela pede. O resto vem disso.</p>
+  <!-- ===================== FASE 1 ===================== -->
+  <h2 class="fase">Fase 1 · O cronograma conversa com as FVS <small>cerca de 5 dias</small></h2>
+  <p class="secao-intro">A base de tudo: o app passa a saber a qual etapa e a qual pavimento pertence cada atividade do cronograma, e qual FVS ela pede.</p>
   <div class="grade">
 
     <article class="ideia">
-      <h3><span class="n">1</span>Atividade concluída precisa de FVS</h3>
-      <p>O app reconhece o serviço pelo nome da atividade (Forma, Armação, Concretagem → FVS 04; Bloco → FVS-03.9; Alvenaria → nova FVS) e o pavimento pelo grupo. Quando a atividade passa de 100% sem FVS aprovada, ela fica amarela no cronograma e entra em "Hoje você precisa…".</p>
+      <h3><span class="n">1</span>Cadastro das etapas</h3>
+      <p>Uma lista fixa de etapas: Fundação, Estrutura, Alvenaria, Instalações elétricas, Instalações hidráulicas, Impermeabilização, Revestimento, Contrapiso, Esquadrias, Pintura. O app liga cada atividade a uma etapa pelo nome (por exemplo, "Elevação de alvenaria 3º Emb." vai para Alvenaria) e a um pavimento pela lista oficial. O que ele não reconhecer aparece numa tela para você escolher uma vez, e a escolha fica guardada.</p>
       <div class="mock">
-        <div class="lin"><span class="pill warn">sem FVS</span><div class="grow"><b>Armação Laje 6º Pav. Tipo</b><br><small>100% desde 03/10 · FVS 04 não aberta</small></div><span class="btn p">Abrir FVS</span></div>
-        <div class="lin"><span class="pill bad">NC aberta</span><div class="grow"><b>Concretagem Pilares 5º</b><br><small>FVS 04-118 · 1 NC sem reinspeção</small></div><span class="btn">Ver NC</span></div>
-        <div class="lin"><span class="pill ok">ok</span><div class="grow"><b>Forma Laje 6º</b><br><small>FVS 04-121 aprovada em 01/10</small></div></div>
+        <div class="lin"><div class="grow"><b>Elevação de alvenaria 3º Emb.</b><br><small>reconhecido: Alvenaria · 3º Embasamento</small></div><span class="pill ok">auto</span></div>
+        <div class="lin"><div class="grow"><b>Shafts e prumadas bloco A</b><br><small>etapa não reconhecida</small></div><span class="btn p">Escolher etapa</span></div>
       </div>
-      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+      <div class="tags"><span class="tag alto">Base para as outras</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
 
     <article class="ideia">
-      <h3><span class="n">2</span>FVS da semana já preparadas</h3>
-      <p>Toda segunda, as metas da semana viram uma lista de fichas a fazer, com tipo, pavimento e serviço preenchidos. O encarregado ou o técnico só abre e marca os itens na hora da inspeção. Nenhuma ficha é criada no banco antes de alguém tocar nela.</p>
+      <h3><span class="n">2</span>Atividade concluída precisa de FVS</h3>
+      <p>Quando uma atividade passa de 100% sem FVS aprovada, ela fica amarela no cronograma e entra em "Hoje você precisa…". No corte por etapa (item 3), o pavimento aparece amarelo.</p>
       <div class="mock">
-        <div class="lin"><div class="grow"><b>Semana 12–18/10 · 5 FVS previstas</b><br><small>pelas metas do cronograma</small></div></div>
+        <div class="lin"><span class="pill warn">sem FVS</span><div class="grow"><b>Armação Laje 6º Pav. Tipo</b><br><small>100% desde 03/10 · FVS 04 não aberta</small></div><span class="btn p">Abrir FVS</span></div>
+        <div class="lin"><span class="pill bad">NC aberta</span><div class="grow"><b>Concretagem Pilares 5º</b><br><small>FVS 04-118 · 1 NC sem reinspeção</small></div><span class="btn">Ver NC</span></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+
+    <article class="ideia larga">
+      <h3><span class="n">3</span>Corte do prédio por etapa <span class="novo">NOVO</span></h3>
+      <p>O corte do Início ganha abas em cima, uma para cada etapa. A aba Estrutura é o corte de hoje. Ao tocar em Alvenaria, Instalações ou Revestimento, o mesmo desenho mostra o avanço daquela etapa em cada pavimento, com o %, até onde chegou e onde o cronograma dizia que deveria estar. A aba aparece quando a etapa começa no cronograma e fica com ✓ quando chega a 100%. A cor de cada pavimento junta o % do cronograma com a FVS. <b>Toque nas abas e nos pavimentos para testar.</b></p>
+      <div class="mock">
+        <div class="abas" role="tablist" id="abas"></div>
+        <div class="corte">
+          <svg id="corte-svg" role="img" aria-label="Corte do prédio pela etapa escolhida"></svg>
+          <div>
+            <div class="pct-grande" id="c-pct">0<small>%</small></div>
+            <div id="c-sub" style="color:var(--muted)">da etapa concluída</div>
+            <div class="barra"><i id="c-barra" style="width:0"></i></div>
+            <p class="info-linha" id="c-ate"></p>
+            <p class="info-linha" id="c-prev"></p>
+            <ul class="leg2" id="c-leg"></ul>
+            <div class="toque" id="c-toque">Toque num pavimento para ver o detalhe.</div>
+          </div>
+        </div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span><span class="tag">Usa os itens 1 e 2</span></div>
+    </article>
+
+    <article class="ideia">
+      <h3><span class="n">4</span>FVS da semana já preparadas</h3>
+      <p>Toda segunda, as metas da semana viram uma lista de fichas a fazer, com tipo, pavimento e serviço preenchidos. Nenhuma ficha é criada no banco antes de alguém tocar nela.</p>
+      <div class="mock">
+        <div class="lin"><div class="grow"><b>Semana 12–18/10 · 5 FVS previstas</b></div></div>
         <div class="lin"><div class="grow">FVS 04 · Forma Laje 7º Tipo <small>· começa 13/10</small></div><span class="btn p">Iniciar</span></div>
         <div class="lin"><div class="grow">Alvenaria · 2º Embasamento <small>· termina 16/10</small></div><span class="btn">Iniciar</span></div>
-        <div class="lin"><div class="grow">Impermeabilização · Reservatório inferior</div><span class="btn">Iniciar</span></div>
       </div>
       <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
 
     <article class="ideia">
-      <h3><span class="n">3</span>Quadro pavimento × etapa</h3>
-      <p>Uma tela única com os 28 níveis nas linhas e as etapas nas colunas. Cada quadradinho junta o cronograma e a FVS: feito e aprovado, em andamento, feito sem ficha, com NC ou ainda não começou. Mostra a obra inteira num relance, bom para a reunião e para a visita da diretoria.</p>
+      <h3><span class="n">5</span>Quadro pavimento × etapa</h3>
+      <p>A mesma informação do corte, mas todas as etapas de uma vez, em tabela. Fica como um botão "Ver em tabela" ao lado das abas do corte, bom para imprimir para a reunião.</p>
       <div class="mock matriz">
         <table>
-          <tr><th></th><th>Estr.</th><th>Alv.</th><th>Elét.</th><th>Hidr.</th><th>Reboco</th><th>Contrap.</th></tr>
-          <tr><th>7º Tipo</th><td class="c-and">40%</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
-          <tr><th>6º Tipo</th><td class="c-sem">!</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
-          <tr><th>5º Tipo</th><td class="c-nc">NC</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
-          <tr><th>2º Emb.</th><td class="c-ok">✓</td><td class="c-and">60%</td><td class="c-and">20%</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
-          <tr><th>1º Emb.</th><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-and">70%</td><td class="c-nada"></td><td class="c-nada"></td></tr>
-          <tr><th>Subsolo</th><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-sem">!</td><td class="c-and">30%</td></tr>
+          <tr><th></th><th>Estr.</th><th>Alv.</th><th>Elét.</th><th>Hidr.</th><th>Reboco</th></tr>
+          <tr><th>6º Tipo</th><td class="c-and">60%</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
+          <tr><th>4º Tipo</th><td class="c-sem">!</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
+          <tr><th>3º Emb.</th><td class="c-ok">✓</td><td class="c-and">50%</td><td class="c-nada"></td><td class="c-nada"></td><td class="c-nada"></td></tr>
+          <tr><th>1º Emb.</th><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-and">70%</td><td class="c-nada"></td></tr>
+          <tr><th>Subsolo</th><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-ok">✓</td><td class="c-and">40%</td></tr>
         </table>
-        <div class="leg"><span style="--c:var(--good)">aprovado</span><span style="--c:var(--info)">em andamento</span><span style="--c:var(--warn)">feito sem FVS</span><span style="--c:var(--bad)">NC aberta</span></div>
       </div>
-      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
-    </article>
-
-    <article class="ideia">
-      <h3><span class="n">4</span>Liberação da próxima etapa</h3>
-      <p>Cada etapa só é "liberada" para a equipe seguinte quando a anterior tem FVS aprovada. Exemplos: o reboco do pavimento só libera com a FVS de instalações embutidas aprovada; a alvenaria só libera depois da retirada do escoramento. O app mostra o que está liberado, o que trava e por quê. Ajuda a cumprir a sequência que a norma e a auditoria pedem.</p>
-      <div class="mock">
-        <div class="lin"><span class="pill ok">liberado</span><div class="grow"><b>Alvenaria · 3º Embasamento</b><br><small>escoras retiradas em 02/10 · FVS 04 sem NC</small></div></div>
-        <div class="lin"><span class="pill bad">travado</span><div class="grow"><b>Reboco · 1º Embasamento</b><br><small>falta FVS de instalação hidráulica (teste de pressão)</small></div><span class="btn">Ver o que falta</span></div>
-      </div>
-      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+      <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: meio dia</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
   </div>
 
-  <h2>As etapas que estão chegando</h2>
-  <p class="secao-intro">A estrutura está subindo. Logo depois vêm alvenaria, instalações e revestimentos, que hoje não têm ficha no app.</p>
+  <!-- ===================== FASE 2 ===================== -->
+  <h2 class="fase">Fase 2 · Fichas novas e assinatura <small>cerca de 6 dias + meio dia por ficha nova</small></h2>
+  <p class="secao-intro">As etapas depois da estrutura ganham ficha, e a ficha passa a ter assinatura e a ficar travada depois de assinada, como pede a auditoria.</p>
   <div class="grade">
 
     <article class="ideia">
-      <h3><span class="n">5</span>Novas FVS na ordem do cronograma</h3>
-      <p>Cadastrar as fichas das próximas etapas, na ordem em que começam no cronograma. Uso os modelos de FVS da SIG (as planilhas .xls, igual às da pasta "FVS'S"), então a ficha do app sai no mesmo layout de hoje. Preciso que você me mande os modelos dessas etapas.</p>
+      <h3><span class="n">6</span>Novas FVS na ordem do cronograma</h3>
+      <p>Uso os modelos de FVS da SIG (as planilhas .xls, igual às da pasta "FVS'S"), então a ficha do app sai no mesmo layout de hoje. A ordem segue a data em que cada etapa começa. <b>Preciso que você me mande os modelos dessas etapas.</b></p>
       <div class="mock">
         <div class="lista-fvs">
           <div class="lin"><div class="grow"><b>Alvenaria de vedação</b><br><small>prumo, nível, amarração, encunhamento</small></div></div>
-          <div class="lin"><div class="grow"><b>Instalações elétricas embutidas</b><br><small>eletrodutos, caixas, antes do reboco</small></div></div>
+          <div class="lin"><div class="grow"><b>Instalações elétricas embutidas</b><br><small>eletrodutos e caixas, antes do reboco</small></div></div>
           <div class="lin"><div class="grow"><b>Instalações hidrossanitárias</b><br><small>teste de pressão e de estanqueidade</small></div></div>
           <div class="lin"><div class="grow"><b>Impermeabilização de áreas molhadas</b><br><small>teste de lâmina d'água 72 h</small></div></div>
-          <div class="lin"><div class="grow"><b>Revestimento de argamassa</b><br><small>interno e fachada, espessura e prumo</small></div></div>
-          <div class="lin"><div class="grow"><b>Contrapiso e cerâmica</b><br><small>caimento, nível, percussão</small></div></div>
-          <div class="lin"><div class="grow"><b>Esquadrias e pintura</b><br><small>na fase de acabamento</small></div></div>
+          <div class="lin"><div class="grow"><b>Revestimento de argamassa</b><br><small>interno e fachada</small></div></div>
+          <div class="lin"><div class="grow"><b>Contrapiso, cerâmica, esquadrias e pintura</b><br><small>fase de acabamento</small></div></div>
         </div>
       </div>
       <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: meio dia por ficha</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
 
     <article class="ideia">
-      <h3><span class="n">6</span>Medição com tolerância dentro da FVS</h3>
-      <p>Hoje o item é marcado como conforme ou não. Nos itens que têm tolerância (o catálogo já guarda, como "máx. 5 mm"), a pessoa digita o valor medido e o app decide sozinho: dentro da tolerância aprova, fora abre NC. Para testes com tempo, como lâmina d'água de 72 h, o app guarda início e fim e avisa quando o prazo acaba.</p>
+      <h3><span class="n">7</span>Medição com tolerância dentro da FVS</h3>
+      <p>Nos itens com tolerância (o catálogo já guarda, como "máx. 5 mm"), a pessoa digita o valor medido e o app decide sozinho: dentro aprova, fora abre NC. Testes com prazo, como lâmina d'água de 72 h, guardam o início e avisam quando terminam.</p>
       <div class="mock">
         <div class="lin"><div class="grow"><b>Prumo da alvenaria</b> <small>tol. ≤ 3 mm/m</small></div><b>2 mm</b><span class="pill ok">ok</span></div>
         <div class="lin"><div class="grow"><b>Locação da forma de borda</b> <small>tol. máx. 5 mm</small></div><b>8 mm</b><span class="pill bad">abre NC</span></div>
@@ -171,9 +237,72 @@
       <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
 
+    <article class="ideia larga">
+      <h3><span class="n">8</span>Assinatura da engenheira <span class="novo">NOVO</span></h3>
+      <p><b>Como funciona:</b></p>
+      <p><b>1. Cadastro, feito uma vez.</b> Em "Meu perfil", ela toca em "Cadastrar assinatura". Abre um quadro em branco e ela assina com o dedo ou com a caneta do tablet. Ou então importa uma foto da assinatura feita no papel: o app tira o fundo branco e recorta. Junto ficam o nome, o cargo e o número do CREA.</p>
+      <p><b>2. Onde fica guardada.</b> A imagem é pequena (cerca de 15 KB) e vai para o próprio banco, num documento só dela. Não precisa do Storage nem do plano pago. Pela regra do banco, só ela pode gravar ou trocar a própria assinatura.</p>
+      <p><b>3. Uso na ficha.</b> Na FVS aparece o botão "Assinar como responsável". O app pede confirmação, grava quem assinou, a data e a hora e uma cópia da assinatura dentro da ficha. Se ela trocar a assinatura no futuro, as fichas antigas continuam com a de antes. A assinatura sai na exportação para Excel e no dossiê.</p>
+      <p><b>4. Valor legal.</b> Pela Lei 14.063/2020, isso é uma assinatura eletrônica simples. Costuma bastar para registro interno e auditoria de qualidade. Para o dossiê final ou documentos que pedem mais (como laudos), o PDF pode ser assinado também pelo gov.br, que é grátis, ou com certificado digital ICP-Brasil.</p>
+      <p><b>Teste aqui: assine no quadro ou importe uma imagem. Nada é salvo.</b></p>
+      <div class="mock">
+        <canvas class="pad" id="pad" aria-label="Quadro para assinar com o dedo ou o mouse"></canvas>
+        <div class="pad-acoes">
+          <button type="button" class="btn" id="pad-limpar">Limpar</button>
+          <label class="btn" for="pad-arquivo">Importar imagem</label>
+          <input type="file" id="pad-arquivo" accept="image/*" hidden>
+          <button type="button" class="btn p" id="pad-usar">Assinar a FVS de exemplo</button>
+          <small id="pad-msg" style="color:var(--muted)"></small>
+        </div>
+        <div class="lin" style="margin-top:12px;display:block">
+          <b>FVS 04-121 · Forma Laje 6º Pav. Tipo</b> <small>· 18 itens conformes</small>
+          <div class="rodape-fvs" style="margin-top:62px">
+            <div><div class="vazio"></div>Técnico de edificações<br><small>assinou em 01/10/2026 09:12</small></div>
+            <div><div class="vazio" id="ass-vazio"></div><img id="ass-img" alt="Assinatura da engenheira" hidden>Engenheira responsável · CREA 0000000000<br><small id="ass-quando">aguardando assinatura</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="tags"><span class="tag alto">Exigido na auditoria</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+
     <article class="ideia">
-      <h3><span class="n">7</span>Linha de balanço dos pavimentos tipo</h3>
-      <p>Com 17 pavimentos iguais, o melhor gráfico é o de ritmo: uma linha por etapa subindo pavimento a pavimento ao longo do tempo. Quando a linha da alvenaria encosta na da estrutura, as equipes vão se encontrar e alguém vai ficar parado. O app avisa com semanas de antecedência.</p>
+      <h3><span class="n">9</span>Ficha assinada fica travada</h3>
+      <p>Depois de assinada, a FVS não pode mais ser editada. Para corrigir, a pessoa toca em "Nova revisão": a ficha ganha a revisão seguinte (Rev. 01, 02…) e a anterior fica guardada para consulta, com quem mudou e por quê. É o que o auditor procura quando pergunta como o registro é protegido.</p>
+      <div class="mock">
+        <div class="lin"><span class="pill ok">assinada</span><div class="grow"><b>FVS 04-121 · Rev. 00</b><br><small>travada desde 08/10 14:32</small></div><span class="btn">Nova revisão</span></div>
+        <div class="lin"><div class="grow"><small>Rev. 01 · 09/10 · motivo: "item 7 marcado errado"</small></div></div>
+      </div>
+      <div class="tags"><span class="tag alto">Exigido na auditoria</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+  </div>
+
+  <!-- ===================== FASE 3 ===================== -->
+  <h2 class="fase">Fase 3 · Sequência de serviços e qualidade <small>cerca de 6 dias</small></h2>
+  <div class="grade">
+
+    <article class="ideia">
+      <h3><span class="n">10</span>Liberação da próxima etapa</h3>
+      <p>Cada etapa só é liberada para a equipe seguinte quando a anterior tem FVS aprovada e assinada. Exemplos: o reboco só libera com as instalações embutidas aprovadas; a alvenaria só libera depois da retirada de escoras (item 11). No corte por etapa, o pavimento liberado aparece com um cadeado aberto.</p>
+      <div class="mock">
+        <div class="lin"><span class="pill ok">liberado</span><div class="grow"><b>Alvenaria · 3º Embasamento</b><br><small>escoras retiradas 02/10 · FVS 04 assinada</small></div></div>
+        <div class="lin"><span class="pill bad">travado</span><div class="grow"><b>Reboco · 1º Embasamento</b><br><small>falta FVS hidráulica (teste de pressão)</small></div><span class="btn">Ver o que falta</span></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+
+    <article class="ideia">
+      <h3><span class="n">11</span>Retirada de escoras pelo resultado do CT</h3>
+      <p>Para cada laje, o app junta a data da concretagem e o rompimento do CT (já vinculado pela rastreabilidade) e mostra quando a retirada pode acontecer, pelo critério que o projetista definir.</p>
+      <div class="mock">
+        <div class="lin"><span class="pill ok">pode retirar</span><div class="grow"><b>Laje 4º Tipo</b><br><small>fck 7 dias = 31 MPa (critério: 70% de 40)</small></div></div>
+        <div class="lin"><span class="pill warn">aguardando</span><div class="grow"><b>Laje 5º Tipo</b><br><small>rompimento de 7 dias em 09/10</small></div></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+
+    <article class="ideia">
+      <h3><span class="n">12</span>Linha de balanço dos pavimentos tipo</h3>
+      <p>Com 17 pavimentos iguais, uma linha por etapa sobe pavimento a pavimento ao longo do tempo. Quando a linha da alvenaria encosta na da estrutura, as equipes vão se encontrar. O app avisa com semanas de antecedência.</p>
       <div class="mock">
         <svg viewBox="0 0 460 180" width="100%" role="img" aria-label="Linha de balanço: estrutura, alvenaria e instalações por pavimento ao longo do tempo">
           <line x1="44" y1="150" x2="450" y2="150" stroke="var(--border)"/>
@@ -181,59 +310,249 @@
           <line x1="60" y1="140" x2="300" y2="20" stroke="var(--text)" stroke-width="3"/>
           <line x1="130" y1="140" x2="330" y2="20" stroke="var(--info)" stroke-width="3"/>
           <line x1="190" y1="140" x2="440" y2="20" stroke="var(--good)" stroke-width="3" stroke-dasharray="6 4"/>
-          <circle cx="306" cy="34" r="16" fill="none" stroke="var(--bad)" stroke-width="2"/>
-          <text x="248" y="14">encontro no 15º</text>
-          <text x="6" y="144">1º</text><text x="4" y="24">17º</text>
+          <circle cx="300" cy="28" r="15" fill="none" stroke="var(--bad)" stroke-width="2"/>
+          <text x="186" y="18">encontro no 15º</text>
+          <text x="10" y="144">1º</text><text x="8" y="24">17º</text>
           <text x="44" y="168">out/26</text><text x="400" y="168">dez/27</text>
         </svg>
         <div class="leg"><span style="--c:var(--text)">estrutura</span><span style="--c:var(--info)">alvenaria</span><span style="--c:var(--good)">instalações</span></div>
       </div>
       <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
-  </div>
-
-  <h2>Qualidade e inovação</h2>
-  <div class="grade">
 
     <article class="ideia">
-      <h3><span class="n">8</span>Retirada de escoras pelo resultado do CT</h3>
-      <p>Para cada laje, o app junta a data da concretagem e o resultado do rompimento (CT, já vinculado pela rastreabilidade) e mostra quando a desforma e a retirada de escoras podem acontecer, pelo critério que o projetista definir. Isso alimenta a liberação da alvenaria (ideia 4).</p>
-      <div class="mock">
-        <div class="lin"><span class="pill ok">pode retirar</span><div class="grow"><b>Laje 4º Tipo</b><br><small>concretada 18/09 · fck 7 dias = 31 MPa (critério: 70% de 40)</small></div></div>
-        <div class="lin"><span class="pill warn">aguardando</span><div class="grow"><b>Laje 5º Tipo</b><br><small>concretada 02/10 · rompimento de 7 dias em 09/10</small></div></div>
-      </div>
-      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
-    </article>
-
-    <article class="ideia">
-      <h3><span class="n">9</span>Qualidade por etapa e por empreiteiro</h3>
-      <p>Um campo novo "empreiteiro" na FVS (opcional, as fichas antigas continuam valendo). Com ele o app mostra, por etapa e por equipe, quantas fichas passam na primeira inspeção e quais itens mais reprovam. Serve para conversar com o empreiteiro com número na mão e para o indicador do PBQP-H.</p>
+      <h3><span class="n">13</span>Qualidade por etapa e por empreiteiro</h3>
+      <p>Um campo novo "empreiteiro" na FVS. É opcional, e as fichas antigas continuam valendo. Com ele o app mostra quantas fichas passam na primeira inspeção e quais itens mais reprovam. Serve de indicador para a auditoria e para a conversa com o empreiteiro.</p>
       <div class="mock">
         <div class="lin"><div class="grow"><b>Armação</b> <small>· Equipe A</small></div><b>92%</b><small>na 1ª inspeção</small></div>
         <div class="lin"><div class="grow"><b>Forma</b> <small>· Equipe B</small></div><b>71%</b><span class="pill warn">abaixo da meta</span></div>
-        <div class="lin"><div class="grow"><small>Item que mais reprova:</small> <b>cobrimento da armadura</b></div><small>9 vezes</small></div>
       </div>
       <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
 
     <article class="ideia">
-      <h3><span class="n">10</span>Aviso de erro repetido no próximo pavimento</h3>
-      <p>Quando o mesmo item reprova em pavimentos seguidos, a FVS do próximo pavimento já abre com um aviso no topo e o item destacado. É a "lição aprendida" chegando na hora certa, para a equipe corrigir antes da inspeção, e não depois.</p>
+      <h3><span class="n">14</span>Aviso de erro repetido no próximo pavimento</h3>
+      <p>Quando o mesmo item reprova em pavimentos seguidos, a FVS do próximo já abre com um aviso no topo, para a equipe corrigir antes da inspeção.</p>
       <div class="mock">
-        <div class="lin"><span class="pill warn">atenção</span><div class="grow"><b>FVS 04 · Laje 7º Tipo</b><br><small>"Cobrimento da armadura" reprovou no 4º, 5º e 6º. Confira os espaçadores antes de chamar a inspeção.</small></div></div>
+        <div class="lin"><span class="pill warn">atenção</span><div class="grow"><b>FVS 04 · Laje 7º Tipo</b><br><small>"Cobrimento da armadura" reprovou no 4º, 5º e 6º. Confira os espaçadores.</small></div></div>
       </div>
       <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: meio dia</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
+  </div>
 
+  <!-- ===================== FASE 4 ===================== -->
+  <h2 class="fase">Fase 4 · Pronto para a auditoria <small>cerca de 5 dias</small></h2>
+  <p class="secao-intro">Os pontos que o auditor do PBQP-H (SiAC) e da ISO 9001 costuma pedir numa obra, o que o app já atende e o que este plano acrescenta.</p>
+  <div class="aud">
+    <div class="cab"><span>O que pedem</span><span>Como o app atende</span><span>Hoje</span></div>
+    <div><b>Serviços controlados com FVS e critério de aceitação</b><span>FVS com itens, método e tolerância; as novas fichas cobrem as etapas que faltam (item 6)</span><span class="pill warn">parcial</span></div>
+    <div><b>Registro com responsável, data e assinatura</b><span>Assinatura da engenheira e do técnico (item 8)</span><span class="pill bad">falta</span></div>
+    <div><b>Registro protegido contra alteração</b><span>Ficha travada e revisões guardadas (item 9)</span><span class="pill bad">falta</span></div>
+    <div><b>Tratamento de não conformidade</b><span>NC com anexos e conclusão já existe. Falta registrar a causa, a ação tomada e se ela funcionou (verificação de eficácia)</span><span class="pill warn">parcial</span></div>
+    <div><b>Rastreabilidade do concreto e controle tecnológico</b><span>Rastreabilidade por betonada, NF e CT vinculados</span><span class="pill ok">tem</span></div>
+    <div><b>Inspeção de materiais no recebimento</b><span>Aço já tem conferência do pedido. Item 15: ficha de recebimento para aço, concreto, blocos, argamassa e cerâmica</span><span class="pill warn">parcial</span></div>
+    <div><b>Equipamentos de medição aferidos</b><span>Item 16: lista de trenas, níveis, prumos e esquadros com validade da aferição; a FVS registra qual equipamento foi usado</span><span class="pill bad">falta</span></div>
+    <div><b>Projeto e procedimento na revisão certa</b><span>Item 17: a FVS registra a revisão da planta usada (ex.: R02) e o app avisa quando há revisão nova</span><span class="pill bad">falta</span></div>
+    <div><b>Treinamento da equipe no procedimento</b><span>Item 18: lista de presença do treinamento antes de cada serviço, com assinatura (reaproveita o item 8)</span><span class="pill bad">falta</span></div>
+    <div><b>Indicadores de qualidade</b><span>Aprovação na 1ª inspeção, NC por etapa, resistência do concreto (item 13)</span><span class="pill warn">parcial</span></div>
+    <div><b>Arquivo dos registros</b><span>Banco com backup e dossiê por pavimento (item 19)</span><span class="pill warn">parcial</span></div>
+  </div>
+
+  <div class="grade" style="margin-top:16px">
     <article class="ideia">
-      <h3><span class="n">11</span>Dossiê do pavimento</h3>
-      <p>Um toque reúne tudo de um pavimento num único arquivo: FVS de todas as etapas, NCs e como foram fechadas, rastreabilidade das betonadas, resultados do CT e pedidos de aço. Pronto para auditoria (PBQP-H, ISO 9001), para a entrega da obra e para responder a qualquer dúvida sobre aquele andar anos depois.</p>
+      <h3><span class="n">15</span>Recebimento de materiais</h3>
+      <p>Ficha curta na chegada do material: NF, quantidade, aspecto e laudo do fornecedor, com aceite ou recusa. O aço já tem quase tudo; o resto ganha o mesmo modelo.</p>
+      <div class="tags"><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+    <article class="ideia">
+      <h3><span class="n">16</span>Equipamentos de medição</h3>
+      <p>Cadastro de trena, nível a laser, prumo e esquadro, com a data de aferição. O app avisa 15 dias antes de vencer, e na FVS o técnico escolhe com qual equipamento mediu.</p>
+      <div class="tags"><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+    <article class="ideia">
+      <h3><span class="n">17</span>Revisão do projeto na ficha</h3>
+      <p>A pasta de plantas já tem a revisão no nome do arquivo (R02). A FVS guarda qual revisão estava valendo, e o app avisa quando chega uma revisão nova de um pavimento ainda em execução.</p>
+      <div class="tags"><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+    <article class="ideia">
+      <h3><span class="n">18</span>Treinamento antes do serviço</h3>
+      <p>Antes de começar uma etapa, o técnico registra o treinamento no procedimento: data, tema e lista de presença assinada na tela. O auditor pede isso com frequência.</p>
+      <div class="tags"><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </article>
+    <article class="ideia">
+      <h3><span class="n">19</span>Dossiê do pavimento</h3>
+      <p>Um toque reúne tudo de um pavimento: FVS assinadas, NCs e como foram fechadas, betonadas, CT, aço, materiais recebidos e treinamentos. Para a auditoria e para a entrega da obra.</p>
       <div class="mock">
-        <div class="lin"><div class="grow"><b>Dossiê · 3º Embasamento</b><br><small>14 FVS · 2 NC fechadas · 6 betonadas · 18 CPs · 2 pedidos de aço</small></div><span class="btn p">Gerar</span></div>
+        <div class="lin"><div class="grow"><b>Dossiê · 3º Embasamento</b><br><small>14 FVS · 2 NC fechadas · 6 betonadas · 18 CPs</small></div><span class="btn p">Gerar</span></div>
       </div>
-      <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+      <div class="tags"><span class="tag">Esforço: 2 dias</span><span class="tag zero">Custo R$ 0</span></div>
     </article>
   </div>
 
-  <p class="rodape">Sugestão para começar: <b>1, 2 e 5</b>. A 1 e a 2 ligam o que já existe. A 5 deixa o app pronto antes de a alvenaria começar. A 3 e a 4 ficam melhores depois delas. Para seguir, me diga os números, por exemplo "faz 1, 2 e 5". Dá para pedir pelo celular. Eu faço, testo e mando o link de teste antes de qualquer publicação.</p>
+  <!-- ===================== ORGANIZAÇÃO ===================== -->
+  <h2>Organização do app</h2>
+  <p class="secao-intro">Com mais etapas e fichas, o app pode ficar confuso. Estas mudanças mantêm tudo fácil de achar. Dá para fazer junto com as fases.</p>
+  <div class="org">
+    <div><b>Menu por assunto, não por tipo de tela</b><p>Agrupar em: Início · Obra (corte, cronograma, quadro) · Fichas (FVS, NC) · Concreto (rastreabilidade, CT) · Materiais (aço, recebimento) · Auditoria (dossiê, equipamentos, treinamentos).</p></div>
+    <div><b>Pavimento escolhido vale em todas as abas</b><p>Tocou no 3º Embasamento no corte? As fichas, o concreto e o aço já abrem filtrados nele, com um chip "3º Emb. ✕" no topo para limpar.</p></div>
+    <div><b>"Minhas pendências" por pessoa</b><p>A engenheira vê o que falta assinar. O técnico vê as FVS a abrir e as NCs a reinspecionar. A Jéssica vê só o resumo.</p></div>
+    <div><b>Uma cor por situação, em todo lugar</b><p>Verde = aprovado ou liberado, azul = em andamento, amarelo = falta algo, vermelho = NC ou atraso, cinza = não começou. Igual no corte, nas listas e no cronograma.</p></div>
+    <div><b>Pavimento sempre da lista oficial</b><p>Acabar com o texto livre "1º Pav Tipo" × "201": a ficha só aceita os 28 níveis da lista. Fichas antigas ganham o campo novo por script, sem perder o texto original.</p></div>
+    <div><b>Botão principal no alcance do polegar</b><p>No celular, "Nova FVS", "Assinar" e "Concluir" ficam embaixo da tela, onde o dedo alcança com o celular em uma mão, inclusive de luva.</p></div>
+  </div>
+
+  <h2>Ordem sugerida</h2>
+  <div class="ordem">
+    <ol>
+      <li><b>Fase 1 (itens 1 a 5):</b> o corte por etapa já fica pronto e útil logo.</li>
+      <li><b>Assinatura e ficha travada (itens 8 e 9):</b> são o que mais pesa na auditoria e são rápidos.</li>
+      <li><b>Novas FVS (item 6):</b> assim que você mandar os modelos .xls, antes de a alvenaria começar.</li>
+      <li><b>Fase 3 e o restante da Fase 4</b>, na ordem que for mais urgente para a obra.</li>
+    </ol>
+    <p style="margin:10px 0 0;color:var(--muted)">Todas as mudanças no banco são aditivas: só campos novos, nada é apagado. Cada fase passa por testes e por um link de teste, e só é publicada quando você disser "publica". Para começar, responda "faz a fase 1", ou escolha os números dos itens.</p>
+  </div>
 </div>
+
+<script>
+(function(){
+  // ---------- corte do prédio por etapa (dados de exemplo) ----------
+  var NIV = ["Fundação","Subsolo"];
+  for (var i=1;i<=5;i++) NIV.push(i+"º Embasamento");
+  for (i=1;i<=17;i++) NIV.push(i+"º Pav. Tipo");
+  NIV = NIV.concat(["Cobertura","Dependência","Pav. Técnico","Telhado"]);
+  var N = NIV.length;
+  // cada etapa: função que dá {p: %, fvs: true/false} para o nível r, ou null se não se aplica
+  function faixa(cheios, andamento, pAnd, semFvs, naoSeAplica){
+    return function(r){
+      if (naoSeAplica && naoSeAplica(r)) return null;
+      if (cheios.indexOf(r) >= 0) return { p:100, fvs: semFvs.indexOf(r) < 0 };
+      if (r === andamento) return { p:pAnd, fvs:false };
+      return { p:0, fvs:false };
+    };
+  }
+  function ate(n){ var a=[]; for (var k=0;k<=n;k++) a.push(k); return a; }
+  function de(a,b){ var r=[]; for (var k=a;k<=b;k++) r.push(k); return r; }
+  var semFund = function(r){ return r===0; };
+  var ETAPAS = [
+    { id:"estr", nome:"Estrutura", f:faixa(ate(11),12,60,[10]), prev:13, ini:"jul/25" },
+    { id:"alv", nome:"Alvenaria", f:faixa(de(1,3),4,50,[], semFund), prev:5, ini:"ago/26" },
+    { id:"ele", nome:"Inst. elétricas", f:faixa(de(1,2),3,40,[2], semFund), prev:3, ini:"set/26" },
+    { id:"hid", nome:"Inst. hidráulicas", f:faixa([1],2,70,[], semFund), prev:3, ini:"set/26" },
+    { id:"imp", nome:"Impermeabilização", f:faixa([0],1,30,[], function(r){ return !(r<=1 || r>=24); }), prev:1, ini:"set/26" },
+    { id:"rev", nome:"Revestimento", f:faixa([],1,40,[], semFund), prev:1, ini:"out/26" },
+    { id:"ctp", nome:"Contrapiso", f:faixa([],-1,0,[], semFund), prev:null, ini:"jan/27" }
+  ];
+  function status(c){ if (!c) return "na"; if (c.p>=100) return c.fvs ? "ok" : "sem"; if (c.p>0) return "and"; return "nada"; }
+  function resumo(e){
+    var soma=0, n=0, cont={ok:0,sem:0,and:0,nada:0}, topo=null;
+    for (var r=0;r<N;r++){ var c=e.f(r); if (!c) continue; n++; soma+=c.p; cont[status(c)]++; if (c.p>=100) topo=r; }
+    return { pct: n ? Math.round(soma/n) : 0, cont:cont, topo:topo, n:n };
+  }
+  var atual = ETAPAS[0], sel = null;
+  var abas = document.getElementById("abas");
+  ETAPAS.forEach(function(e){
+    var r = resumo(e), b = document.createElement("button");
+    b.type="button"; b.setAttribute("role","tab"); b.id="aba-"+e.id;
+    b.innerHTML = e.nome + " <small>" + (r.pct>=100 ? "✓" : (r.pct>0 ? r.pct+"%" : "começa "+e.ini)) + "</small>";
+    b.addEventListener("click", function(){ atual=e; sel=null; desenhar(); });
+    abas.appendChild(b);
+  });
+  var svg = document.getElementById("corte-svg");
+  var H=9, G=2, topoY=8, xEmb=8, wEmb=176, xTor=30, wTor=118;
+  var alt = topoY + N*(H+G) + 6;
+  svg.setAttribute("viewBox","0 0 "+(xEmb+wEmb+26)+" "+alt);
+  function yDe(r){ return topoY + (N-1-r)*(H+G); }
+  function desenhar(){
+    Array.prototype.forEach.call(abas.children, function(b){ b.setAttribute("aria-selected", b.id==="aba-"+atual.id ? "true":"false"); });
+    var s = "", r;
+    var solo = topoY + (N-2)*(H+G) - G/2;
+    s += '<line class="solo" x1="0" x2="'+(xEmb+wEmb+26)+'" y1="'+solo+'" y2="'+solo+'"/>';
+    for (r=0;r<N;r++){
+      var c = atual.f(r), emb = r<=6;
+      var x = emb?xEmb:xTor, w = emb?wEmb:wTor;
+      s += '<rect data-r="'+r+'" class="n-'+status(c)+(sel===r?' n-sel':'')+'" x="'+x+'" y="'+yDe(r)+'" width="'+w+'" height="'+H+'" rx="1.5"></rect>';
+      if (c && c.p>0 && c.p<100) s += '<rect class="n-ok" x="'+x+'" y="'+yDe(r)+'" width="'+(w*c.p/100)+'" height="'+H+'" rx="1.5" style="opacity:.35;pointer-events:none"></rect>';
+    }
+    if (atual.prev!=null){ var yp = yDe(atual.prev) - G/2; s += '<line class="prev" x1="2" x2="'+(xEmb+wEmb+4)+'" y1="'+yp+'" y2="'+yp+'"></line>'; }
+    svg.innerHTML = s;
+    var R = resumo(atual);
+    document.getElementById("c-pct").innerHTML = R.pct + "<small>%</small>";
+    document.getElementById("c-sub").textContent = "de " + atual.nome.toLowerCase() + " concluída";
+    document.getElementById("c-barra").style.width = R.pct + "%";
+    document.getElementById("c-ate").innerHTML = R.topo!=null ? "Concluída até o <b>"+NIV[R.topo]+"</b>" : "Ainda não chegou a 100% em nenhum pavimento";
+    var p = document.getElementById("c-prev");
+    if (atual.prev==null){ p.className="info-linha"; p.innerHTML = "Começa em "+atual.ini+" pelo cronograma"; }
+    else {
+      var dif = (R.topo==null?-1:R.topo) - atual.prev;
+      p.className = "info-linha " + (dif<0 ? "atraso":"ok");
+      p.innerHTML = "Cronograma previa até o <b>"+NIV[atual.prev]+"</b> hoje · <b>"+(dif===0?"em dia":(dif>0?dif+" pav. adiantado":(-dif)+" pav. atrasado"))+"</b>";
+    }
+    document.getElementById("c-leg").innerHTML =
+      '<li><i style="background:var(--good)"></i>Concluído com FVS aprovada<b>'+R.cont.ok+'</b></li>'+
+      '<li><i style="background:var(--warn)"></i>Concluído sem FVS<b>'+R.cont.sem+'</b></li>'+
+      '<li><i style="background:var(--info)"></i>Em andamento<b>'+R.cont.and+'</b></li>'+
+      '<li><i style="background:var(--surface-2);border:1px solid var(--border)"></i>A executar<b>'+R.cont.nada+'</b></li>'+
+      '<li><i style="border:1px dashed var(--border)"></i>Não se aplica<b>'+(N-R.n)+'</b></li>'+
+      '<li><i style="background:var(--bad);height:2px"></i>Previsto hoje pelo cronograma</li>';
+  }
+  svg.addEventListener("click", function(ev){
+    var t = ev.target; if (!t.getAttribute || t.getAttribute("data-r")==null) return;
+    sel = Number(t.getAttribute("data-r")); var c = atual.f(sel);
+    desenhar();
+    var txt = "<b>"+NIV[sel]+"</b> · "+atual.nome+": ";
+    if (!c) txt += "não se aplica neste nível";
+    else if (c.p>=100) txt += "100% · "+(c.fvs ? "FVS aprovada e assinada" : "<span style='color:var(--warn)'>falta a FVS</span>");
+    else if (c.p>0) txt += c.p+"% · FVS em aberto";
+    else txt += "a executar";
+    document.getElementById("c-toque").innerHTML = txt;
+  });
+  desenhar();
+
+  // ---------- quadro de assinatura (demonstração, nada é salvo) ----------
+  var cv = document.getElementById("pad"), ctx = cv.getContext("2d"), desenhando=false, vazio=true, ult=null;
+  function corTinta(){ return getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#1E1E1C"; }
+  function ajustar(){
+    var d = window.devicePixelRatio || 1, r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width*d); cv.height = Math.round(r.height*d);
+    ctx.setTransform(d,0,0,d,0,0); ctx.lineCap="round"; ctx.lineJoin="round"; ctx.lineWidth=2.4; vazio=true;
+  }
+  function pos(e){ var r = cv.getBoundingClientRect(); return { x:e.clientX-r.left, y:e.clientY-r.top }; }
+  cv.addEventListener("pointerdown", function(e){ desenhando=true; ult=pos(e); try{ cv.setPointerCapture(e.pointerId); }catch(_){} });
+  cv.addEventListener("pointermove", function(e){
+    if (!desenhando) return; var p=pos(e);
+    ctx.strokeStyle = corTinta(); ctx.beginPath(); ctx.moveTo(ult.x,ult.y); ctx.lineTo(p.x,p.y); ctx.stroke(); ult=p; vazio=false;
+  });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(n){ cv.addEventListener(n, function(){ desenhando=false; }); });
+  var msg = document.getElementById("pad-msg");
+  document.getElementById("pad-limpar").addEventListener("click", function(){ ajustar(); msg.textContent=""; });
+  document.getElementById("pad-arquivo").addEventListener("change", function(ev){
+    var f = ev.target.files && ev.target.files[0]; if (!f) return;
+    var img = new Image();
+    img.onload = function(){
+      ajustar();
+      var r = cv.getBoundingClientRect(), esc = Math.min(r.width/img.width, r.height/img.height)*0.9;
+      var w = img.width*esc, h = img.height*esc;
+      // tira o fundo claro: pinta numa tela auxiliar e deixa transparente o que é quase branco
+      var aux = document.createElement("canvas"); aux.width = Math.max(1,Math.round(w)); aux.height = Math.max(1,Math.round(h));
+      var ax = aux.getContext("2d"); ax.drawImage(img,0,0,aux.width,aux.height);
+      var dados = ax.getImageData(0,0,aux.width,aux.height), px = dados.data;
+      for (var k=0;k<px.length;k+=4){ if (px[k]>200 && px[k+1]>200 && px[k+2]>200) px[k+3]=0; }
+      ax.putImageData(dados,0,0);
+      ctx.drawImage(aux,(r.width-w)/2,(r.height-h)/2,w,h); vazio=false;
+      msg.textContent = "Imagem importada, fundo branco removido.";
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(f); ev.target.value="";
+  });
+  document.getElementById("pad-usar").addEventListener("click", function(){
+    if (vazio){ msg.textContent = "Assine no quadro ou importe uma imagem primeiro."; return; }
+    var im = document.getElementById("ass-img");
+    im.src = cv.toDataURL("image/png"); im.hidden=false; document.getElementById("ass-vazio").hidden=true;
+    var d = new Date(), z=function(n){ return String(n).padStart(2,"0"); };
+    document.getElementById("ass-quando").textContent = "assinou em "+z(d.getDate())+"/"+z(d.getMonth()+1)+"/"+d.getFullYear()+" "+z(d.getHours())+":"+z(d.getMinutes())+" · ficha travada";
+    msg.textContent = "Assinada (só nesta tela, nada foi salvo).";
+  });
+  ajustar();
+  window.addEventListener("resize", function(){ if (vazio) ajustar(); });
+})();
+</script>
