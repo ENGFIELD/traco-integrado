@@ -11,7 +11,7 @@
     "emuladores": "firebase emulators:start --only auth,firestore,hosting --project traco-integrado-sig",
     "test:regras-v1": "firebase emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras-v1 \"node --test tests/regras/regras-v1.test.mjs\"",
     "test:regras": "firebase emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras \"node --test tests/regras/regras.test.mjs\"",
-    "test": "node tests/planilha-ct.test.mjs && node tests/aco-cronograma.test.mjs && node tests/sw.test.mjs"
+    "test": "node tests/planilha-ct.test.mjs && node tests/aco-cronograma.test.mjs && node tests/etapas.test.mjs && node tests/sw.test.mjs"
   },
   "dependencies": {
     "firebase": "10.13.0",

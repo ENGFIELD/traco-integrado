@@ -15,10 +15,11 @@ import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
-import { corteHtml } from "./modulos/obra/corte-predio.js";
+import { corteHtml, corteEtapaHtml } from "./modulos/obra/corte-predio.js";
+import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapas.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje } from "./modulos/aco/aco-cronograma.js";
-import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, semanaDe, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
+import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, definirEtapasManuais, etapasDaObra, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, semanaDe, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -575,7 +576,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   var acoMap = new Map(), acoErroAcesso = false, unsubAco = null;
   // v1.5: cronograma (ver src/modulos/cronograma/) — só o documento "atual" é escutado
   var cronCol = dbf.collection("cronogramas");
-  var cronErroAcesso = false, unsubCron = null, unsubCronProg = null;
+  var cronErroAcesso = false, unsubCron = null, unsubCronProg = null, unsubCronEtapas = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
@@ -1033,6 +1034,102 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     return { niveis:niveis, cont:cont, topo:topo, pct:pct, previsto:previsto };
   }
 
+  /* ---------------- v1.14: etapas da obra × FVS (Fase 1) ----------------
+     O cronograma diz em que etapa e pavimento está cada atividade (ver
+     src/modulos/cronograma/etapas.js); aqui juntamos com as FVS do app.
+     Só leitura: nada é gravado. */
+  function indiceFvs(){
+    var idx = {}, inicio = "";
+    fvsMap.forEach(function(f){
+      var tipo = f.tipo || "fvs04", ab = f.dataAbertura || f.dataConcretagem || "";
+      if(ab && (!inicio || ab < inicio)) inicio = ab;
+      niveisDoTexto(fvsPavimentosList(f)).forEach(function(k){
+        var c = idx[tipo+"|"+k] || (idx[tipo+"|"+k] = { total:0, fechadas:0 });
+        c.total++; if(f.fechado) c.fechadas++;
+      });
+    });
+    return { inicio:inicio, doNivel:function(tipos, nivel){
+      var r = { total:0, fechadas:0 };
+      tipos.forEach(function(t){ var c = idx[t+"|"+nivel]; if(c){ r.total += c.total; r.fechadas += c.fechadas; } });
+      return r;
+    } };
+  }
+  // Abas do corte: Estrutura (o corte de sempre, pelas concretagens) + as etapas do cronograma
+  function etapasDoCorte(){
+    var hoje = todayISO(), eo = etapasDaObra(hoje), fx = indiceFvs();
+    if(!eo) return { hoje:hoje, lista:[], fx:fx, eo:null };
+    var lista = eo.resumo.filter(function(e){ return e.key!=="estrutura" && e.niveis.size; }).map(function(e){
+      var tp = topoEtapa(e, hoje);
+      return { key:e.key, nome:e.nome, curto:e.curto, et:e, pct:e.pct, topo:tp.topo, previsto:tp.previsto,
+        inicio: e.ini && e.ini > hoje ? e.ini : "", temFvs: e.tiposFvs.length > 0 };
+    });
+    return { hoje:hoje, lista:lista, fx:fx, eo:eo };
+  }
+  function dadosCorteEtapa(item, fx){
+    return { nome:item.nome, pct:item.pct, topo:item.topo, previsto:item.previsto, inicio:item.inicio, temFvs:item.temFvs,
+      niveis: NIVEIS_OBRA.map(function(nome, rank){
+        var s = situacaoNivel(item.et, rank, fx.doNivel, fx.inicio);
+        return { rank:rank, nome:nome, st:s.st, pct:s.pct };
+      }) };
+  }
+  // Estrutura no quadro/aba: mesmo status do corte de sempre, no vocabulário das etapas
+  var ST_ESTRUTURA = { liberado:"liberado", concretado:"fvsaberta", execucao:"execucao", nada:"nada" };
+  var etapaAba = (function(){ try{ return localStorage.getItem("traco-etapa-aba") || "estrutura"; }catch(e){ return "estrutura"; } })();
+  var etapaModo = "corte"; // "corte" | "quadro"
+  function cartaoAvancoHtml(){
+    var dc = etapasDoCorte(), av = avancoEstrutura();
+    var atual = dc.lista.find(function(x){ return x.key===etapaAba; });
+    if(!atual) etapaAba = "estrutura";
+    var mesAno = function(iso){ var p = fmtDateBR(iso).split("/"); return p.length===3 ? ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"][+p[1]-1]+"/"+p[2].slice(2) : ""; };
+    var abas = '<button type="button" class="chip" data-etapa-aba="estrutura" aria-pressed="'+(etapaAba==="estrutura")+'">Estrutura <small>'+av.pct+'%</small></button>'
+      + dc.lista.map(function(x){
+          var rot = x.inicio ? "começa "+mesAno(x.inicio) : (x.pct>=100 ? "✓" : x.pct+"%");
+          return '<button type="button" class="chip'+(x.inicio?" futura":"")+'" data-etapa-aba="'+x.key+'" aria-pressed="'+(etapaAba===x.key)+'">'+escapeHtml(x.nome)+' <small>'+rot+'</small></button>';
+        }).join("");
+    var corpo;
+    if(etapaModo==="quadro") corpo = quadroEtapasHtml(dc, av);
+    else if(etapaAba==="estrutura") corpo = corteHtml(av);
+    else corpo = corteEtapaHtml(dadosCorteEtapa(atual, dc.fx), fmtDateBR);
+    return '<div class="dash-card dash-card-avanco"><div class="dash-card-h"><h3>Avanço da obra por etapa</h3>'
+      + '<button type="button" class="mais" data-goto-view="pavimento">FVS por pavimento →</button></div>'
+      + (dc.lista.length ? '<div class="etapa-abas" role="group" aria-label="Etapa">'+abas+'</div>'
+          + '<div class="etapa-modo"><button type="button" class="btn small" data-etapa-modo>'+(etapaModo==="quadro" ? "Ver o corte do prédio" : "Ver em tabela (todas as etapas)")+'</button></div>' : '')
+      + corpo + '</div>';
+  }
+  function quadroEtapasHtml(dc, av){
+    var cols = [{ key:"estrutura", curto:"Estr." }].concat(dc.lista);
+    var linhas = "";
+    for(var r=NIVEIS_OBRA.length-1; r>=0; r--){
+      var cel = cols.map(function(c){
+        var st, pct = null;
+        if(c.key==="estrutura"){ st = ST_ESTRUTURA[av.niveis[r].status]; }
+        else { var s = situacaoNivel(c.et, r, dc.fx.doNivel, dc.fx.inicio); st = s.st; pct = s.pct; }
+        var cls = { liberado:"liberado", fvsaberta:"concretado", concluido:"concretado", semfvs:"semfvs", execucao:"execucao", nada:"nada", na:"na" }[st];
+        var txt = st==="na" ? "" : (st==="semfvs" ? "FVS?" : (st==="execucao" && pct!=null ? pct+"%" : (st==="nada" ? "" : "✓")));
+        return '<td class="q-'+cls+'" title="'+escapeHtml(NIVEIS_OBRA[r]+" · "+(c.nome||"Estrutura"))+'">'+txt+'</td>';
+      });
+      if(cel.every(function(x){ return x.indexOf('q-na')!==-1 || x.indexOf('q-nada')!==-1; })) continue; // nível sem nada começado em nenhuma etapa
+      linhas += '<tr><th>'+escapeHtml(NIVEIS_OBRA[r].replace(" Pavimento Tipo", "º Tipo").replace("ºº","º").replace(" Embasamento", "º Emb.").replace("ºº","º"))+'</th>'+cel.join("")+'</tr>';
+    }
+    var cab = '<tr><th></th>'+cols.map(function(c){ return '<th>'+escapeHtml(c.curto)+'</th>'; }).join("")+'</tr>';
+    var leg = [["var(--accent-strong)","concluído, FVS fechada"],["var(--good-soft)","concluído"],["var(--bad-soft)","100% sem FVS"],["var(--warn-soft)","em andamento"],["var(--surface-2)","a executar"]]
+      .map(function(x){ return '<span><i style="background:'+x[0]+'"></i>'+x[1]+'</span>'; }).join("");
+    return '<div class="quadro-etapas">'+(linhas ? '<table><thead>'+cab+'</thead><tbody>'+linhas+'</tbody></table>' : '<div class="dash-vazio">Nenhum pavimento iniciado ainda.</div>')
+      + '<div class="q-leg">'+leg+'</div><div class="cp-dica" style="margin-top:6px">Estrutura pelas concretagens e FVS do app; as outras etapas pelo % do cronograma. Só aparecem os pavimentos com algo começado.</div></div>';
+  }
+  // Abre uma FVS nova já com o pavimento (e o tipo, quando a etapa só tem um)
+  function abrirNovaFvsDoCronograma(tipos, nivel){
+    var pav = pisoNome(nivel);
+    // estrutura: a ficha da laje é sempre a FVS 04 (forma, armação e concretagem)
+    if(tipos.length===1 || tipos[0]==="fvs04") openModal("fvs", null, tipos[0], { pavimento:pav });
+    else openTipoChooser(function(k){ openModal("fvs", null, k, { pavimento:pav }); });
+  }
+  function nomeTipoFvs(tipos){
+    if(tipos.length!==1 && tipos[0]!=="fvs04") return "FVS";
+    var t = todosTiposFvs().find(function(x){ return x.key===tipos[0]; });
+    return t ? t.codigo : "FVS";
+  }
+
   /* ---------------- v1.6: assistente "Hoje você precisa…" (regras, sem IA) ----------------
      Junta o que exige ação hoje em todas as áreas, dá uma prioridade (maior =
      mais urgente) e o Início mostra as 5 primeiras. Cada sugestão leva direto
@@ -1083,6 +1180,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(prev && prev.previsto!=null && av.topo!=null && av.topo < prev.previsto) out.push({ cat:"estrutura", prio: 72, icone:"layers", tom:"bad",
         titulo:"Estrutura "+(prev.previsto-av.topo)+" pavimento(s) atrás do cronograma",
         sub:"executado até "+NIVEIS_OBRA[av.topo]+" · previsto "+NIVEIS_OBRA[prev.previsto], abrir:{ view:"cronograma" } });
+    }
+    // 2b) v1.14: etapa concluída no cronograma sem a FVS daquele pavimento
+    var dcH = etapasDoCorte();
+    if(dcH.eo){
+      fvsPedidas(dcH.eo.cr, dcH.eo.classif, dcH.eo.resumo, dcH.fx.doNivel, dcH.fx.inicio, hoje, hoje).faltando.forEach(function(x){
+        var d = x.fim ? dias(x.fim, hoje) : 0;
+        out.push({ cat:"fvs-falta", prio: 48 + Math.max(0, 12 - Math.floor(d/7)), icone:"check", tom:"warn",
+          titulo:"Falta FVS: "+x.nomeEtapa+" · "+pisoNome(x.nivel),
+          sub:"100% no cronograma"+(x.fim ? " (terminou "+fmtDateBR(x.fim)+")" : "")+" · "+nomeTipoFvs(x.tiposFvs)+" não aberta",
+          abrir:{ novaFvs: x.tiposFvs.join(",")+"|"+x.nivel } });
+      });
     }
     // 3) Não conformidades abertas há muito tempo
     todasNaoConformidades().forEach(function(n){
@@ -1222,7 +1330,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var hojeHtml = '<div class="dash-card dash-card-hoje"><div class="dash-card-h"><h3>Hoje você precisa…</h3>'
       + '<span class="hoje-cont">'+(sugest.length ? sugest.length+" pendência(s)" : "")+'</span></div>'
       + (sugest.length ? visiveis.map(function(x, i){
-          var alvo = x.abrir.fvs ? 'data-abrir-fvs="'+escapeHtml(x.abrir.fvs)+'"' : (x.abrir.rast ? 'data-abrir-rast="'+escapeHtml(x.abrir.rast)+'"'
+          var alvo = x.abrir.novaFvs ? 'data-nova-fvs="'+escapeHtml(x.abrir.novaFvs)+'"' : x.abrir.fvs ? 'data-abrir-fvs="'+escapeHtml(x.abrir.fvs)+'"' : (x.abrir.rast ? 'data-abrir-rast="'+escapeHtml(x.abrir.rast)+'"'
             : (x.abrir.ct ? 'data-hoje-ct="'+escapeHtml(x.abrir.ct)+'"' : 'data-goto-view="'+x.abrir.view+'"'));
           return li(alvo, x.icone, x.tom, x.titulo, x.sub, String(i+1), "");
         }).join("")
@@ -1251,7 +1359,23 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               titulo, (t.caminho.slice(-2)[0]||"")+(x.terminaNaSemana ? " · termina "+fmtDateBR(t.fim).slice(0,5) : " · até "+fmtDateBR(t.fim).slice(0,5)),
               (x.crit ? "crítica · " : "")+t.pct+"%", x.crit ? "bad" : "");
           }).join("") : '<div class="dash-vazio">Nenhuma atividade prevista para esta semana.</div>')
+        + fvsDaSemanaHtml(metas.semana)
         + '</div>';
+    }
+    // v1.14: FVS que as atividades desta semana vão pedir (ainda não abertas)
+    function fvsDaSemanaHtml(sem){
+      var dc = etapasDoCorte();
+      if(!dc.eo) return "";
+      var ped = fvsPedidas(dc.eo.cr, dc.eo.classif, dc.eo.resumo, dc.fx.doNivel, dc.fx.inicio, sem.ini, sem.fim).semana;
+      if(!ped.length) return "";
+      return '<div class="metas-resumo" style="margin-top:10px"><b>FVS da semana</b> · '+ped.length+' ficha(s) a abrir pelo cronograma</div>'
+        + ped.slice(0, 6).map(function(x){
+            var t = x.tarefa;
+            return '<div class="dash-li"><span class="ic info"><svg class="ti-i" data-i="check"></svg></span>'
+              + '<span class="tx"><b>'+escapeHtml(nomeTipoFvs(x.tiposFvs)+" · "+pisoNome(x.nivel))+'</b><small>'+escapeHtml(x.nomeEtapa+" — "+t.nome+(t.ini>todayISO() ? " · começa "+fmtDateBR(t.ini).slice(0,5) : " · até "+fmtDateBR(t.fim).slice(0,5)))+'</small></span>'
+              + '<button type="button" class="btn small primary fvs-semana-acao" data-nova-fvs="'+escapeHtml(x.tiposFvs.join(",")+"|"+x.nivel)+'">Abrir FVS</button></div>';
+          }).join("")
+        + (ped.length>6 ? '<div class="cp-dica" style="padding:4px 2px">e mais '+(ped.length-6)+'.</div>' : '');
     }
     var agora = new Date();
     var dataTxt = agora.toLocaleDateString("pt-BR", { weekday:"long", day:"2-digit", month:"long" });
@@ -1268,9 +1392,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '</div>'
       + hojeHtml
       + kpisHtml
-      + '<div class="dash-card dash-card-avanco"><div class="dash-card-h"><h3>Avanço da estrutura</h3>'
-        + '<button type="button" class="mais" data-goto-view="pavimento">FVS por pavimento →</button></div>'
-        + corteHtml(avancoEstrutura()) + '</div>'
+      + cartaoAvancoHtml()
       + metasHtml
       + '<div class="dash-grid">'
         + cartao("Não conformidades abertas há mais tempo", "nc", "Todas", ncLista, "Nenhuma NC em aberto. 👍")
@@ -1304,6 +1426,24 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     });
     container.querySelectorAll("[data-abrir-fvs]").forEach(function(el){
       el.addEventListener("click", function(){ openModal("fvs", el.getAttribute("data-abrir-fvs")); });
+    });
+    // v1.14: abas do corte por etapa, tabela e "abrir FVS" vindos do cronograma
+    container.querySelectorAll("[data-etapa-aba]").forEach(function(el){
+      el.addEventListener("click", function(){
+        etapaAba = el.getAttribute("data-etapa-aba"); etapaModo = "corte";
+        try{ localStorage.setItem("traco-etapa-aba", etapaAba); }catch(e){}
+        renderViewDashboard();
+      });
+    });
+    var bModo = container.querySelector("[data-etapa-modo]");
+    if(bModo) bModo.addEventListener("click", function(){ etapaModo = etapaModo==="quadro" ? "corte" : "quadro"; renderViewDashboard(); });
+    container.querySelectorAll("[data-nova-fvs]").forEach(function(el){
+      el.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        if(somenteLeitura) return; // conta só de visualização: vê o aviso, não abre ficha
+        var p = el.getAttribute("data-nova-fvs").split("|");
+        abrirNovaFvsDoCronograma(p[0].split(","), +p[1]);
+      });
     });
     container.querySelectorAll("[data-hoje-ct]").forEach(function(el){
       el.addEventListener("click", function(){ abrirFichaNf(el.getAttribute("data-hoje-ct")); });
@@ -3318,6 +3458,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       definirProgressoCron(snap.exists ? snap.data() : null);
       render();
     }, function(err){ console.warn("cronogramas/progresso:", err && err.code); });
+    // v1.14: etapa/pavimento escolhidos à mão para atividades não reconhecidas
+    if(unsubCronEtapas) unsubCronEtapas();
+    unsubCronEtapas = cronCol.doc("etapas").onSnapshot(function(snap){
+      definirEtapasManuais(snap.exists ? snap.data() : null);
+      render();
+    }, function(err){ console.warn("cronogramas/etapas:", err && err.code); });
   }
   function showApp(user){
     document.getElementById("auth-screen").hidden = true;
@@ -3345,6 +3491,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubAco){ unsubAco(); unsubAco=null; }
     if(unsubCron){ unsubCron(); unsubCron=null; }
     if(unsubCronProg){ unsubCronProg(); unsubCronProg=null; }
+    if(unsubCronEtapas){ unsubCronEtapas(); unsubCronEtapas=null; }
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -3663,6 +3810,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(base) data = JSON.parse(JSON.stringify(base));
     else if(opts.restaurar && rasc && rasc.data) data = JSON.parse(JSON.stringify(rasc.data));
     else data = type==="fvs" ? blankFvs(tipoKey) : blankRast();
+    // v1.14: ficha nova aberta pelo cronograma já vem com o pavimento
+    if(!base && !opts.restaurar && type==="fvs" && opts.pavimento) data.pavimentos = [opts.pavimento];
     if(!data.checklist) data.checklist={};
     if(!data.elementos) data.elementos={};
     if(!data.linhas) data.linhas=[blankLinha(1)];
