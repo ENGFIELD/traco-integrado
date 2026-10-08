@@ -1,8 +1,9 @@
-/* Peças concretadas da rastreabilidade (v1.17): o mesmo elemento (ex.: "V1c")
- * não pode aparecer duas vezes na ficha — nem na mesma betonada, nem em outra.
- * O campo é texto livre por betonada: "V1c, V2a; P5 / P6". Separadores: vírgula,
- * ponto e vírgula, barra, quebra de linha e " e ". Comparação sem diferenciar
- * maiúsculas e espaços ("v1C" = "V1c", "Laje L11" = "laje  l11").
+/* Peças concretadas da rastreabilidade (v1.21): o mesmo elemento (ex.: "V5b")
+ * não pode aparecer duas vezes NA MESMA BETONADA (mesma linha / mesma NF).
+ * Em betonadas diferentes pode — a mesma peça pode receber concreto de mais
+ * de um caminhão. O campo é texto livre por betonada: "V5b, L5; P6 / P7".
+ * Separadores: vírgula, ponto e vírgula, barra, quebra de linha e " e ".
+ * Comparação sem diferenciar maiúsculas e espaços ("v5B" = "V5b").
  * Sem dependências: roda no navegador e no Node (tests/pecas.test.mjs). */
 
 export function separarPecas(txt) {
@@ -10,34 +11,34 @@ export function separarPecas(txt) {
 }
 export const chavePeca = (p) => String(p).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, "");
 
+/** Peças repetidas dentro de um texto (uma linha): ["V5b"] */
+export function repetidasNoTexto(txt) {
+  const primeira = new Map(), rep = [];
+  separarPecas(txt).forEach((p) => {
+    const k = chavePeca(p);
+    if (!primeira.has(k)) primeira.set(k, p);
+    else if (!rep.includes(primeira.get(k))) rep.push(primeira.get(k));
+  });
+  return rep;
+}
+
 /**
- * Tira do texto da betonada `idx` as peças que já existem (antes nela mesma ou
- * em outra betonada). Devolve { texto, repetidas: [{ peca, seq }] } — seq é a
- * BT onde a peça já estava.
+ * Tira do texto da betonada `idx` as peças repetidas NELA MESMA (fica a 1ª).
+ * Devolve { texto, repetidas: [{ peca, seq }] }.
  */
 export function semRepetidas(linhas, idx) {
-  const ja = new Map(); // chave → seq da BT onde apareceu
-  linhas.forEach((l, i) => {
-    if (i === idx) return;
-    separarPecas(l.pecas).forEach((p) => { const k = chavePeca(p); if (!ja.has(k)) ja.set(k, l.seq || i + 1); });
-  });
-  const proprias = new Set(), ficam = [], repetidas = [];
-  separarPecas((linhas[idx] || {}).pecas).forEach((p) => {
+  const l = linhas[idx] || {}, vistos = new Set(), ficam = [], repetidas = [];
+  separarPecas(l.pecas).forEach((p) => {
     const k = chavePeca(p);
-    if (ja.has(k)) repetidas.push({ peca: p, seq: ja.get(k) });
-    else if (proprias.has(k)) repetidas.push({ peca: p, seq: (linhas[idx] || {}).seq || idx + 1 });
-    else { proprias.add(k); ficam.push(p); }
+    if (vistos.has(k)) repetidas.push({ peca: p, seq: l.seq || idx + 1 });
+    else { vistos.add(k); ficam.push(p); }
   });
   return { texto: ficam.join(", "), repetidas };
 }
 
-/** Todas as repetições da ficha: [{ peca, seqs: [..] }] (vazio = tudo certo) */
+/** Repetições dentro de cada betonada: [{ peca, seq }] (vazio = tudo certo) */
 export function pecasRepetidas(linhas) {
-  const onde = new Map();
-  (linhas || []).forEach((l, i) => separarPecas(l.pecas).forEach((p) => {
-    const k = chavePeca(p);
-    if (!onde.has(k)) onde.set(k, { peca: p, seqs: [] });
-    onde.get(k).seqs.push(l.seq || i + 1);
-  }));
-  return [...onde.values()].filter((x) => x.seqs.length > 1);
+  const out = [];
+  (linhas || []).forEach((l, i) => repetidasNoTexto(l.pecas).forEach((p) => out.push({ peca: p, seq: l.seq || i + 1 })));
+  return out;
 }
