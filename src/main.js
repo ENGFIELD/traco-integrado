@@ -1528,26 +1528,101 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   }
 
   /* ---- painel / dashboard ---- */
-  var filtrosCt = { busca:"", somentePendentes:false };
+  // v1.5: filtros do Controle Tecnológico (situação, período, concreteira,
+  // laboratório) e modo de visualização (agrupado por data ou tabela).
+  // somentePendentes é mantido por compatibilidade (Início → "atrasados").
+  var filtrosCt = { busca:"", somentePendentes:false, situacao:"todos", de:"", ate:"", concreteira:"", laboratorio:"", visao:"grupos" };
   function ctRowsArray(){
     var out = [];
     ctMap.forEach(function(d, id){
       if(id==="_meta" || !d || !d.notaRemessa) return;
-      out.push(d);
+      out.push(Object.assign({ _id:id }, d));
     });
-    out.sort(function(a,b){ return (b.dataConcretagem||"").localeCompare(a.dataConcretagem||""); });
+    out.sort(function(a,b){ return (b.dataConcretagem||"").localeCompare(a.dataConcretagem||"") || String(a.notaRemessa).localeCompare(String(b.notaRemessa)); });
     return out;
   }
+  // número a partir de texto da planilha/site ("32,5" → 32.5); null se não for número
+  function ctNumero(v){
+    if(v==null || String(v).trim()==="") return null;
+    var n = Number(String(v).replace(/\s/g,"").replace(",", "."));
+    return isNaN(n) ? null : n;
+  }
+  // Melhor resultado de 28 dias (28 ou 28') — base da comparação com o fck
+  function ctMelhor28(row){
+    var a = ctNumero(row.r28), b = ctNumero(row.r28b);
+    if(a==null && b==null) return null;
+    return Math.max(a==null ? -Infinity : a, b==null ? -Infinity : b);
+  }
+  function ctMelhor63(row){
+    var a = ctNumero(row.r63), b = ctNumero(row.r63b);
+    if(a==null && b==null) return null;
+    return Math.max(a==null ? -Infinity : a, b==null ? -Infinity : b);
+  }
+  // Abaixo do fck aos 28 dias E não recuperou aos 63 (ou ainda sem 63 dias).
+  // Indicador por resultado individual — a aceitação formal do lote segue o
+  // fck estimado da NBR 12655 (Fase 4.3).
+  function ctAbaixoFck(row){
+    var fck = ctNumero(row.fck), r = ctMelhor28(row);
+    if(fck==null || r==null || r >= fck) return false;
+    var r63 = ctMelhor63(row);
+    return !(r63!=null && r63 >= fck);
+  }
+  // Ficou abaixo aos 28 dias, mas atingiu o fck aos 63
+  function ctRecuperou63(row){
+    var fck = ctNumero(row.fck), r = ctMelhor28(row), r63 = ctMelhor63(row);
+    return fck!=null && r!=null && r < fck && r63!=null && r63 >= fck;
+  }
+  // Algum rompimento previsto para os próximos 7 dias (ainda sem resultado)
+  function ctRomperEmBreve(row){
+    var hoje = todayISO(), lim = ctSomarDias(hoje, 7);
+    return CT_IDADES.some(function(idade){
+      return ctStatusIdade(row, idade)==="aguardando" && row[idade.dataCampo] <= lim;
+    });
+  }
+  function ctAguardando(row){ return CT_IDADES.some(function(i){ return ctStatusIdade(row, i)==="aguardando"; }); }
+  function ctSomarDias(iso, dias){
+    if(!iso) return "";
+    var d = new Date(iso+"T12:00:00"); if(isNaN(d)) return "";
+    d.setDate(d.getDate()+dias);
+    return d.getFullYear()+"-"+ctPad2(d.getMonth()+1)+"-"+ctPad2(d.getDate());
+  }
+  var CT_SITUACOES = [
+    { key:"todos", label:"Todas", teste:function(){ return true; } },
+    { key:"atrasado", label:"Resultado atrasado", teste:ctTemPendencia },
+    { key:"semana", label:"Romper em 7 dias", teste:ctRomperEmBreve },
+    { key:"abaixo", label:"Abaixo do fck", teste:ctAbaixoFck },
+    { key:"recuperou", label:"Atingiu só aos 63d", teste:ctRecuperou63 },
+    { key:"aguardando", label:"Aguardando", teste:ctAguardando },
+    { key:"completo", label:"Completas", teste:function(r){ return !ctTemPendencia(r) && !ctAguardando(r); } }
+  ];
   function ctRowsFiltradas(){
     var termo = (filtrosCt.busca||"").trim().toLowerCase();
+    var sit = CT_SITUACOES.find(function(s){ return s.key===filtrosCt.situacao; }) || CT_SITUACOES[0];
     return ctRowsArray().filter(function(row){
       if(filtrosCt.somentePendentes && !ctTemPendencia(row)) return false;
+      if(!sit.teste(row)) return false;
+      if(filtrosCt.de && (row.dataConcretagem||"") < filtrosCt.de) return false;
+      if(filtrosCt.ate && (row.dataConcretagem||"") > filtrosCt.ate) return false;
+      if(filtrosCt.concreteira && (row.concreteira||"") !== filtrosCt.concreteira) return false;
+      if(filtrosCt.laboratorio && (row.laboratorio||"") !== filtrosCt.laboratorio) return false;
       if(termo){
-        var alvo = (String(row.local||"")+" "+String(row.notaRemessa||"")+" "+String(row.concreteira||"")+" "+String(row.laboratorio||"")).toLowerCase();
+        var alvo = (String(row.local||"")+" "+String(row.notaRemessa||"")+" "+String(row.concreteira||"")+" "+String(row.laboratorio||"")+" "+String(row.observacao||"")).toLowerCase();
         if(alvo.indexOf(termo)===-1) return false;
       }
       return true;
     });
+  }
+  // Rastreabilidades ligadas a uma NF do CT: pela NF nas betonadas (automático),
+  // pelo vínculo manual feito na ficha da NF, e as do mesmo dia (sugestão).
+  function ctLigacoes(row){
+    var porNota = ctRastreabilidadesLigadas(row.notaRemessa).map(function(x){ return x.id; });
+    var manual = (row.rastreabilidadeId && rastMap.has(row.rastreabilidadeId)) ? [row.rastreabilidadeId] : [];
+    var mesmoDia = [];
+    if(row.dataConcretagem){
+      rastMap.forEach(function(r, id){ if(r.data===row.dataConcretagem) mesmoDia.push(id); });
+    }
+    var confirmadas = Array.from(new Set(porNota.concat(manual)));
+    return { confirmadas:confirmadas, mesmoDia:mesmoDia.filter(function(id){ return confirmadas.indexOf(id)===-1; }), porNota:porNota };
   }
   function ctCelulaResultado(row, campo, idade){
     var v = row[campo];
@@ -1562,11 +1637,11 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     return '<td'+(align?' style="text-align:'+align+';"':'')+'>'+escapeHtml(v==null||v===""?"—":v)+'</td>';
   }
   function ctCelulaRastreabilidade(row){
-    var ligadas = ctRastreabilidadesLigadas(row.notaRemessa);
+    var ligadas = ctLigacoes(row).confirmadas;
     if(!ligadas.length) return '<td><span class="ct-sem-vinculo">sem vínculo</span></td>';
-    var principal = ligadas[0];
+    var principal = ligadas[0], r = rastMap.get(principal);
     var extra = ligadas.length>1 ? ' <span class="ct-sem-vinculo">+'+(ligadas.length-1)+'</span>' : '';
-    return '<td><button type="button" class="ct-rast-link" data-open-rast="'+escapeHtml(principal.id)+'">Rastr. '+escapeHtml(principal.numero)+'</button>'+extra+'</td>';
+    return '<td><button type="button" class="ct-rast-link" data-open-rast="'+escapeHtml(principal)+'">Rastr. '+escapeHtml(r ? fmtDateBR(r.data) : "")+'</button>'+extra+'</td>';
   }
   function ctUltimoImportInfo(){
     var meta = ctMap.get("_meta");
@@ -1582,10 +1657,15 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(!el) return;
     var rows = ctRowsArray();
     if(!rows.length){
-      el.innerHTML = '<div class="empty-state"><div class="big">Nenhum traço importado ainda</div><p>Envie a planilha de Controle Tecnológico do Concreto acima para preencher este painel automaticamente.</p></div>';
+      el.innerHTML = '<div class="empty-state"><div class="big">Nenhuma nota cadastrada ainda</div><p>Importe a planilha do laboratório ou toque em "Lançar nota / resultado".</p></div>';
       return;
     }
     var visiveis = ctRowsFiltradas();
+    if(filtrosCt.visao!=="tabela"){
+      if(!visiveis.length){ el.innerHTML = '<div class="empty-state"><div class="big">Nenhuma nota com esses filtros</div><p>Ajuste a situação, o período ou a busca.</p></div>'; return; }
+      renderCtGrupos(el, visiveis);
+      return;
+    }
     el.innerHTML = '<div class="lines-wrap ct-wrap"><table class="ct-table"><thead>'
       + '<tr>'
         + '<th rowspan="2">Local</th>'
@@ -1618,7 +1698,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       + '</tr>'
     + '</thead><tbody>'
     + (visiveis.length ? visiveis.map(function(row){
-        return '<tr>'
+        return '<tr class="ct-tr" data-ct-abrir="'+escapeHtml(row._id)+'" title="Abrir a ficha desta NF">'
           + ctCelulaTexto(row.local, "left")
           + ctCelulaTexto(row.volume)
           + ctCelulaTexto(row.fck)
@@ -1644,50 +1724,57 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       }).join("") : '<tr><td colspan="25" style="text-align:center;color:var(--text-muted);padding:20px;">Nenhum traço encontrado com os filtros atuais.</td></tr>')
     + '</tbody></table></div>';
     el.querySelectorAll("[data-open-rast]").forEach(function(btn){
-      btn.addEventListener("click", function(){ openModal("rast", btn.getAttribute("data-open-rast")); });
+      btn.addEventListener("click", function(e){ e.stopPropagation(); openModal("rast", btn.getAttribute("data-open-rast")); });
+    });
+    el.querySelectorAll("tr[data-ct-abrir]").forEach(function(tr){
+      tr.addEventListener("click", function(){ abrirFichaNf(tr.getAttribute("data-ct-abrir")); });
     });
   }
   function renderViewCt(){
     var container = document.getElementById("view-ct");
     var rows = ctRowsArray();
-    var pendentesTotal = rows.filter(ctTemPendencia).length;
+    // v1.5: o atalho "resultados atrasados" do Início chega aqui como filtro de situação
+    if(filtrosCt.somentePendentes){ filtrosCt.somentePendentes = false; filtrosCt.situacao = "atrasado"; }
+    var cont = {}; CT_SITUACOES.forEach(function(s){ cont[s.key] = rows.filter(s.teste).length; });
+    var unicos = function(campo){ return Array.from(new Set(rows.map(function(r){ return r[campo]||""; }).filter(Boolean))).sort(); };
 
-    var uploadHtml = '<div class="ct-upload-bar" id="ct-upload-bar">'
-      + '<div class="info"><div class="t">Importar planilha de Controle Tecnológico (.xlsx)</div>'
-        + '<div class="s">'+ctUltimoImportInfo()+'</div>'
-        + '<div class="ct-import-msg" id="ct-import-msg"></div>'
-      + '</div>'
-      + '<button class="btn primary" id="ct-btn-importar" type="button">Importar planilha…</button>'
+    var kpis = '<div class="dash-kpis">'
+      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="atrasado"><div class="n">'+cont.atrasado+'</div><div class="l">Resultados atrasados</div><div class="d">data de rompimento já passou</div></button>'
+      + '<button type="button" class="dash-kpi-card tone-pendente" data-ct-sit="semana"><div class="n">'+cont.semana+'</div><div class="l">Romper nos próximos 7 dias</div><div class="d">programe o laboratório</div></button>'
+      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="abaixo"><div class="n">'+cont.abaixo+'</div><div class="l">Abaixo do fck</div><div class="d">aos 28d e sem recuperar aos 63d · '+cont.recuperou+' atingiram só aos 63d</div></button>'
+      + '<button type="button" class="dash-kpi-card tone-ok" data-ct-sit="completo"><div class="n">'+cont.completo+'</div><div class="l">Completas</div><div class="d">de '+rows.length+' nota(s)</div></button>'
+    + '</div>';
+
+    var acoes = '<div class="ct-acoes">'
+      + '<button class="btn primary" id="ct-btn-nova" type="button"><svg class="ti-i" data-i="plus"></svg>Lançar nota / resultado</button>'
+      + '<button class="btn" id="ct-btn-importar" type="button"><svg class="ti-i" data-i="file"></svg>Importar planilha…</button>'
       + '<input type="file" id="ct-file-input" accept=".xlsx" hidden>'
+      + '<div class="ct-acoes-info"><span>'+ctUltimoImportInfo()+'</span><div class="ct-import-msg" id="ct-import-msg"></div></div>'
     + '</div>';
 
-    var resumoHtml = '<div class="pav-resumo-grid">'
-      + '<div class="pav-resumo-card"><div class="n">'+rows.length+'</div><div class="l">Traços de concreto</div></div>'
-      + '<div class="pav-resumo-card tone-nc"><div class="n">'+pendentesTotal+'</div><div class="l">Com resultado pendente</div></div>'
-      + '<div class="pav-resumo-card tone-ok"><div class="n">'+(rows.length-pendentesTotal)+'</div><div class="l">Sem pendências</div></div>'
-    + '</div>';
-
-    var filtrosHtml = '<div class="ct-filtros">'
-      + '<div class="search" style="max-width:320px;">'
-        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
-        + '<input type="text" id="ct-f-busca" placeholder="Buscar por local, nota, concreteira…" value="'+escapeHtml(filtrosCt.busca)+'">'
+    var opt = function(lista, sel, vazio){ return '<option value="">'+vazio+'</option>'+lista.map(function(v){ return '<option value="'+escapeHtml(v)+'"'+(v===sel?" selected":"")+'>'+escapeHtml(v)+'</option>'; }).join(""); };
+    var filtros = '<div class="ct-filtros">'
+      + '<div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+        + '<input type="text" id="ct-f-busca" placeholder="Buscar NF, local, peça, observação…" value="'+escapeHtml(filtrosCt.busca)+'"></div>'
+      + '<div class="ct-periodo"><input type="date" id="ct-f-de" value="'+escapeHtml(filtrosCt.de)+'" aria-label="Concretagem a partir de"><span>até</span><input type="date" id="ct-f-ate" value="'+escapeHtml(filtrosCt.ate)+'" aria-label="Concretagem até"></div>'
+      + '<select id="ct-f-concreteira" aria-label="Concreteira">'+opt(unicos("concreteira"), filtrosCt.concreteira, "Todas as concreteiras")+'</select>'
+      + '<select id="ct-f-laboratorio" aria-label="Laboratório">'+opt(unicos("laboratorio"), filtrosCt.laboratorio, "Todos os laboratórios")+'</select>'
+      + '<div class="ct-visao" role="group" aria-label="Visualização">'
+        + '<button type="button" class="chip" data-ct-visao="grupos" aria-pressed="'+(filtrosCt.visao!=="tabela")+'">Por data</button>'
+        + '<button type="button" class="chip" data-ct-visao="tabela" aria-pressed="'+(filtrosCt.visao==="tabela")+'">Tabela</button>'
       + '</div>'
-      + '<div class="chips" role="group" aria-label="Filtrar por pendência">'
-        + '<button class="chip" id="ct-f-pendentes" aria-pressed="'+(!!filtrosCt.somentePendentes)+'">Somente pendentes</button>'
-      + '</div>'
+    + '</div>'
+    + '<div class="chips" id="ct-f-situacao" role="group" aria-label="Situação">'
+      + CT_SITUACOES.map(function(s){ return '<button type="button" class="chip" data-ct-sit="'+s.key+'" aria-pressed="'+(filtrosCt.situacao===s.key)+'">'+s.label+' <span class="n">'+cont[s.key]+'</span></button>'; }).join("")
     + '</div>';
 
     container.innerHTML =
-      '<div class="pav-header">'
-        + '<button class="btn" id="btn-voltar-ct">← Voltar</button>'
-        + '<h2>Controle Tecnológico do Concreto</h2>'
-        + '<span class="pav-total">'+rows.length+' traço(s)</span>'
-      + '</div>'
-      + '<p class="view-desc">Resultados de ensaio dos corpos de prova de concreto (7/14/28/63 dias), importados da planilha do laboratório e vinculados às rastreabilidades pela Nota de Remessa.</p>'
-      + uploadHtml
-      + resumoHtml
-      + filtrosHtml
+      '<div class="pav-header"><button class="btn" id="btn-voltar-ct">← Voltar</button><h2>Controle tecnológico</h2>'
+        + '<span class="pav-total">'+rows.length+' nota(s) de concreto</span></div>'
+      + '<p class="view-desc">Corpos de prova por nota fiscal (7/14/28/63 dias). Importe a planilha do laboratório ou lance direto aqui; cada nota fica ligada à rastreabilidade da concretagem pela NF e pela data.</p>'
+      + kpis + acoes + filtros
       + '<div id="ct-table-container"></div>';
+    pintarIcones(container);
 
     document.getElementById("btn-voltar-ct").addEventListener("click", hideViewCt);
     var fileInput = document.getElementById("ct-file-input");
@@ -1697,13 +1784,210 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       if(f) ctImportarArquivo(f);
       fileInput.value = "";
     });
+    document.getElementById("ct-btn-nova").addEventListener("click", function(){ abrirFichaNf(null); });
     document.getElementById("ct-f-busca").addEventListener("input", function(e){ filtrosCt.busca = e.target.value; renderCtTable(); });
-    document.getElementById("ct-f-pendentes").addEventListener("click", function(e){
-      filtrosCt.somentePendentes = !filtrosCt.somentePendentes;
-      e.target.setAttribute("aria-pressed", filtrosCt.somentePendentes ? "true":"false");
-      renderCtTable();
+    [["ct-f-de","de"],["ct-f-ate","ate"],["ct-f-concreteira","concreteira"],["ct-f-laboratorio","laboratorio"]].forEach(function(p){
+      document.getElementById(p[0]).addEventListener("change", function(e){ filtrosCt[p[1]] = e.target.value; renderCtTable(); });
+    });
+    container.querySelectorAll("[data-ct-sit]").forEach(function(b){
+      b.addEventListener("click", function(){ filtrosCt.situacao = b.getAttribute("data-ct-sit"); renderViewCt(); });
+    });
+    container.querySelectorAll("[data-ct-visao]").forEach(function(b){
+      b.addEventListener("click", function(){ filtrosCt.visao = b.getAttribute("data-ct-visao"); renderViewCt(); });
     });
     renderCtTable();
+  }
+
+  /* ---- v1.5: na ficha de rastreabilidade, o CT de cada betonada (pela NF) ---- */
+  function ctPorNota(nota){
+    var alvo = ctNormalizaNota(nota), achado = null;
+    if(!alvo) return null;
+    ctMap.forEach(function(r, id){ if(!achado && id!=="_meta" && r && ctNormalizaNota(r.notaRemessa)===alvo) achado = Object.assign({ _id:id }, r); });
+    return achado;
+  }
+  function ctSecaoRastHtml(d, rastId){
+    var linhas = (d.linhas||[]);
+    if(!linhas.some(function(l){ return String(l.notaFiscal||"").trim(); })) return "";
+    var itens = linhas.map(function(l, idx){
+      if(!String(l.notaFiscal||"").trim()) return "";
+      var c = ctPorNota(l.notaFiscal);
+      if(!c && rastId){ ctMap.forEach(function(r, id){ if(!c && r && r.rastreabilidadeId===rastId && ctNormalizaNota(r.notaRemessa)===ctNormalizaNota(l.notaFiscal)) c = Object.assign({ _id:id }, r); }); }
+      var cab = '<b>BT '+escapeHtml(l.seq)+'</b> · NF '+escapeHtml(l.notaFiscal);
+      if(!c) return '<div class="ct-bt"><div class="ct-bt-id">'+cab+'<small>sem resultado no controle tecnológico</small></div>'
+        + '<button type="button" class="btn small" data-ct-lancar="'+idx+'">Lançar no controle tecnológico</button></div>';
+      return '<div class="ct-bt" data-ct-nf="'+escapeHtml(c._id)+'" title="Abrir a ficha desta NF"><div class="ct-bt-id">'+cab
+        + (ctAbaixoFck(c) ? ' <span class="ct-selo abaixo">abaixo do fck</span>' : (ctTemPendencia(c) ? ' <span class="ct-selo atraso">resultado atrasado</span>' : ''))
+        + '<small>fck '+escapeHtml(c.fck==null?"—":c.fck)+' MPa</small></div>'
+        + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(c, i); }).join("")+'</div></div>';
+    }).join("");
+    return '<fieldset><legend>Controle tecnológico das notas <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— resultados dos CPs de cada BT, pela nota fiscal</span></legend>'
+      + '<div class="ct-bts">'+itens+'</div></fieldset>';
+  }
+
+  /* ---- v1.5: visão agrupada por data de concretagem ---- */
+  function ctChipIdade(row, idade){
+    var st = ctStatusIdade(row, idade);
+    var vals = idade.campos.map(function(c){ return row[c]; }).filter(ctValorPreenchido);
+    var txt = vals.length ? vals.map(function(v){ var n = ctNumero(v); return n!=null ? String(n).replace(".", ",") : String(v); }).join(" / ")
+      : (row[idade.dataCampo] ? fmtDateBR(row[idade.dataCampo]).slice(0,5) : "—");
+    var tom = st==="concluido" ? "ok" : (st==="pendente" ? "atraso" : (st==="aguardando" ? "espera" : "nada"));
+    if(idade.key==="28" && ctAbaixoFck(row)) tom = "abaixo";
+    if(idade.key==="28" && ctRecuperou63(row)) tom = "recuperou";
+    return '<span class="ct-idade '+tom+'" title="'+idade.key+' dias: '+escapeHtml(st)+'"><i>'+idade.key+'d</i><b>'+escapeHtml(txt)+'</b></span>';
+  }
+  function renderCtGrupos(el, visiveis){
+    var grupos = [], porData = {};
+    visiveis.forEach(function(r){
+      var d = r.dataConcretagem || "";
+      if(!porData[d]){ porData[d] = { data:d, linhas:[] }; grupos.push(porData[d]); }
+      porData[d].linhas.push(r);
+    });
+    el.innerHTML = grupos.map(function(g){
+      var vol = g.linhas.reduce(function(s,r){ return s + (ctNumero(r.volume)||0); }, 0);
+      var concreteiras = Array.from(new Set(g.linhas.map(function(r){ return r.concreteira; }).filter(Boolean))).join(", ");
+      var rasts = [];
+      rastMap.forEach(function(r, id){ if(g.data && r.data===g.data) rasts.push({ id:id, r:r }); });
+      var dia = g.data ? new Date(g.data+"T12:00:00").toLocaleDateString("pt-BR", { weekday:"short", day:"2-digit", month:"2-digit", year:"numeric" }) : "Sem data de concretagem";
+      return '<div class="ct-grupo">'
+        + '<div class="ct-grupo-h"><div><b>'+escapeHtml(dia)+'</b><small>'+g.linhas.length+' nota(s)'+(vol? ' · '+String(Math.round(vol*10)/10).replace(".", ",")+' m³' : '')+(concreteiras? ' · '+escapeHtml(concreteiras) : '')+'</small></div>'
+          + '<div class="ct-grupo-rast">'+(rasts.length
+              ? rasts.map(function(x){ return '<button type="button" class="ct-rast-link" data-open-rast="'+escapeHtml(x.id)+'"><svg class="ti-i" data-i="truck"></svg>Rastreabilidade · '+escapeHtml(x.r.blocoPav||(x.r.pavimentos||[])[0]||"abrir")+'</button>'; }).join("")
+              : '<span class="ct-sem-vinculo">sem rastreabilidade neste dia</span>')+'</div></div>'
+        + g.linhas.map(function(r){
+            var lig = ctLigacoes(r);
+            var selo = lig.confirmadas.length ? '<span class="ct-selo ok" title="NF encontrada numa rastreabilidade">NF ✓</span>'
+              : (lig.mesmoDia.length ? '<span class="ct-selo meio" title="Há rastreabilidade no mesmo dia, mas sem esta NF">NF ?</span>' : '<span class="ct-selo nada" title="Nenhuma rastreabilidade com esta NF">sem vínculo</span>');
+            return '<div class="ct-linha" data-ct-abrir="'+escapeHtml(r._id)+'">'
+              + '<div class="ct-linha-id"><b>NF '+escapeHtml(r.notaRemessa)+'</b> '+selo+'<small>'+escapeHtml(r.local||"(sem local)")+'</small>'
+                + '<small class="ct-linha-meta">fck '+escapeHtml(r.fck==null?"—":r.fck)+' · slump '+escapeHtml(r.slump==null?"—":r.slump)+(r.volume!=null? ' · '+escapeHtml(r.volume)+' m³' : '')+(r.origem==="site"?' · lançada no site':'')+'</small></div>'
+              + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(r, i); }).join("")+'</div>'
+            + '</div>';
+          }).join("")
+      + '</div>';
+    }).join("");
+    pintarIcones(el);
+    el.querySelectorAll("[data-open-rast]").forEach(function(btn){
+      btn.addEventListener("click", function(e){ e.stopPropagation(); openModal("rast", btn.getAttribute("data-open-rast")); });
+    });
+    el.querySelectorAll("[data-ct-abrir]").forEach(function(div){
+      div.addEventListener("click", function(){ abrirFichaNf(div.getAttribute("data-ct-abrir")); });
+    });
+  }
+
+  /* ---- v1.5: ficha da NF — lançar/editar pelo site e ligar à rastreabilidade ---- */
+  var CT_CAMPOS_FICHA = [
+    ["notaRemessa","Nota fiscal (remessa)","text"], ["dataConcretagem","Data da concretagem","date"],
+    ["local","Local / peças","text"], ["volume","Volume (m³)","num"], ["fck","fck (MPa)","num"], ["slump","Slump (cm)","num"],
+    ["numCps","Nº de CPs","num"], ["concreteira","Concreteira","text"], ["laboratorio","Laboratório","text"]
+  ];
+  var CT_CAMPOS_RESULT = [["r3","3 dias"],["r7","7 dias"],["r7b","7' dias"],["r14","14 dias"],["r14b","14' dias"],["r28","28 dias"],["r28b","28' dias"],["r63","63 dias"],["r63b","63' dias"]];
+  // padrao: dados para pré-preencher uma nota NOVA (ex.: vindos da betonada)
+  function abrirFichaNf(id, padrao){
+    var atual = id ? ctMap.get(id) : null;
+    var d = Object.assign({}, atual || Object.assign({ dataConcretagem: todayISO() }, padrao||{}));
+    var novo = !atual;
+    var ov = document.createElement("div");
+    ov.className = "overlay ct-ficha-ov";
+    var lig = novo ? { confirmadas:[], mesmoDia:[] } : ctLigacoes(Object.assign({ _id:id }, d));
+    var listaRast = function(ids, rotulo){
+      if(!ids.length) return "";
+      return '<div class="ct-lig"><span>'+rotulo+'</span>'+ids.map(function(rid){
+        var r = rastMap.get(rid);
+        return '<button type="button" class="ct-rast-link" data-ct-rast="'+escapeHtml(rid)+'"><svg class="ti-i" data-i="truck"></svg>'+escapeHtml(rastRotulo(r))+'</button>';
+      }).join("")+'</div>';
+    };
+    var opcoesVinculo = [];
+    rastMap.forEach(function(r, rid){ opcoesVinculo.push({ id:rid, r:r }); });
+    opcoesVinculo.sort(function(a,b){ return (b.r.data||"").localeCompare(a.r.data||""); });
+    var campo = function(c){
+      var v = d[c[0]]; var ro = (c[0]==="notaRemessa" && !novo);
+      return '<div class="field"><label>'+c[1]+'</label><input data-ctf="'+c[0]+'" type="'+(c[2]==="date"?"date":"text")+'"'+(c[2]==="num"?' inputmode="decimal"':'')
+        +' value="'+escapeHtml(v==null?"":String(v).replace(/^(-?\d+)\.(\d+)$/, "$1,$2"))+'"'+(ro?' readonly title="A NF identifica a nota; para corrigir, lance uma nova."':'')+'></div>';
+    };
+    ov.innerHTML = '<div class="modal" role="dialog" aria-modal="true">'
+      + '<div class="modal-head"><h2>'+(novo ? "Nova nota de concreto" : "NF "+escapeHtml(d.notaRemessa))+'</h2><button class="close-x" data-ct-fechar aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-body">'
+        + (novo ? '' : '<fieldset><legend>Rastreabilidade ligada</legend>'
+            + (listaRast(lig.confirmadas, "Esta NF está em:") || '<div class="hint">Esta NF ainda não aparece em nenhuma rastreabilidade.</div>')
+            + listaRast(lig.mesmoDia, "Concretagens do mesmo dia:")
+            + '<div class="field" style="margin-top:10px"><label>Vincular manualmente (quando a NF foi digitada diferente)</label><select data-ctf="rastreabilidadeId"><option value="">— sem vínculo manual —</option>'
+              + opcoesVinculo.map(function(x){ return '<option value="'+escapeHtml(x.id)+'"'+(d.rastreabilidadeId===x.id?" selected":"")+'>'+escapeHtml(rastRotulo(x.r))+'</option>'; }).join("")
+            + '</select></div></fieldset>')
+        + '<fieldset><legend>Dados da nota</legend><div class="grid3">'+CT_CAMPOS_FICHA.map(campo).join("")+'</div></fieldset>'
+        + '<fieldset><legend>Datas de rompimento</legend><div class="grid3">'
+          + CT_IDADES.map(function(i){ return '<div class="field"><label>'+i.key+' dias</label><input type="date" data-ctf="'+i.dataCampo+'" value="'+escapeHtml(d[i.dataCampo]||"")+'"></div>'; }).join("")
+          + '</div><button type="button" class="btn small" data-ct-recalc>Calcular datas a partir da concretagem</button></fieldset>'
+        + '<fieldset><legend>Resultados (MPa)</legend><div class="ct-res-grid">'
+          + CT_CAMPOS_RESULT.map(function(c){ var v=d[c[0]]; return '<div class="field"><label>'+c[1]+'</label><input data-ctf="'+c[0]+'" inputmode="decimal" value="'+escapeHtml(v==null?"":String(v).replace(/^(-?\d+)\.(\d+)$/, "$1,$2"))+'"></div>'; }).join("")
+          + '</div><div class="grid2"><div class="field"><label>CPs conformes</label><input data-ctf="cpsConforme" inputmode="numeric" value="'+escapeHtml(d.cpsConforme==null?"":d.cpsConforme)+'"></div>'
+          + '<div class="field"><label>Observação</label><input data-ctf="observacao" value="'+escapeHtml(d.observacao||"")+'" placeholder="ex.: CONCLUÍDO"></div></div>'
+          + '<div class="ct-aviso-fck" data-ct-aviso hidden></div></fieldset>'
+        + (atual && atual.atualizadoEm ? '<div class="last-updated">Última atualização: '+escapeHtml(atual.atualizadoPor||"")+' às '+fmtDateTimeBR(atual.atualizadoEm)+'</div>' : '')
+      + '</div>'
+      + '<div class="modal-foot"><div></div><div style="display:flex;gap:10px;"><button class="btn" data-ct-fechar>Cancelar</button><button class="btn primary" data-ct-salvar>Salvar</button></div></div>'
+    + '</div>';
+    document.body.appendChild(ov);
+    pintarIcones(ov);
+    document.body.style.overflow = "hidden";
+    var ler = function(c){ var el = ov.querySelector('[data-ctf="'+c+'"]'); return el ? el.value.trim() : undefined; };
+    var atualizarAviso = function(){
+      var tmp = { fck: ler("fck"), r28: ler("r28"), r28b: ler("r28b") };
+      var av = ov.querySelector("[data-ct-aviso]");
+      tmp.r63 = ler("r63"); tmp.r63b = ler("r63b");
+      if(ctAbaixoFck(tmp)){ av.hidden = false; av.className = "ct-aviso-fck"; av.textContent = "⚠ Resultado de 28 dias ("+String(ctMelhor28(tmp)).replace(".", ",")+" MPa) abaixo do fck ("+tmp.fck+" MPa). Registre uma não conformidade e avise o engenheiro."; }
+      else if(ctRecuperou63(tmp)){ av.hidden = false; av.className = "ct-aviso-fck leve"; av.textContent = "Abaixo do fck aos 28 dias, mas atingiu aos 63 dias ("+String(ctMelhor63(tmp)).replace(".", ",")+" MPa)."; }
+      else av.hidden = true;
+    };
+    ov.addEventListener("input", atualizarAviso); atualizarAviso();
+    var sujo = false; ov.addEventListener("input", function(){ sujo = true; });
+    var fechar = function(){ if(sujo && !confirm("Descartar as alterações desta nota?")) return; ov.remove(); document.body.style.overflow = ""; document.removeEventListener("keydown", esc); };
+    var esc = function(e){ if(e.key==="Escape") fechar(); };
+    document.addEventListener("keydown", esc);
+    ov.addEventListener("click", function(e){
+      if(e.target===ov || e.target.closest("[data-ct-fechar]")) { fechar(); return; }
+      var rb = e.target.closest("[data-ct-rast]");
+      if(rb){ var rid = rb.getAttribute("data-ct-rast"); sujo = false; fechar(); openModal("rast", rid); return; }
+      if(e.target.closest("[data-ct-recalc]")){
+        var base = ler("dataConcretagem");
+        if(!base){ alert("Preencha a data da concretagem primeiro."); return; }
+        CT_IDADES.forEach(function(i){ ov.querySelector('[data-ctf="'+i.dataCampo+'"]').value = ctSomarDias(base, parseInt(i.key,10)); });
+        sujo = true; return;
+      }
+      var sb = e.target.closest("[data-ct-salvar]");
+      if(sb) salvarFichaNf(ov, id, novo, d, ler, sb, function(){ sujo = false; fechar(); });
+    });
+  }
+  async function salvarFichaNf(ov, id, novo, d, ler, botao, aoTerminar){
+    var nota = ler("notaRemessa");
+    if(novo){
+      if(!nota){ alert("Informe a nota fiscal."); return; }
+      id = "nf_"+safeName(nota);
+      if(ctMap.has(id)){ alert("A NF "+nota+" já está cadastrada. Ela será aberta para edição."); aoTerminar(); abrirFichaNf(id); return; }
+      // Datas de rompimento vazias: calcula sozinho a partir da concretagem.
+      var base = ler("dataConcretagem");
+      CT_IDADES.forEach(function(i){ var el = ov.querySelector('[data-ctf="'+i.dataCampo+'"]'); if(base && !el.value) el.value = ctSomarDias(base, parseInt(i.key,10)); });
+    }
+    var dados = {};
+    CT_CAMPOS_FICHA.forEach(function(c){ var v = ler(c[0]); dados[c[0]] = c[2]==="num" ? ctNumero(v) : (v||""); });
+    CT_IDADES.forEach(function(i){ dados[i.dataCampo] = ler(i.dataCampo) || ""; });
+    CT_CAMPOS_RESULT.forEach(function(c){ var v = ler(c[0]); var n = ctNumero(v); dados[c[0]] = v==="" ? null : (n!=null ? n : v); });
+    dados.cpsConforme = ctNumero(ler("cpsConforme"));
+    dados.observacao = ler("observacao") || "";
+    if(!novo) dados.rastreabilidadeId = ler("rastreabilidadeId") || null;
+    dados.notaRemessa = novo ? nota : d.notaRemessa;
+    dados.atualizadoEm = nowISO(); dados.atualizadoPor = currentUserEmail||""; dados.editadoNoSite = true;
+    if(novo){ dados.criadoEm = nowISO(); dados.origem = "site"; }
+    botao.disabled = true; botao.textContent = "Salvando…";
+    try{
+      var envio = ctCol.doc(id).set(dados, { merge:true });
+      var r = await Promise.race([envio.then(function(){ return "ok"; }), new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })]);
+      if(r==="pendente") alert("Sem conexão no momento — a nota será enviada automaticamente quando o sinal voltar. Mantenha o app aberto.");
+      aoTerminar();
+    }catch(ex){
+      console.error(ex);
+      alert("Não foi possível salvar a nota: "+(ex && ex.message ? ex.message : "erro desconhecido"));
+      botao.disabled = false; botao.textContent = "Salvar";
+    }
   }
   function showViewCt(){ switchView("ct"); }
   function hideViewCt(){ switchView("dashboard"); }
@@ -2283,6 +2567,11 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       ctMap = new Map();
       snap.docs.forEach(function(d){ ctMap.set(d.id, d.data()); });
       render();
+      // v1.5: rastreabilidade aberta mostra os resultados de CT das suas NFs —
+      // atualiza quando chega resultado novo (sem atrapalhar quem está digitando).
+      var ae = document.activeElement;
+      if(draft && draft.type==="rast" && !document.getElementById("overlay").hidden
+        && !(ae && document.getElementById("modal").contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) renderModal();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
     if(unsubPlantas) unsubPlantas();
     unsubPlantas = plantasCol.onSnapshot(function(snap){
@@ -2933,6 +3222,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + '</tr></thead><tbody id="linhas-body">'+linhasHtml+'</tbody></table></div>'
         + '<button type="button" class="btn ghost" id="add-line" style="margin-top:10px;">+ Adicionar betonada</button>'
         + '</fieldset>'
+      + ctSecaoRastHtml(d, id)
       + '<fieldset><legend>Mapeamento da concretagem <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— demarque na planta onde cada BT foi lançado</span></legend>'
         + mapeamentoFieldHtml(d)
         + '</fieldset>'
@@ -4981,7 +5271,19 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
     document.getElementById("btn-nav-nc").addEventListener("click", function(){ switchView("nc"); });
     document.getElementById("overlay").addEventListener("click", function(e){ if(e.target.id==="overlay") tentarFecharModal(); });
-    document.addEventListener("keydown", function(e){ if(e.key==="Escape" && !document.getElementById("overlay").hidden) tentarFecharModal(); });
+    document.addEventListener("keydown", function(e){ if(e.key==="Escape" && !document.getElementById("overlay").hidden && !document.querySelector(".ct-ficha-ov")) tentarFecharModal(); });
+    // v1.5: na rastreabilidade, abrir/lançar o controle tecnológico de cada NF
+    document.getElementById("modal").addEventListener("click", function(e){
+      var a = e.target.closest("[data-ct-nf]");
+      if(a){ abrirFichaNf(a.getAttribute("data-ct-nf")); return; }
+      var l = e.target.closest("[data-ct-lancar]");
+      if(l && draft){
+        var linha = (draft.data.linhas||[])[+l.getAttribute("data-ct-lancar")] || {};
+        abrirFichaNf(null, { notaRemessa: linha.notaFiscal||"", dataConcretagem: draft.data.data||todayISO(),
+          local: [draft.data.blocoPav, linha.pecas].filter(Boolean).join(" — "), volume: ctNumero(linha.volBetoneira),
+          slump: ctNumero(linha.slump), fck: ctNumero(draft.data.fckSolicitado), numCps: ctNumero(linha.nCPs), concreteira: linha.fornecedor||"" });
+      }
+    });
     // Guarda o rascunho no aparelho enquanto a pessoa digita (meio segundo
     // depois da última tecla), não só quando a tela é redesenhada.
     var timerRascunho = null;
