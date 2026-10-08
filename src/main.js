@@ -1263,7 +1263,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       '<div class="dash-header">'
         + '<div class="dash-data">'+escapeHtml(dataTxt)+'</div>'
         + '<h2>'+saud+(primeiroNome?", "+escapeHtml(primeiroNome):"")+'</h2>'
-        + '<button type="button" class="btn small dash-relatorio" data-relatorio-semana title="Resumo da semana em uma página A4 (imprimir ou salvar em PDF)"><svg class="ti-i" data-i="file"></svg>Relatório da semana</button>'
+        + '<button type="button" class="btn small dash-relatorio" data-relatorio-semana title="Resumo da semana em uma página A4 (imprimir ou salvar em PDF)"><svg class="ti-i" data-i="file"></svg>Resumo da semana</button>'
         + '<p class="dash-sub">'+escapeHtml(DEFAULT_OBRA)+'</p>'
       + '</div>'
       + hojeHtml
