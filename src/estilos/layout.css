@@ -694,3 +694,6 @@ body.somente-leitura [data-assinar], body.somente-leitura [data-cad-assin], body
 
 /* v1.21: elemento repetido na mesma betonada */
 input.campo-dup { border-color: var(--bad) !important; background: var(--bad-soft) !important; }
+
+/* v1.22: resultado lançado, mas abaixo do fck (7 e 14 dias) — sem verde */
+.ct-idade.resultado { background: var(--surface-2); border-color: transparent; } .ct-idade.resultado b { color: var(--text); }

@@ -2471,6 +2471,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var v = row[campo];
     var texto = (v==null || v==="") ? "—" : String(v);
     var tone = idade ? ctStatusIdade(row, idade) : "";
+    if(tone==="concluido" && !ctAtingiuFck(row, idade)) tone = "resultado"; // v1.22: verde só se atingiu o fck
     return '<td class="ct-cell'+(tone?" tone-"+tone:"")+'">'+escapeHtml(texto)+'</td>';
   }
   function ctCelulaData(iso){
@@ -2846,12 +2847,20 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
 
   /* ---- v1.5: visão agrupada por data de concretagem ---- */
+  // v1.22: verde só quando o resultado atingiu o fck especificado (igual ou acima)
+  function ctAtingiuFck(row, idade){
+    var fck = ctNumero(row.fck);
+    if(fck==null) return false;
+    var melhor = null;
+    idade.campos.forEach(function(c){ var n = ctNumero(row[c]); if(n!=null && (melhor==null || n>melhor)) melhor = n; });
+    return melhor!=null && melhor >= fck;
+  }
   function ctChipIdade(row, idade){
     var st = ctStatusIdade(row, idade);
     var vals = idade.campos.map(function(c){ return row[c]; }).filter(ctValorPreenchido);
     var txt = vals.length ? vals.map(function(v){ var n = ctNumero(v); return n!=null ? String(n).replace(".", ",") : String(v); }).join(" / ")
       : (row[idade.dataCampo] ? fmtDateBR(row[idade.dataCampo]).slice(0,5) : "—");
-    var tom = st==="concluido" ? "ok" : (st==="pendente" ? "atraso" : (st==="aguardando" ? "espera" : "nada"));
+    var tom = st==="concluido" ? (ctAtingiuFck(row, idade) ? "ok" : "resultado") : (st==="pendente" ? "atraso" : (st==="aguardando" ? "espera" : "nada"));
     // v1.16: vermelho na idade (28 ou 63) que ficou abaixo do fck; amarelo se já justificada
     var sitC = ctSituacao(row);
     if(sitC!=="anterior" && ctAbaixoEm(row).indexOf(idade.key)!==-1) tom = sitC==="abaixo" ? "abaixo" : "recuperou";
