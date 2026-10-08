@@ -34,6 +34,20 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      # v1.28: teste de ponta a ponta — o app de verdade num navegador, ligado a
+      # um banco de TESTE (emuladores), entrando como cada perfil. Nunca toca no
+      # banco real. Ver tests/e2e/roteiro.mjs.
+      - name: Preparar teste de ponta a ponta
+        run: |
+          cd scripts && npm ci --omit=dev && cd ..
+          npx playwright install --with-deps chromium
+      - name: Cache do emulador
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: emuladores-firebase-13
+      - name: Teste de ponta a ponta (perfis, gravação, lixeira, sincronização)
+        run: npx --yes firebase-tools@13 emulators:exec --config firebase.e2e.json --only auth,firestore,hosting --project traco-integrado-sig "node tests/e2e/roteiro.mjs"
       - name: Link de teste (só em pull request)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: FirebaseExtended/action-hosting-deploy@v0

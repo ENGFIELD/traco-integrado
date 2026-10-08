@@ -9,6 +9,8 @@ import "./estilos/app.css";
 import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
+import { instalarPorteiro, dadosExclusao, ativo } from "./modulos/dados/porteiro.js";
+import { escutarColecao } from "./modulos/dados/sincronia.js";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
@@ -70,26 +72,16 @@ function marcarPendente(tipo, delta){
   if(delta<0) PENDENTES.enviadas++;
   try{ window.dispatchEvent(new CustomEvent("traco-pendentes")); }catch(e){}
 }
-(function(){
-  var fs = firebase.firestore;
-  var tipoDe = function(obj, m){
-    if(m==="commit") return "alterações em lote";
-    var col = obj instanceof fs.CollectionReference ? obj.id : (obj.parent && obj.parent.id);
-    return NOMES_COLECAO[col] || col || "registro";
-  };
-  [[fs.DocumentReference.prototype, ["set","update","delete"]], [fs.CollectionReference.prototype, ["add"]], [fs.WriteBatch.prototype, ["commit"]]].forEach(function(par){
-    par[1].forEach(function(m){
-      var original = par[0][m];
-      par[0][m] = function(){
-        if(somenteLeitura) return recusarGravacao();
-        var p = original.apply(this, arguments), tipo = tipoDe(this, m);
-        marcarPendente(tipo, +1);
-        p.then(function(){ marcarPendente(tipo, -1); }, function(){ marcarPendente(tipo, -1); });
-        return p;
-      };
-    });
-  });
-})();
+// v1.28: o porteiro único (src/modulos/dados/porteiro.js) recebe TODA gravação:
+// recusa a conta só de visualização, carimba quando/quem gravou e conta a fila.
+instalarPorteiro(firebase.firestore, {
+  somenteLeitura: function(){ return somenteLeitura; },
+  recusar: recusarGravacao,
+  email: function(){ return (auth.currentUser && auth.currentUser.email) || ""; },
+  agora: function(){ return new Date().toISOString(); },
+  pendente: marcarPendente,
+  nomeTipo: function(col){ return NOMES_COLECAO[col] || col || "registro"; }
+});
 // Rodando no próprio PC (http://localhost): usa os Firebase Emulators com uma
 // CÓPIA dos dados, nunca o banco real. No site publicado isto não se aplica.
 if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
@@ -3415,7 +3407,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       btn.addEventListener("click", async function(){
         var id = btn.getAttribute("data-rm-planta");
         if(!confirm("Remover esta planta da biblioteca? Rastreabilidades que já escolheram ela continuam com a planta normalmente, só não vai mais aparecer pra escolher em fichas novas.")) return;
-        try{ await plantasCol.doc(id).delete(); renderViewPlantas(); }catch(ex){ console.error(ex); alert("Não foi possível remover: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
+        try{ await plantasCol.doc(id).set(dadosExclusao("plantas", currentUserEmail, nowISO()), { merge:true }); renderViewPlantas(); }catch(ex){ console.error(ex); alert("Não foi possível remover: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
       });
     });
   }
@@ -3907,75 +3899,43 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubFvs) unsubFvs();
     if(unsubRast) unsubRast();
     if(unsubCt) unsubCt();
-    // Sem orderBy/limit: o Firestore esconde de uma consulta com orderBy os
-    // documentos que não têm o campo ordenado, e o limit(500) cortava os mais
-    // antigos sem aviso. A ordenação já é feita na tela (buildRows).
-    unsubFvs = fvsCol.onSnapshot(function(snap){
-      fvsMap = new Map();
-      snap.docs.forEach(function(d){ fvsMap.set(d.id, d.data()); });
-      render();
-    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
-    unsubRast = rastCol.onSnapshot(function(snap){
-      rastMap = new Map(); ctInicioCache = null;
-      snap.docs.forEach(function(d){ rastMap.set(d.id, d.data()); });
-      render();
-    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
-    // v1.6: Controle Tecnológico em sincronização INCREMENTAL. Ao abrir o app,
-    // as notas vêm do cache do aparelho (0 leituras) e só as alteradas desde a
-    // última vez são baixadas (atualizadoEm > última). Uma vez por semana, ou
-    // num aparelho novo, baixa tudo de novo por segurança.
-    var CT_SYNC_KEY = "traco-ct-sync-completa";
-    var precisaCompleta = true;
-    try{ precisaCompleta = (Date.now() - Number(localStorage.getItem(CT_SYNC_KEY)||0)) > 7*86400000; }catch(ex){}
-    ctMap = new Map();
-    var tratarCt = function(snap){
-      snap.docChanges().forEach(function(ch){
-        if(ch.type==="removed"){ if(precisaCompleta) ctMap.delete(ch.doc.id); return; } // no modo incremental, "removed" = só saiu do filtro
-        ctMap.set(ch.doc.id, ch.doc.data());
-      });
-      render();
-      // v1.5: rastreabilidade aberta mostra os resultados de CT das suas NFs —
-      // atualiza quando chega resultado novo (sem atrapalhar quem está digitando).
-      var ae = document.activeElement;
-      if(draft && draft.type==="rast" && !document.getElementById("overlay").hidden
-        && !(ae && document.getElementById("modal").contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) renderModal();
-    };
-    var erroCt = function(err){ setSync("off","erro de sincronização"); console.error(err); };
-    var escutarCt = function(desde){
-      var q = desde ? ctCol.where("atualizadoEm", ">", desde) : ctCol;
-      unsubCt = q.onSnapshot(function(snap){
-        tratarCt(snap);
-        if(!desde && !snap.metadata.fromCache){ try{ localStorage.setItem(CT_SYNC_KEY, String(Date.now())); }catch(ex){} }
-      }, erroCt);
-    };
-    if(precisaCompleta){ escutarCt(null); }
-    else {
-      ctCol.get({ source:"cache" }).then(function(snap){
-        if(!snap.size){ precisaCompleta = true; escutarCt(null); return; }
-        var maior = "";
-        snap.docs.forEach(function(d){ var x = d.data(); ctMap.set(d.id, x); if(x.atualizadoEm && String(x.atualizadoEm) > maior) maior = String(x.atualizadoEm); });
-        render();
-        // margem de 2 dias: relógio de outro celular atrasado não faz perder alteração
-        var t = Date.parse(maior);
-        escutarCt(isNaN(t) ? null : new Date(t - 2*86400000).toISOString());
-      }).catch(function(){ precisaCompleta = true; escutarCt(null); });
-    }
     if(unsubPlantas) unsubPlantas();
-    unsubPlantas = plantasCol.onSnapshot(function(snap){
-      plantasMap = new Map();
-      snap.docs.forEach(function(d){ plantasMap.set(d.id, d.data()); });
-      render();
-    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    if(unsubAco) unsubAco();
+    var erroSync = function(err){ setSync("off","erro de sincronização"); console.error(err); };
+    // v1.28: todas as coleções grandes baixam só o que mudou (src/modulos/dados/sincronia.js).
+    // Sem orderBy/limit: a ordenação é feita na tela (buildRows). Registros na
+    // lixeira (excluido:true) ficam no banco, mas fora do app.
+    var soAtivos = function(mapa){ var m = new Map(); mapa.forEach(function(x, id){ if(ativo(x)) m.set(id, x); }); return m; };
+    var sincFvs = escutarColecao({ col:fvsCol, campo:"updatedAt", chave:"traco-fvs-sync-completa", dias:1, aoErro:erroSync,
+      aoMudar:function(mapa){ fvsMap = soAtivos(mapa); render(); } });
+    unsubFvs = sincFvs.parar;
+    window.__tracoSincFvs = sincFvs.modo; // para o teste de ponta a ponta
+    unsubRast = escutarColecao({ col:rastCol, campo:"updatedAt", chave:"traco-rast-sync-completa", dias:1, aoErro:erroSync,
+      aoMudar:function(mapa){ rastMap = soAtivos(mapa); ctInicioCache = null; render(); } }).parar;
+    // Controle Tecnológico (desde a v1.6): baixa tudo uma vez por semana.
+    unsubCt = escutarColecao({ col:ctCol, campo:"atualizadoEm", chave:"traco-ct-sync-completa", dias:7, aoErro:erroSync,
+      aoMudar:function(mapa){
+        ctMap = mapa;
+        render();
+        // v1.5: rastreabilidade aberta mostra os resultados de CT das suas NFs —
+        // atualiza quando chega resultado novo (sem atrapalhar quem está digitando).
+        var ae = document.activeElement;
+        if(draft && draft.type==="rast" && !document.getElementById("overlay").hidden
+          && !(ae && document.getElementById("modal").contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) renderModal();
+      } }).parar;
+    // plantas são pesadas (imagem dentro do registro): também uma vez por semana
+    unsubPlantas = escutarColecao({ col:plantasCol, campo:"atualizadoEm", chave:"traco-plantas-sync-completa", dias:7, aoErro:erroSync,
+      aoMudar:function(mapa){ plantasMap = soAtivos(mapa); render(); } }).parar;
     // Aço: se as regras do banco ainda não liberam esta coleção, a tela avisa
     // em vez de marcar o app inteiro como "erro de sincronização".
-    if(unsubAco) unsubAco();
-    unsubAco = acoCol.onSnapshot(function(snap){
-      acoErroAcesso = false;
-      acoMap = new Map();
-      // v1.12: pedidos na lixeira (excluido:true) ficam no banco, mas fora do app
-      snap.docs.forEach(function(d){ var x = d.data(); if(x.excluido!==true) acoMap.set(d.id, Object.assign({ id:d.id }, x)); });
-      render();
-    }, function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); });
+    unsubAco = escutarColecao({ col:acoCol, campo:"atualizadoEm", chave:"traco-aco-sync-completa", dias:1,
+      aoErro:function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); },
+      aoMudar:function(mapa){
+        acoErroAcesso = false;
+        acoMap = new Map();
+        mapa.forEach(function(x, id){ if(ativo(x)) acoMap.set(id, Object.assign({ id:id }, x)); });
+        render();
+      } }).parar;
     if(unsubCron) unsubCron();
     unsubCron = cronCol.doc("atual").onSnapshot(function(snap){
       cronErroAcesso = false;
@@ -4018,11 +3978,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }, function(err){ console.warn("assinaturas:", err && err.code); });
     // v1.25: tarefas da engenharia para os estagiários
     if(unsubTarefas) unsubTarefas();
-    unsubTarefas = tarefasCol.onSnapshot(function(snap){
-      tarefasMap = new Map(); snap.docs.forEach(function(d){ tarefasMap.set(d.id, d.data()); });
-      var v = document.getElementById("view-engenharia");
-      if(v && !v.hidden) renderViewEngenharia(); else if(!document.getElementById("view-dashboard").hidden) renderViewDashboard();
-    }, function(err){ console.warn("tarefas:", err && err.code); });
+    unsubTarefas = escutarColecao({ col:tarefasCol, campo:"atualizadoEm", chave:"traco-tarefas-sync-completa", dias:1,
+      aoErro:function(err){ console.warn("tarefas:", err && err.code); },
+      aoMudar:function(mapa){
+        tarefasMap = mapa;
+        var v = document.getElementById("view-engenharia");
+        if(v && !v.hidden) renderViewEngenharia(); else if(!document.getElementById("view-dashboard").hidden) renderViewDashboard();
+      } }).parar;
     render();
     if(perfilAtual==="engenharia") switchView("engenharia"); // a engenheira abre no painel dela
     // Dá tempo das fichas chegarem do servidor antes de oferecer o rascunho.
@@ -4035,6 +3997,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubRast){ unsubRast(); unsubRast=null; }
     if(unsubCt){ unsubCt(); unsubCt=null; }
     if(unsubAco){ unsubAco(); unsubAco=null; }
+    if(unsubPlantas){ unsubPlantas(); unsubPlantas=null; }
     if(unsubCron){ unsubCron(); unsubCron=null; }
     if(unsubCronProg){ unsubCronProg(); unsubCronProg=null; }
     if(unsubCronEtapas){ unsubCronEtapas(); unsubCronEtapas=null; }
@@ -6390,11 +6353,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     });
     var delBtn=m.querySelector("#btn-delete");
     if(delBtn && draft.id) delBtn.addEventListener("click", async function(){
-      if(!confirm("Excluir definitivamente este registro?")) return;
+      if(!confirm("Excluir este registro? Ele sai do app, mas fica guardado no banco (lixeira).")) return;
       var d = draft;
       var col = d.type==="fvs" ? fvsCol : rastCol;
       try{
-        await col.doc(d.id).delete();
+        // v1.28: nunca apaga de verdade — vai para a lixeira (excluido:true)
+        await col.doc(d.id).set(dadosExclusao(col.id, currentUserEmail, nowISO()), { merge:true });
       }catch(ex){
         console.error(ex);
         alert("Não foi possível excluir: "+(ex && ex.message ? ex.message : "erro desconhecido")+".");
