@@ -139,14 +139,16 @@ export async function adicionarAssinaturasXlsx(zip, sheetPath, assinaturas) {
     drawingRels = addRel(drawingRels, rid, REL_IMAGE, "../media/" + media.split("/").pop());
     // tamanho: ~1/3 da altura da linha (máx. 1,3 cm), largura pela proporção (máx. 4,5 cm)
     const htPt = alturaLinha(sheetXml, a.row);
-    let hEmu = Math.min(htPt * 0.34 * EMU_PT, 468000);
+    // a.alt / a.pe (opcionais): altura da imagem e posição do pé, em fração da altura da linha
+    let hEmu = Math.min(htPt * (a.alt || 0.34) * EMU_PT, 468000);
     let wEmu = hEmu * tam.w / tam.h;
     if (wEmu > 1620000) { wEmu = 1620000; hEmu = wEmu * tam.h / tam.w; }
     // no meio do campo (entre o nome e a linha "____" do modelo)
     const larg = larguraColunas(sheetXml, a.col, a.colFim || a.col);
     const offX = Math.max(0, Math.round((larg - wEmu) / 2));
     // o pé da assinatura encosta na linha "____" (que fica a ~2/3 da altura do campo)
-    const offY = Math.round(Math.max(htPt * 0.3 * EMU_PT, htPt * 0.68 * EMU_PT - hEmu));
+    const pe = a.pe || 0.68;
+    const offY = Math.round(Math.max(htPt * (a.pe ? 0.2 : 0.3) * EMU_PT, htPt * pe * EMU_PT - hEmu));
     ancoras += `<xdr:oneCellAnchor><xdr:from><xdr:col>${a.col - 1}</xdr:col><xdr:colOff>${offX}</xdr:colOff><xdr:row>${a.row - 1}</xdr:row><xdr:rowOff>${offY}</xdr:rowOff></xdr:from>`
       + `<xdr:ext cx="${Math.round(wEmu)}" cy="${Math.round(hEmu)}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${idObj + i}" name="Assinatura ${i + 1}"/>`
       + `<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>`

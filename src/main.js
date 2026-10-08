@@ -21,6 +21,7 @@ import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapa
 import { rotuloArea, rotuloSvg, rotuloCanvas, OPAC_FUNDO } from "./modulos/rastreabilidade/rotulo-mapa.js";
 import { semRepetidas as pecasSemRepetidas, pecasRepetidas } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
+import { lerPendencias, sugerirFvs, norm as normNc } from "./modulos/nc/pendencias.js";
 import { adicionarAssinaturasXlsx } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje, concretadasPorChave as acoConcretadasPorChave, chegouPelaConcretagem as acoChegouPelaConcretagem } from "./modulos/aco/aco-cronograma.js";
@@ -1254,7 +1255,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var papelA = minhaAssinatura.papel || "engenheiro", desdeA = ctSomarDias(hoje, -30), faltaA = [];
       var semMinha = function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel===papelA || (papelA!=="engenheiro" && papelA!=="encarregado" && (a.papel==="tecnico" || a.papel==="estagiario")); }); };
       if(papelA!=="encarregado"){
-        fvsMap.forEach(function(f, id){ var dt = f.dataConcretagem||f.dataAbertura||""; if(dt>=desdeA && !f.travada && semMinha(f)) faltaA.push({ fvs:id }); });
+        fvsMap.forEach(function(f, id){ var dt = f.dataConcretagem||f.dataAbertura||""; if(dt>=desdeA && semMinha(f)) faltaA.push({ fvs:id }); });
         rastMap.forEach(function(r, id){ if((r.data||"")>=desdeA && semMinha(r)) faltaA.push({ rast:id }); });
       }
       if(faltaA.length) out.push({ cat:"assinar", prio: 52, icone:"check", tom:"warn",
@@ -1722,7 +1723,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function hideViewPavimento(){ switchView("dashboard"); }
 
   /* ---------------- relatório: Não conformidades ---------------- */
-  var filtrosNc = { pavimento:"", tipo:"", situacao:"todos", destinatario:"" }; // situacao: "todos" | "aberto" | "concluida"
+  var filtrosNc = { pavimento:"", tipo:"", situacao:"aberto", destinatario:"", busca:"" }; // situacao: "todos" | "aberto" | "atraso" | "concluida"
 
   // Lista plana de todas as não conformidades cadastradas em todas as
   // fichas FVS (novas, já como lista, e antigas migradas na hora por
@@ -1738,6 +1739,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           descricao: nc.descricao||"", correcao: nc.correcao||"",
           concluida: !!nc.concluida,
           dataRegistro: nc.dataRegistro||f.dataAbertura||"", dataConclusao: nc.dataConclusao||"",
+          prazo: nc.prazo||"", responsavel: nc.responsavel||"",
           diasAberto: nc.concluida ? null : diffDias(nc.dataRegistro||f.dataAbertura||"", todayISO()),
           pavimentos: fvsPavimentosList(f),
           anexos: ncAnexos(nc)
@@ -1750,6 +1752,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(filtrosNc.tipo && (item.ficha.tipo||"fvs04")!==filtrosNc.tipo) return false;
     if(filtrosNc.situacao==="aberto" && item.concluida) return false;
     if(filtrosNc.situacao==="concluida" && !item.concluida) return false;
+    if(filtrosNc.situacao==="atraso" && !ncAtrasada(item)) return false;
     if(filtrosNc.pavimento){
       var rankFiltro = pavimentoRank(filtrosNc.pavimento);
       var ok = item.pavimentos.some(function(p){
@@ -1795,96 +1798,254 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var sitLabel = {todos:"todas", aberto:"em aberto", concluida:"concluídas"}[filtrosNc.situacao] || "todas";
     return "Pavimento: "+(filtrosNc.pavimento||"todos")+" · Tipo de FVS: "+tipoLabel+" · Situação: "+sitLabel;
   }
+  /* ---------------- v1.19: tela de não conformidades para VER e RESOLVER ----------------
+     Lista única, das mais antigas (ou com prazo vencido) para as mais novas,
+     com "Resolver" direto no cartão — grava na própria FVS, sem abrir a ficha.
+     "Importar lista de pendências" lê uma lista (texto do WhatsApp, colado do
+     Excel ou planilha) e inclui cada pendência como NC na FVS escolhida. */
+  var ncResolvendo = "";
+  function ncChave(item){ return item.fichaId+"|"+item.idx; }
+  function ncVencida(item){ return !item.concluida && !!item.prazo && item.prazo < todayISO(); }
+  function ncAtrasada(item){ return !item.concluida && (ncVencida(item) || (item.diasAberto||0) >= 15); }
+  function ncRotuloFicha(f){ return (f.codigo||"FVS")+" nº "+(f.numero||"s/ nº"); }
   function renderViewNc(){
     var container = document.getElementById("view-nc");
-    var rel = buildRelatorioNc();
-    var todas = rel.todas, grupos = rel.grupos;
-
-    var abertas = todas.filter(function(i){ return !i.concluida; }).length;
-    var concluidas = todas.length - abertas;
+    var hoje = todayISO();
+    var base = todasNaoConformidades();
+    var semSit = function(i){ var s = filtrosNc.situacao; filtrosNc.situacao = "todos"; var r = matchesFiltrosNc(i); filtrosNc.situacao = s; return r; };
+    var termo = normNc(filtrosNc.busca||"");
+    var noFiltro = base.filter(function(i){
+      if(!semSit(i)) return false;
+      if(termo && normNc([i.descricao, i.correcao, i.responsavel, i.ficha.codigo, i.ficha.numero, i.pavimentos.join(" ")].join(" ")).indexOf(termo)===-1) return false;
+      return true;
+    });
+    var cont = { aberto:0, atraso:0, concluida:0, todos:noFiltro.length };
+    noFiltro.forEach(function(i){ if(i.concluida) cont.concluida++; else { cont.aberto++; if(ncAtrasada(i)) cont.atraso++; } });
+    var sit = filtrosNc.situacao;
+    var lista = noFiltro.filter(function(i){
+      return sit==="todos" || (sit==="aberto" && !i.concluida) || (sit==="atraso" && ncAtrasada(i)) || (sit==="concluida" && i.concluida);
+    });
+    lista.sort(function(a,b){
+      if(a.concluida!==b.concluida) return a.concluida ? 1 : -1;
+      if(a.concluida) return (b.dataConclusao||"").localeCompare(a.dataConclusao||"");
+      if(ncVencida(a)!==ncVencida(b)) return ncVencida(a) ? -1 : 1;
+      return (b.diasAberto||0)-(a.diasAberto||0);
+    });
 
     var pavimentoOpcoes = pavimentosCanonicos(buildRows());
-    var filtrosHtml = '<div class="pav-filtros">'
-      + '<select id="nc-f-pavimento" aria-label="Filtrar por pavimento">'
-        + '<option value="">Todos os pavimentos</option>'
-        + pavimentoOpcoes.map(function(o){ return '<option value="'+escapeHtml(o.label)+'"'+(filtrosNc.pavimento===o.label?" selected":"")+'>'+escapeHtml(o.label)+'</option>'; }).join("")
-      + '</select>'
-      + '<select id="nc-f-tipo" aria-label="Filtrar por tipo de FVS">'
-        + '<option value="">Todos os tipos de FVS</option>'
-        + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosNc.tipo===t.key?" selected":"")+'>'+escapeHtml(t.titulo)+'</option>'; }).join("")
-      + '</select>'
-      + '<div class="chips" id="nc-f-situacao" role="group" aria-label="Filtrar por situação da não conformidade">'
-        + ['todos::Todas','aberto::Em aberto','concluida::Concluídas'].map(function(opt){
-            var parts=opt.split("::"), key=parts[0], label=parts[1];
-            return '<button class="chip" data-sit-nc="'+key+'" aria-pressed="'+(filtrosNc.situacao===key)+'">'+label+'</button>';
-          }).join("")
+    var chip = function(k, rot, n, tom){
+      return '<button type="button" class="ncx-sit'+(tom?" "+tom:"")+'" data-sit-nc="'+k+'" aria-pressed="'+(sit===k)+'"><b>'+n+'</b><span>'+rot+'</span></button>';
+    };
+    var topo = '<div class="pav-header"><h2>Não conformidades</h2><span class="pav-total">'+cont.aberto+' em aberto</span></div>'
+      + '<p class="view-desc">Toque em <b>Resolver</b> para dar baixa direto aqui. Recebeu uma lista de pendências? Use <b>Importar lista</b>: cada item vira uma não conformidade na FVS certa.</p>'
+      + '<div class="ncx-sits" role="group" aria-label="Situação">'
+        + chip("aberto", "Em aberto", cont.aberto, "bad")
+        + chip("atraso", "Prazo vencido ou +15 dias", cont.atraso, "warn")
+        + chip("concluida", "Resolvidas", cont.concluida, "ok")
+        + chip("todos", "Todas", cont.todos, "")
       + '</div>'
-    + '</div>';
-
-    var resumoHtml = '<div class="pav-resumo-grid">'
-      + '<div class="pav-resumo-card"><div class="n">'+todas.length+'</div><div class="l">Não conformidades (filtro atual)</div></div>'
-      + '<div class="pav-resumo-card tone-nc"><div class="n">'+abertas+'</div><div class="l">Em aberto</div></div>'
-      + '<div class="pav-resumo-card tone-ok"><div class="n">'+concluidas+'</div><div class="l">Concluídas</div></div>'
-    + '</div>';
-
-    var corpoHtml;
-    if(todas.length===0){
-      corpoHtml = '<div class="empty-state"><div class="big">Nenhuma não conformidade encontrada</div><p>Ajuste os filtros acima ou registre não conformidades nas fichas FVS.</p></div>';
-    } else {
-      corpoHtml = '<div class="pav-lista">' + grupos.map(function(g){
-        var abertasG = g.itens.filter(function(i){ return !i.concluida; }).length;
-        var concluidasG = g.itens.length - abertasG;
-        var linhas = g.itens.length
-          ? g.itens.map(function(item){
-              var f=item.ficha;
-              var statusPill = item.concluida
-                ? '<span class="pill concluido"><span class="dot"></span>Concluída</span>'
-                : '<span class="pill aberto has-nc"><span class="dot"></span>Em aberto</span>';
-              var diasHtml = !item.concluida && item.diasAberto!=null
-                ? '<span class="nc-dias">'+item.diasAberto+' dia(s) em aberto</span>'
-                : (item.concluida ? '<span class="nc-dias">Concluída em '+escapeHtml(fmtDateBR(item.dataConclusao))+'</span>' : '');
-              return '<div class="pav-ficha-row">'
-                + '<span class="pav-ficha-cod">'+escapeHtml(f.descricao||f.codigo||"FVS")+' · '+escapeHtml(f.numero||"s/ nº")+'</span>'
-                + '<span class="pav-ficha-obra">'+escapeHtml(item.descricao||"(sem descrição)")+'</span>'
-                + statusPill
-                + diasHtml
-                + '</div>';
-            }).join("")
-          : '<div class="pav-ficha-vazio">Nenhuma não conformidade neste pavimento com os filtros atuais.</div>';
-        return '<div class="pav-grupo">'
-          + '<div class="pav-grupo-head"><span class="pav-grupo-nome">'+escapeHtml(g.label)+'</span>'
-            + '<span class="pav-grupo-count">'+g.itens.length+' NC(s) · '+abertasG+' em aberto · '+concluidasG+' concluída(s)</span></div>'
-          + '<div class="pav-grupo-body">'+linhas+'</div>'
-          + '</div>';
-      }).join("") + '</div>';
-    }
-
-    var relatorioHtml = '<div class="nc-relatorio-bar">'
-      + '<input type="text" id="nc-f-destinatario" placeholder="Empreiteira / destinatário deste relatório (opcional)" value="'+escapeHtml(filtrosNc.destinatario)+'">'
-      + '<button class="btn primary" id="btn-relatorio-nc">Gerar relatório (Word)</button>'
-    + '</div>';
-
-    container.innerHTML =
-      '<div class="pav-header">'
-        + '<button class="btn" id="btn-voltar-nc">← Voltar</button>'
-        + '<h2>Não conformidades</h2>'
-        + '<span class="pav-total">'+todas.length+' não conformidade(s) encontrada(s)</span>'
+      + '<div class="ncx-barra">'
+        + '<div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+          + '<input type="text" id="nc-f-busca" placeholder="Buscar: viga V3, reboco, empreiteira…" value="'+escapeHtml(filtrosNc.busca||"")+'"></div>'
+        + '<select id="nc-f-pavimento" aria-label="Filtrar por pavimento"><option value="">Todos os pavimentos</option>'
+          + pavimentoOpcoes.map(function(o){ return '<option value="'+escapeHtml(o.label)+'"'+(filtrosNc.pavimento===o.label?" selected":"")+'>'+escapeHtml(o.label)+'</option>'; }).join("")+'</select>'
+        + '<select id="nc-f-tipo" aria-label="Filtrar por tipo de FVS"><option value="">Todos os tipos de FVS</option>'
+          + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosNc.tipo===t.key?" selected":"")+'>'+escapeHtml(t.codigo+" — "+t.titulo)+'</option>'; }).join("")+'</select>'
       + '</div>'
-      + '<p class="view-desc">Todas as não conformidades registradas nas fichas FVS, filtráveis por pavimento, tipo e situação — gere um relatório em Word pra notificar a empreiteira ao final.</p>'
-      + filtrosHtml
-      + resumoHtml
-      + relatorioHtml
-      + corpoHtml;
+      + '<div class="ct-acoes">'
+        + '<button class="btn primary" type="button" id="btn-nc-importar"><svg class="ti-i" data-i="file"></svg>Importar lista de pendências</button>'
+        + '<input type="text" id="nc-f-destinatario" placeholder="Empreiteira / destinatário do relatório (opcional)" value="'+escapeHtml(filtrosNc.destinatario)+'" style="flex:1 1 220px;min-width:0">'
+        + '<button class="btn" type="button" id="btn-relatorio-nc"><svg class="ti-i" data-i="download"></svg>Relatório (Word)</button>'
+      + '</div>';
 
-    document.getElementById("btn-voltar-nc").addEventListener("click", hideViewNc);
-    document.getElementById("btn-relatorio-nc").addEventListener("click", gerarRelatorioNcWord);
+    var cartao = function(i){
+      var f = i.ficha, k = ncChave(i), abertoForm = ncResolvendo===k && !i.concluida;
+      var tempo = i.concluida ? '<span class="ncx-tag ok">resolvida em '+escapeHtml(fmtDateBR(i.dataConclusao)||"—")+'</span>'
+        : (ncVencida(i) ? '<span class="ncx-tag bad">prazo venceu '+escapeHtml(fmtDateBR(i.prazo).slice(0,5))+'</span>'
+          : '<span class="ncx-tag '+((i.diasAberto||0)>=15 ? "bad" : (i.diasAberto||0)>=7 ? "warn" : "")+'">'+(i.diasAberto ? i.diasAberto+" dia(s)" : (i.diasAberto===0 ? "aberta hoje" : "em aberto"))+'</span>'
+            + (i.prazo ? '<span class="ncx-tag">prazo '+escapeHtml(fmtDateBR(i.prazo).slice(0,5))+'</span>' : ''));
+      return '<div class="ncx-card'+(i.concluida?" feita":"")+(ncAtrasada(i)?" atraso":"")+'" data-nc="'+escapeHtml(k)+'">'
+        + '<div class="ncx-top">'+tempo
+          + (i.pavimentos[0] ? '<span class="ncx-tag pav">'+escapeHtml(i.pavimentos.join(", "))+'</span>' : '')
+          + '<span class="ncx-ficha">'+escapeHtml(ncRotuloFicha(f))+(f.travada ? ' · assinada' : '')+'</span></div>'
+        + '<div class="ncx-desc">'+escapeHtml(i.descricao||"(sem descrição)")+'</div>'
+        + (i.correcao ? '<div class="ncx-sub"><b>'+(i.concluida?"Feito":"Correção")+':</b> '+escapeHtml(i.correcao)+'</div>' : '')
+        + (i.responsavel ? '<div class="ncx-sub"><b>Responsável:</b> '+escapeHtml(i.responsavel)+'</div>' : '')
+        + (i.anexos.length ? '<div class="ncx-sub">'+i.anexos.length+' anexo(s)</div>' : '')
+        + (abertoForm
+          ? '<div class="ncx-resolver"><div class="field"><label for="ncx-feito">O que foi feito</label><textarea id="ncx-feito" rows="2" placeholder="ex.: espaçadores colocados e conferidos">'+escapeHtml(i.correcao||"")+'</textarea></div>'
+            + '<div class="ncx-resolver-pe"><div class="field"><label for="ncx-data">Resolvida em</label><input type="date" id="ncx-data" value="'+hoje+'"></div>'
+            + '<button type="button" class="btn" data-nc-cancelar>Cancelar</button><button type="button" class="btn primary" data-nc-confirmar>✓ Confirmar</button></div></div>'
+          : '<div class="ncx-acoes">'+(i.concluida
+              ? '<button type="button" class="btn small" data-nc-reabrir>Reabrir</button>'
+              : '<button type="button" class="btn small primary" data-nc-resolver>✓ Resolver</button>')
+            + '<button type="button" class="btn small" data-nc-abrir>Abrir a ficha</button></div>')
+        + '</div>';
+    };
+    var corpo = lista.length ? '<div class="ncx-lista">'+lista.map(cartao).join("")+'</div>'
+      : '<div class="empty-state"><div class="big">'+(sit==="aberto" ? "Nenhuma pendência em aberto 🎉" : "Nada com esses filtros")+'</div><p>'+(sit==="aberto" ? "Todas as não conformidades estão resolvidas." : "Ajuste a situação, o pavimento ou a busca.")+'</p></div>';
+
+    container.innerHTML = topo + corpo;
+    pintarIcones(container);
+    var re = function(){ renderViewNc(); };
+    container.querySelector(".ncx-sits").addEventListener("click", function(e){
+      var b = e.target.closest("[data-sit-nc]"); if(!b) return;
+      filtrosNc.situacao = b.getAttribute("data-sit-nc"); re();
+    });
+    var busca = document.getElementById("nc-f-busca");
+    busca.addEventListener("input", function(){
+      filtrosNc.busca = busca.value; var pos = busca.selectionStart; re();
+      var b2 = document.getElementById("nc-f-busca"); b2.focus(); b2.setSelectionRange(pos, pos);
+    });
+    document.getElementById("nc-f-pavimento").addEventListener("change", function(e){ filtrosNc.pavimento = e.target.value; re(); });
+    document.getElementById("nc-f-tipo").addEventListener("change", function(e){ filtrosNc.tipo = e.target.value; re(); });
     document.getElementById("nc-f-destinatario").addEventListener("input", function(e){ filtrosNc.destinatario = e.target.value; });
-    document.getElementById("nc-f-pavimento").addEventListener("change", function(e){ filtrosNc.pavimento=e.target.value; renderViewNc(); });
-    document.getElementById("nc-f-tipo").addEventListener("change", function(e){ filtrosNc.tipo=e.target.value; renderViewNc(); });
-    document.getElementById("nc-f-situacao").addEventListener("click", function(e){
-      var btn=e.target.closest("[data-sit-nc]"); if(!btn) return;
-      filtrosNc.situacao = btn.getAttribute("data-sit-nc");
-      renderViewNc();
+    document.getElementById("btn-relatorio-nc").addEventListener("click", gerarRelatorioNcWord);
+    document.getElementById("btn-nc-importar").addEventListener("click", abrirImportarPendencias);
+    container.querySelectorAll("[data-nc]").forEach(function(card){
+      var p = card.getAttribute("data-nc").split("|"), fid = p[0], idx = Number(p[1]);
+      var on = function(sel, fn){ var b = card.querySelector(sel); if(b) b.addEventListener("click", fn); };
+      on("[data-nc-abrir]", function(){ openModal("fvs", fid); });
+      on("[data-nc-resolver]", function(){ ncResolvendo = fid+"|"+idx; re(); var t = document.getElementById("ncx-feito"); if(t) t.focus(); });
+      on("[data-nc-cancelar]", function(){ ncResolvendo = ""; re(); });
+      on("[data-nc-confirmar]", function(){
+        var feito = document.getElementById("ncx-feito").value.trim(), data = document.getElementById("ncx-data").value || todayISO();
+        if(!feito){ alert("Escreva o que foi feito para resolver."); return; }
+        ncResolvendo = "";
+        ncGravarNaFicha(fid, function(lista){ var nc = lista[idx]; if(!nc) return false; nc.correcao = feito; nc.concluida = true; nc.dataConclusao = data; nc.resolvidaPor = currentUserEmail||""; });
+      });
+      on("[data-nc-reabrir]", function(){
+        if(!confirm("Reabrir esta não conformidade?")) return;
+        ncGravarNaFicha(fid, function(lista){ var nc = lista[idx]; if(!nc) return false; nc.concluida = false; nc.dataConclusao = ""; });
+      });
+    });
+  }
+  // Altera a lista de NCs de uma FVS e grava só esse campo (funciona também em
+  // ficha assinada: as regras do banco liberam naoConformidades para dar baixa).
+  async function ncGravarNaFicha(fichaId, alterar){
+    var f = fvsMap.get(fichaId); if(!f) return;
+    var lista = JSON.parse(JSON.stringify(fichaNaoConformidades(f)));
+    if(alterar(lista)===false) return;
+    try{
+      var envio = fvsCol.doc(fichaId).set({ naoConformidades:lista, updatedAt:nowISO(), updatedByEmail:currentUserEmail||"" }, { merge:true });
+      var r = await Promise.race([envio.then(function(){ return "ok"; }), new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })]);
+      if(r==="pendente") alert("Sem conexão no momento — a alteração será enviada quando o sinal voltar. Mantenha o app aberto.");
+    }catch(ex){
+      console.error(ex);
+      alert("Não foi possível gravar: "+(ex && ex.code==="permission-denied" ? "sem permissão para alterar esta ficha." : (ex && ex.message ? ex.message : "erro desconhecido")));
+    }
+    if(!document.getElementById("view-nc").hidden) renderViewNc();
+  }
+
+  /* ---- v1.19: importar lista de pendências para as FVS ---- */
+  function ncFichasParaSugestao(){
+    var out = [];
+    fvsMap.forEach(function(f, id){
+      var t = getFvsTipo(f.tipo);
+      out.push({ id:id, numero:f.numero||"", codigo:f.codigo||"", titulo:(t && t.titulo) || f.descricao || (f.tipo==="fvs04"||!f.tipo ? "Forma, desforma, armação e concretagem" : ""),
+        pavimentos:fvsPavimentosList(f), data:f.dataConcretagem||f.dataAbertura||"", travada:!!f.travada });
+    });
+    out.sort(function(a,b){ return (b.data||"").localeCompare(a.data||""); });
+    return out;
+  }
+  function abrirImportarPendencias(){
+    var fichas = ncFichasParaSugestao(), itens = [];
+    var ov = document.createElement("div");
+    ov.className = "overlay ct-ficha-ov";
+    ov.innerHTML = '<div class="modal ncx-imp" role="dialog" aria-modal="true" aria-labelledby="ncx-imp-tit">'
+      + '<div class="modal-head"><h2 id="ncx-imp-tit">Importar lista de pendências</h2><button class="close-x" data-fechar aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-body">'
+        + '<div data-passo1>'
+          + '<p class="view-desc">Cole a lista (uma pendência por linha, do WhatsApp, e-mail ou copiada do Excel) ou escolha a planilha. O app tenta achar o pavimento, o nº da FVS e o prazo em cada linha.</p>'
+          + '<div class="field"><label for="ncx-texto">Lista de pendências</label><textarea id="ncx-texto" rows="8" placeholder="- 5º pav: falta espaçador na viga V3, corrigir até 12/10&#10;- 3º embasamento, FVS nº 14: prumo do pilar P7 fora da tolerância&#10;- Cobertura: bolha na impermeabilização do ralo"></textarea></div>'
+          + '<div class="ct-acoes"><label class="btn" for="ncx-arquivo"><svg class="ti-i" data-i="file"></svg>Escolher planilha…</label><input type="file" id="ncx-arquivo" accept=".xlsx,.xls,.csv,.txt" hidden>'
+          + '<button type="button" class="btn primary" data-ler>Ler a lista</button><span class="hint" data-msg></span></div>'
+        + '</div>'
+        + '<div data-passo2 hidden></div>'
+      + '</div>'
+      + '<div class="modal-foot"><div></div><div style="display:flex;gap:10px;"><button class="btn" data-fechar>Cancelar</button><button class="btn primary" data-incluir hidden>Incluir</button></div></div>'
+    + '</div>';
+    document.body.appendChild(ov);
+    pintarIcones(ov);
+    document.body.style.overflow = "hidden";
+    var msg = ov.querySelector("[data-msg]");
+    var fechar = function(){ ov.remove(); document.body.style.overflow = ""; document.removeEventListener("keydown", tecla); };
+    var tecla = function(e){ if(e.key==="Escape") fechar(); };
+    document.addEventListener("keydown", tecla);
+    var opcoesFicha = function(sel){
+      return '<option value="">— escolher a FVS —</option>' + fichas.map(function(f){
+        return '<option value="'+escapeHtml(f.id)+'"'+(f.id===sel?" selected":"")+'>'+escapeHtml((f.codigo||"FVS")+" nº "+(f.numero||"s/ nº")+" · "+(f.pavimentos.join(", ")||"sem pavimento")+(f.data ? " · "+fmtDateBR(f.data).slice(0,5) : "")+(f.travada ? " · assinada" : ""))+'</option>';
+      }).join("");
+    };
+    var mostrar = function(){
+      var p2 = ov.querySelector("[data-passo2]");
+      ov.querySelector("[data-passo1]").hidden = true; p2.hidden = false;
+      p2.innerHTML = '<p class="view-desc">'+itens.length+' pendência(s) encontradas. Confira a FVS de cada uma (as sugeridas já vêm marcadas) e desmarque o que não for pendência.</p>'
+        + '<div class="ncx-imp-lista">'+itens.map(function(it, k){
+          return '<div class="ncx-imp-item" data-k="'+k+'">'
+            + '<label class="ncx-imp-chk"><input type="checkbox" data-imp="usar"'+(it.usar?" checked":"")+'> incluir</label>'
+            + '<div class="field"><label>Pendência</label><textarea data-imp="descricao" rows="2">'+escapeHtml(it.descricao)+'</textarea></div>'
+            + '<div class="grid2"><div class="field"><label>FVS'+(it.ficha ? "" : ' <span class="ncx-tag bad">escolher</span>')+'</label><select data-imp="ficha">'+opcoesFicha(it.ficha)+'</select></div>'
+              + '<div class="field"><label>Correção / o que fazer</label><input data-imp="correcao" value="'+escapeHtml(it.correcao)+'"></div></div>'
+            + '<div class="grid2"><div class="field"><label>Prazo</label><input type="date" data-imp="prazo" value="'+escapeHtml(it.prazo)+'"></div>'
+              + '<div class="field"><label>Responsável / empreiteira</label><input data-imp="responsavel" value="'+escapeHtml(it.responsavel)+'"></div></div>'
+            + (it.pavimento ? '<small class="hint">Pavimento lido: '+escapeHtml(it.pavimento)+(it.fvs ? ' · FVS nº '+escapeHtml(it.fvs) : '')+'</small>' : (it.fvs ? '<small class="hint">FVS nº '+escapeHtml(it.fvs)+'</small>' : ''))
+          + '</div>';
+        }).join("")+'</div>';
+      p2.addEventListener("input", atualizar); p2.addEventListener("change", atualizar);
+      atualizar();
+    };
+    function atualizar(e){
+      if(e && e.target && e.target.closest){
+        var box = e.target.closest("[data-k]");
+        if(box){ var it = itens[+box.getAttribute("data-k")], c = e.target.getAttribute("data-imp"); if(it && c) it[c] = c==="usar" ? e.target.checked : e.target.value; }
+      }
+      var usar = itens.filter(function(i){ return i.usar; }), semFicha = usar.filter(function(i){ return !i.ficha; }).length;
+      var b = ov.querySelector("[data-incluir]");
+      b.hidden = false; b.disabled = !usar.length || semFicha>0;
+      b.textContent = semFicha ? "Falta escolher a FVS de "+semFicha : "Incluir "+usar.length+" pendência(s)";
+    }
+    var ler = function(entrada){
+      var lidos = lerPendencias(entrada, todayISO());
+      if(!lidos.length){ msg.textContent = "Não achei pendências. Escreva uma por linha."; return; }
+      itens = lidos.map(function(x){
+        return Object.assign(x, { usar: !/^pend[eê]ncias?\b.{0,30}:?\s*$/i.test(x.descricao), ficha: sugerirFvs(x, fichas, pavimentoRank) });
+      });
+      mostrar();
+    };
+    ov.querySelector("#ncx-arquivo").addEventListener("change", async function(ev){
+      var f = ev.target.files && ev.target.files[0]; ev.target.value = "";
+      if(!f) return;
+      msg.textContent = "Lendo "+f.name+"…";
+      try{
+        if(/\.txt$/i.test(f.name)){ ler(await f.text()); return; }
+        await garantirLibs();
+        var wb = XLSX.read(await f.arrayBuffer(), { type:"array", cellDates:true });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        ler(XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:"" }));
+      }catch(ex){ console.error(ex); msg.textContent = "Não consegui ler esse arquivo. Tente colar a lista no campo acima."; }
+    });
+    ov.addEventListener("click", async function(e){
+      if(e.target===ov || e.target.closest("[data-fechar]")){ fechar(); return; }
+      if(e.target.closest("[data-ler]")){ ler(ov.querySelector("#ncx-texto").value); return; }
+      var bi = e.target.closest("[data-incluir]");
+      if(!bi || bi.disabled) return;
+      var usar = itens.filter(function(i){ return i.usar && i.ficha && String(i.descricao||"").trim(); });
+      var porFicha = {};
+      usar.forEach(function(i){ (porFicha[i.ficha] = porFicha[i.ficha] || []).push(i); });
+      bi.disabled = true; bi.textContent = "Incluindo…";
+      var ids = Object.keys(porFicha);
+      for(var n=0;n<ids.length;n++){
+        await ncGravarNaFicha(ids[n], function(lista){
+          porFicha[ids[n]].forEach(function(i){
+            lista.push(Object.assign(blankNaoConformidade(), { descricao:String(i.descricao).trim(), correcao:i.correcao||"", prazo:i.prazo||"",
+              responsavel:i.responsavel||"", dataRegistro: i.data || todayISO(), origem:"lista", importadaPor:currentUserEmail||"", importadaEm:nowISO() }));
+          });
+        });
+      }
+      fechar();
+      filtrosNc.situacao = "aberto";
+      alert(usar.length+" pendência(s) incluída(s) em "+ids.length+" FVS.");
     });
   }
   function showViewNc(){ switchView("nc"); }
@@ -2209,7 +2370,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // v1.5: filtros do Controle Tecnológico (situação, período, concreteira,
   // laboratório) e modo de visualização (agrupado por data ou tabela).
   // somentePendentes é mantido por compatibilidade (Início → "atrasados").
-  var filtrosCt = { busca:"", somentePendentes:false, situacao:"todos", de:"", ate:"", concreteira:"", laboratorio:"", visao:"grupos" };
+  var filtrosCt = { busca:"", somentePendentes:false, situacao:"pendentes", de:"", ate:"", concreteira:"", laboratorio:"", visao:"grupos" };
   function ctRowsArray(){
     var out = [];
     ctMap.forEach(function(d, id){
@@ -2274,6 +2435,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // v1.10: as marcadas "anterior ao sistema" não entram (não há o que ligar)
     { key:"semvinculo", label:"Sem vínculo com rastreabilidade", teste:function(r){ return r.anteriorAoSistema!==true && !ctLigacoes(r).confirmadas.length; } },
     { key:"anteriores", label:"Anteriores ao sistema", teste:ctAnterior },
+    { key:"concluidas", label:"Concluídas", teste:function(r){ var st = ctSituacao(r); return st==="concluida" || st==="ok28"; } },
     { key:"completo", label:"Completas", teste:function(r){ return !ctPendente(r) && !ctAguardando(r); } }
   ];
   function ctRowsFiltradas(){
@@ -2577,12 +2739,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var cont = {}; CT_SITUACOES.forEach(function(s){ cont[s.key] = rows.filter(s.teste).length; });
     var unicos = function(campo){ return Array.from(new Set(rows.map(function(r){ return r[campo]||""; }).filter(Boolean))).sort(); };
 
-    var kpis = '<div class="dash-kpis">'
-      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="atrasado"><div class="n">'+cont.atrasado+'</div><div class="l">Resultados atrasados</div><div class="d">data de rompimento já passou</div></button>'
-      + '<button type="button" class="dash-kpi-card tone-pendente" data-ct-sit="semana"><div class="n">'+cont.semana+'</div><div class="l">Romper nos próximos 7 dias</div><div class="d">programe o laboratório</div></button>'
-      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="abaixo"><div class="n">'+cont.abaixo+'</div><div class="l">Abaixo do fck</div><div class="d">em aberto · '+cont.decidir+' para você decidir</div></button>'
-      + '<button type="button" class="dash-kpi-card tone-ok" data-ct-sit="completo"><div class="n">'+cont.completo+'</div><div class="l">Completas</div><div class="d">de '+rows.length+' nota(s)</div></button>'
-    + '</div>';
+    // v1.19: menos filtros — os 4 cartões são a escolha principal; o resto fica em "Mais filtros"
+    var cartaoSit = function(k, tom, rot, sub){
+      return '<button type="button" class="dash-kpi-card tone-'+tom+'" data-ct-sit="'+k+'" aria-pressed="'+(filtrosCt.situacao===k)+'"><div class="n">'+cont[k]+'</div><div class="l">'+rot+'</div><div class="d">'+sub+'</div></button>';
+    };
+    var kpis = '<div class="dash-kpis ct-sits">'
+      + cartaoSit("pendentes", "nc", "Pendentes", "resultado atrasado ou abaixo do fck")
+      + cartaoSit("decidir", "pendente", "Você decide", "têm justificativa: concluir ou não")
+      + cartaoSit("semana", "info", "Romper em 7 dias", "programe o laboratório")
+      + cartaoSit("concluidas", "ok", "Concluídas", "inclui as que bateram aos 28 e aguardam 63")
+    + '</div>'
+    + (filtrosCt.situacao!=="todos" ? '<div class="ct-sit-atual">Mostrando: <b>'+escapeHtml((CT_SITUACOES.find(function(x){ return x.key===filtrosCt.situacao; })||{}).label||"")+'</b> · <button type="button" class="linkish" data-ct-sit="todos">ver todas as '+rows.length+'</button></div>' : '');
 
     var acoes = '<div class="ct-acoes">'
       + '<button class="btn primary" id="ct-btn-nova" type="button"><svg class="ti-i" data-i="plus"></svg>Lançar nota / resultado</button>'
@@ -2595,9 +2762,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     + '</div>';
 
     var opt = function(lista, sel, vazio){ return '<option value="">'+vazio+'</option>'+lista.map(function(v){ return '<option value="'+escapeHtml(v)+'"'+(v===sel?" selected":"")+'>'+escapeHtml(v)+'</option>'; }).join(""); };
+    var maisAtivos = ["de","ate","concreteira","laboratorio"].filter(function(k){ return filtrosCt[k]; }).length
+      + (["todos","pendentes","decidir","semana","concluidas"].indexOf(filtrosCt.situacao)===-1 ? 1 : 0);
     var filtros = '<div class="ct-filtros">'
       + '<div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
         + '<input type="text" id="ct-f-busca" placeholder="Buscar NF, local, peça, observação…" value="'+escapeHtml(filtrosCt.busca)+'"></div>'
+      + '<details class="ct-mais"'+(maisAtivos ? " open" : "")+'><summary>Mais filtros'+(maisAtivos ? " ("+maisAtivos+")" : "")+'</summary><div class="ct-mais-corpo">'
+      + '<select id="ct-f-sit-extra" aria-label="Outras situações"><option value="">Outras situações…</option>'
+        + CT_SITUACOES.filter(function(x){ return ["todos","pendentes","decidir","semana","concluidas"].indexOf(x.key)===-1; }).map(function(x){ return '<option value="'+x.key+'"'+(filtrosCt.situacao===x.key?" selected":"")+'>'+escapeHtml(x.label)+' ('+cont[x.key]+')</option>'; }).join("")+'</select>'
       + '<div class="ct-periodo"><input type="date" id="ct-f-de" value="'+escapeHtml(filtrosCt.de)+'" aria-label="Concretagem a partir de"><span>até</span><input type="date" id="ct-f-ate" value="'+escapeHtml(filtrosCt.ate)+'" aria-label="Concretagem até"></div>'
       + '<select id="ct-f-concreteira" aria-label="Concreteira">'+opt(unicos("concreteira"), filtrosCt.concreteira, "Todas as concreteiras")+'</select>'
       + '<select id="ct-f-laboratorio" aria-label="Laboratório">'+opt(unicos("laboratorio"), filtrosCt.laboratorio, "Todos os laboratórios")+'</select>'
@@ -2605,9 +2777,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '<button type="button" class="chip" data-ct-visao="grupos" aria-pressed="'+(filtrosCt.visao!=="tabela")+'">Por data</button>'
         + '<button type="button" class="chip" data-ct-visao="tabela" aria-pressed="'+(filtrosCt.visao==="tabela")+'">Tabela</button>'
       + '</div>'
-    + '</div>'
-    + '<div class="chips" id="ct-f-situacao" role="group" aria-label="Situação">'
-      + CT_SITUACOES.map(function(s){ return '<button type="button" class="chip" data-ct-sit="'+s.key+'" aria-pressed="'+(filtrosCt.situacao===s.key)+'">'+s.label+' <span class="n">'+cont[s.key]+'</span></button>'; }).join("")
+      + '</div></details>'
     + '</div>';
 
     container.innerHTML =
@@ -2639,6 +2809,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     [["ct-f-de","de"],["ct-f-ate","ate"],["ct-f-concreteira","concreteira"],["ct-f-laboratorio","laboratorio"]].forEach(function(p){
       document.getElementById(p[0]).addEventListener("change", function(e){ filtrosCt[p[1]] = e.target.value; renderCtTable(); });
     });
+    document.getElementById("ct-f-sit-extra").addEventListener("change", function(e){ filtrosCt.situacao = e.target.value || "todos"; renderViewCt(); });
     container.querySelectorAll("[data-ct-sit]").forEach(function(b){
       b.addEventListener("click", function(){ filtrosCt.situacao = b.getAttribute("data-ct-sit"); renderViewCt(); });
     });
@@ -4063,12 +4234,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     wireModalEvents();
     // v1.18: assinaturas também na rastreabilidade (engenharia e estagiário/técnico)
     if(draft.type==="rast"){
-      var bAr = m.querySelector("[data-assinar-rast]"); if(bAr) bAr.addEventListener("click", assinarRast);
+      m.querySelectorAll("[data-assinar-papel]").forEach(function(b){ b.addEventListener("click", function(){ assinarRast(b.getAttribute("data-assinar-papel")); }); });
       var bCr = m.querySelector("[data-cad-assin]"); if(bCr) bCr.addEventListener("click", abrirMinhaAssinatura);
     }
     // v1.15: assinatura / ficha travada
     if(draft.type==="fvs"){
-      var bA = m.querySelector("[data-assinar]"); if(bA) bA.addEventListener("click", assinarFvs);
+      m.querySelectorAll("[data-assinar-papel]").forEach(function(b){ b.addEventListener("click", function(){ assinarFvs(b.getAttribute("data-assinar-papel")); }); });
       var bC = m.querySelector("[data-cad-assin]"); if(bC) bC.addEventListener("click", abrirMinhaAssinatura);
       var bR = m.querySelector("[data-nova-rev]"); if(bR) bR.addEventListener("click", novaRevisaoFvs);
       m.classList.toggle("ficha-travada", !!draft.data.travada);
@@ -4135,23 +4306,47 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + 'Para corrigir algo, crie uma nova revisão: a versão atual fica guardada para consulta.</span>'
       + '<button type="button" class="btn" data-nova-rev>Nova revisão</button></div>';
   }
-  function fvsAssinaturasFieldHtml(d, id){
-    var acoes = "";
-    if(!d.travada){
-      if(!id) acoes = '<div class="hint">Salve a ficha para poder assinar.</div>';
-      else if(!minhaAssinatura) acoes = '<button type="button" class="btn" data-cad-assin>Cadastrar minha assinatura</button>';
-      else {
-        var papel = minhaAssinatura.papel || "engenheiro";
-        var ja = (d.assinaturas||[]).some(function(s){ return s.email===currentUserEmail && s.papel===papel; });
-        acoes = ja ? '<div class="hint">Você já assinou esta ficha.</div>'
-          : '<button type="button" class="btn primary" data-assinar>Assinar como '+escapeHtml(PAPEIS_ASSIN[papel]||papel)+'</button>'
-            + (papel==="engenheiro" ? '<div class="hint" style="margin-top:6px">A assinatura da engenharia fecha e trava a ficha.</div>' : '');
+  /* v1.19: toda ficha (FVS e rastreabilidade) tem DOIS lugares de assinatura,
+     sempre visíveis: inspeção/coleta (estagiário ou técnico) e engenharia.
+     Cada pessoa assina no seu lugar com o próprio login. Na FVS a assinatura da
+     engenharia trava a ficha, mas o(a) estagiário(a) ainda pode assinar depois. */
+  function assinaturaSlotsHtml(d, id, tipo){
+    var slots = [{ papel:"tecnico", rot:"Inspeção / coleta — estagiário(a) ou técnico(a)" }, { papel:"engenheiro", rot:"Engenheiro(a) responsável" }];
+    var html = slots.map(function(sl){
+      var a = assinaturaDoPapel(d, sl.papel), acao = "";
+      if(!a){
+        if(!id) acao = '<small class="hint">Salve a ficha para poder assinar.</small>';
+        else if(somenteLeitura) acao = '';
+        else if(!minhaAssinatura) acao = '<button type="button" class="btn small" data-cad-assin>Cadastrar minha assinatura</button>';
+        else if(sl.papel==="engenheiro" && d.travada) acao = '';
+        else acao = '<button type="button" class="btn small primary" data-assinar-papel="'+sl.papel+'">Assinar aqui</button>';
       }
-    }
+      return '<div class="assin-slot'+(a?" feita":"")+'"><div class="assin-slot-rot">'+escapeHtml(sl.rot)+'</div>'
+        + (a ? (a.imagem ? '<img src="'+escapeHtml(a.imagem)+'" alt="Assinatura de '+escapeHtml(a.nome)+'">' : '')
+            + '<div class="assin-slot-nome"><b>'+escapeHtml(a.nome)+'</b>'+(a.crea ? ' · '+escapeHtml(a.crea) : '')+'<small>'+escapeHtml(PAPEIS_ASSIN[a.papel]||a.papel)+' · '+escapeHtml(fmtDateTimeBR(a.em))+'</small></div>'
+          : '<div class="assin-slot-falta">Falta assinar</div>'+acao)
+        + '</div>';
+    }).join("");
+    var outras = (d.assinaturas||[]).filter(function(x){ return x.papel==="encarregado"; });
+    return '<div class="assin-slots">'+html+'</div>'+(outras.length ? assinaturasHtml(outras, fmtDateTimeBR) : '')
+      + (tipo==="fvs" && !d.travada ? '<div class="hint" style="margin-top:6px">A assinatura da engenharia fecha e trava a ficha.</div>' : '');
+  }
+  function fvsAssinaturasFieldHtml(d, id){
     var hist = (d.historicoRevisoes||[]).length ? '<div class="assin-hist"><b>Revisões anteriores</b>'
       + d.historicoRevisoes.map(function(h){ return '<div>Rev. '+String(h.rev).padStart(2,"0")+' · '+escapeHtml(fmtDateTimeBR(h.em))+' · '+escapeHtml(h.por||"")+' — '+escapeHtml(h.motivo||"")+'</div>'; }).join("")+'</div>' : '';
-    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturasHtml(d.assinaturas, fmtDateTimeBR)
-      + '<div class="assin-acoes-ficha">'+acoes+'</div>'+hist+'</fieldset>';
+    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturaSlotsHtml(d, id, "fvs")+hist+'</fieldset>';
+  }
+  // papel com que a pessoa assina no lugar escolhido (no lugar da inspeção vale o
+  // cadastro dela se for técnico/estagiário; se não, assina como estagiário)
+  function papelDoLugar(lugar){
+    var meu = (minhaAssinatura && minhaAssinatura.papel) || "";
+    if(lugar==="engenheiro") return "engenheiro";
+    return (meu==="tecnico" || meu==="estagiario") ? meu : "estagiario";
+  }
+  function avisoPapel(papel){
+    var meu = (minhaAssinatura && minhaAssinatura.papel) || "engenheiro";
+    if(meu===papel || (papel!=="engenheiro" && (meu==="tecnico" || meu==="estagiario"))) return "";
+    return "\n\nAtenção: seu cadastro de assinatura está como "+(PAPEIS_ASSIN[meu]||meu)+". Se isso estiver errado, corrija em “Minha assinatura”.";
   }
   function abrirMinhaAssinatura(){
     var u = auth.currentUser; if(!u) return;
@@ -4162,11 +4357,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         return Promise.race([envio, new Promise(function(res){ setTimeout(res, 8000); })]);
       } });
   }
-  async function assinarFvs(){
-    if(!draft || draft.type!=="fvs" || !draft.id || !minhaAssinatura || draft.data.travada) return;
-    var d = draft.data, papel = minhaAssinatura.papel || "engenheiro";
+  async function assinarFvs(lugar){
+    var papel = papelDoLugar(lugar || (minhaAssinatura && minhaAssinatura.papel) || "engenheiro");
+    if(!draft || draft.type!=="fvs" || !draft.id || !minhaAssinatura || (draft.data.travada && papel==="engenheiro")) return;
+    var d = draft.data;
     var ncAbertas = fichaNaoConformidades(d).filter(function(n){ return !n.concluida; }).length;
-    var txt = "Assinar a ficha "+(d.codigo||"FVS")+" "+(d.numero||"")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?";
+    var txt = "Assinar a ficha "+(d.codigo||"FVS")+" "+(d.numero||"")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?"+avisoPapel(papel);
     if(papel==="engenheiro") txt += "\n\nA ficha será FECHADA e TRAVADA: depois disso só dá para corrigir criando uma nova revisão."
       + (ncAbertas ? "\n\nAtenção: há "+ncAbertas+" não conformidade(s) sem conclusão." : "");
     if(!confirm(txt)) return;
@@ -4178,6 +4374,23 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!d.fechado){ d.fechado = true; if(!d.dataFechamento) d.dataFechamento = todayISO(); }
       d.travada = true; d.travadaEm = nowISO(); d.travadaPor = currentUserEmail;
     } else if((papel==="tecnico" || papel==="estagiario") && !d.inspecionadoPor){ d.inspecionadoPor = minhaAssinatura.nome||""; }
+    // v1.19: ficha já travada (engenharia assinou) → grava SÓ a assinatura nova,
+    // que é o que as regras do banco aceitam numa ficha travada
+    if(d.travada && papel!=="engenheiro"){
+      var dados = { assinaturas:d.assinaturas, updatedAt:nowISO(), updatedByEmail:currentUserEmail||"" };
+      if(d.inspecionadoPor) dados.inspecionadoPor = d.inspecionadoPor;
+      try{
+        var envio = fvsCol.doc(draft.id).update(dados);
+        await Promise.race([envio, new Promise(function(res){ setTimeout(res, 10000); })]);
+        draft.orig = JSON.stringify(draft.data); // a assinatura já foi gravada
+        renderModal();
+      }catch(ex){
+        console.error(ex);
+        alert("Não foi possível assinar: "+(ex && ex.code==="permission-denied" ? "o banco ainda não aceita essa assinatura (falta publicar as regras)." : (ex && ex.message ? ex.message : "erro desconhecido")));
+        draft.data = JSON.parse(antes); renderModal();
+      }
+      return;
+    }
     var ok = await saveDraft(true);
     if(!ok && draft && draft.type==="fvs"){ draft.data = JSON.parse(antes); renderModal(); }
   }
@@ -4186,26 +4399,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
      modelo (responsável pela coleta e engenheiro responsável). Não trava a
      ficha: betonadas podem ser completadas depois. */
   function rastAssinaturasFieldHtml(d, id){
-    var acoes = "";
-    if(!id) acoes = '<div class="hint">Salve a ficha para poder assinar.</div>';
-    else if(!minhaAssinatura) acoes = '<button type="button" class="btn" data-cad-assin>Cadastrar minha assinatura</button>';
-    else {
-      var papel = minhaAssinatura.papel || "engenheiro";
-      var ja = (d.assinaturas||[]).some(function(s){ return s.email===currentUserEmail && s.papel===papel; });
-      acoes = ja ? '<div class="hint">Você já assinou esta ficha.</div>'
-        : '<button type="button" class="btn primary" data-assinar-rast>Assinar como '+escapeHtml(PAPEIS_ASSIN[papel]||papel)+'</button>';
-    }
-    var falta = [];
-    if(!assinaturaDoPapel(d, "engenheiro")) falta.push("engenharia");
-    if(!assinaturaDoPapel(d, "tecnico")) falta.push("estagiário(a) ou técnico(a)");
-    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturasHtml(d.assinaturas, fmtDateTimeBR)
-      + (falta.length ? '<div class="hint">Falta assinar: '+falta.join(" e ")+'. A assinatura sai no Excel, no lugar de assinatura do modelo.</div>' : '')
-      + '<div class="assin-acoes-ficha">'+acoes+'</div></fieldset>';
+    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturaSlotsHtml(d, id, "rast")
+      + '<div class="hint" style="margin-top:6px">No Excel, cada assinatura sai embaixo do nome: coleta e engenheiro(a) responsável.</div></fieldset>';
   }
-  async function assinarRast(){
+  async function assinarRast(lugar){
     if(!draft || draft.type!=="rast" || !draft.id || !minhaAssinatura) return;
-    var d = draft.data, papel = minhaAssinatura.papel || "engenheiro";
-    if(!confirm("Assinar a rastreabilidade de "+fmtDateBR(d.data)+(d.blocoPav ? " ("+d.blocoPav+")" : "")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?")) return;
+    var d = draft.data, papel = papelDoLugar(lugar || minhaAssinatura.papel || "engenheiro");
+    if(!confirm("Assinar a rastreabilidade de "+fmtDateBR(d.data)+(d.blocoPav ? " ("+d.blocoPav+")" : "")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?"+avisoPapel(papel))) return;
     var antes = JSON.stringify(d);
     d.assinaturas = (d.assinaturas||[]).concat([{ papel:papel, nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"",
       email:currentUserEmail, uid:(auth.currentUser||{}).uid||"", em:nowISO(), imagem:minhaAssinatura.imagem||"" }]);
@@ -4607,6 +4807,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               + '<div class="field"><label>Descrição do produto/serviço não conforme</label><textarea data-nc-field="descricao" data-nc-idx="'+ni+'">'+escapeHtml(nc.descricao)+'</textarea></div>'
               + '<div class="field"><label>Correção proposta</label><textarea data-nc-field="correcao" data-nc-idx="'+ni+'">'+escapeHtml(nc.correcao)+'</textarea></div>'
             + '</div>'
+            + '<div class="grid2">'
+              + '<div class="field"><label>Prazo para resolver</label><input type="date" data-nc-field="prazo" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.prazo||"")+'"></div>'
+              + '<div class="field"><label>Responsável / empreiteira</label><input type="text" data-nc-field="responsavel" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.responsavel||"")+'"></div>'
+            + '</div>'
             + '<div class="grid3">'
               + '<div class="field"><label>Data de registro</label><input type="date" data-nc-field="dataRegistro" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.dataRegistro||"")+'"></div>'
               + '<div class="field"><label>Data de conclusão</label><input type="date" data-nc-field="dataConclusao" data-nc-idx="'+ni+'" value="'+escapeHtml(nc.dataConclusao||"")+'" '+(nc.concluida?"":"disabled")+'></div>'
@@ -4781,6 +4985,30 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }
     var newXf = xfBuild(attrs, children);
     var r = bumpBlock(state.stylesXml, "cellXfs", newXf);
+    state.stylesXml = r.xml;
+    state.styleCache[key] = r.index;
+    return r.index;
+  }
+  // v1.19: estilo com alinhamento sob medida (ex.: { shrinkToFit:"1", wrapText:"0", vertical:"top" }).
+  // "Reduzir para caber" mantém o texto numa linha só, sem mudar a altura da linha
+  // do modelo da SIG — a impressão fica igual ao papel.
+  function ensureAlignStyle(state, baseStyleId, alin){
+    var key = "a|"+baseStyleId+"|"+JSON.stringify(alin);
+    if(state.styleCache[key]!=null) return state.styleCache[key];
+    var parts = xfParts(getXfByIndex(state.stylesXml, baseStyleId));
+    var attrs = xfSetAttr(parts.attrs, "applyAlignment", "true");
+    var children = parts.children || "";
+    var aplicar = function(a){
+      Object.keys(alin).forEach(function(k){
+        var re = new RegExp('\\s'+k+'="[^"]*"');
+        a = re.test(a) ? a.replace(re, ' '+k+'="'+alin[k]+'"') : a+' '+k+'="'+alin[k]+'"';
+      });
+      return a;
+    };
+    if(/<alignment\b[^>]*\/>/.test(children)) children = children.replace(/<alignment\b([^>]*)\/>/, function(f, a){ return '<alignment'+aplicar(a)+'/>'; });
+    else if(/<alignment\b[^>]*>/.test(children)) children = children.replace(/<alignment\b([^>]*)>/, function(f, a){ return '<alignment'+aplicar(a)+'>'; });
+    else children = '<alignment'+aplicar("")+'/>' + children;
+    var r = bumpBlock(state.stylesXml, "cellXfs", xfBuild(attrs, children));
     state.stylesXml = r.xml;
     state.styleCache[key] = r.index;
     return r.index;
@@ -5518,13 +5746,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         // em branco ao lado para o valor (pensado para preenchimento à mão, mais
         // curto). Ativar quebra de linha e aumentar a altura das linhas 1 e 2 evita
         // que o texto digitado pelo sistema corte ou sobreponha a célula vizinha.
+        // v1.19: texto numa linha só ("reduzir para caber"), alturas do modelo da SIG
+        // intactas — antes a quebra de linha deformava a impressão.
         ["N1","U1","D2","J2","L2"].forEach(function(addr){
-          var baseStyle = xmlGetCellStyleId(sheetXml, addr);
-          var newStyle = ensureWrapStyle(state, baseStyle);
-          sheetXml = xmlSetCellStyleId(sheetXml, addr, newStyle);
+          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureAlignStyle(state, xmlGetCellStyleId(sheetXml, addr), { wrapText:"0", shrinkToFit:"1" }));
         });
-        sheetXml = xmlSetRowHeight(sheetXml, 1, 34); // linha 1
-        sheetXml = xmlSetRowHeight(sheetXml, 2, 46); // linha 2
 
         var ROWS = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]; // 17 betonadas no modelo impresso
         (d.linhas||[]).slice(0, ROWS.length).forEach(function(l, idx){
@@ -5571,17 +5797,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           sheetXml = xmlSetRowHeight(sheetXml, 23, alturaL23);
         }
         if(d.dataFechamento) sheetXml = xmlSetCellText(sheetXml, "B25", fmtDateBR(d.dataFechamento));
-        // v1.18: com assinatura, o campo ganha a linha "____" e "assinado eletronicamente em …"
-        // e a imagem da assinatura entra por cima (adicionarAssinaturasXlsx, abaixo)
+        // v1.19: nome numa linha só, no alto do campo; a assinatura (imagem) fica logo
+        // ABAIXO do nome de cada um — coleta (estagiário/técnico) e engenheiro(a).
         var assinT = assinaturaDoPapel(d, "tecnico"), assinE = assinaturaDoPapel(d, "engenheiro");
-        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+textoAssinado(d, "tecnico", d.responsavelColeta)
-          +(assinT ? "\n\n\n_______________________________"+rodapeAssinado(d, "tecnico") : ""));
-        sheetXml = xmlSetCellText(sheetXml, "S25", "  "+textoAssinado(d, "engenheiro", d.engenheiro)
-          +(assinE ? "\n\n\n_______________________"+rodapeAssinado(d, "engenheiro") : ""));
-        ["E25","S25"].forEach(function(addr){
-          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureWrapStyle(state, xmlGetCellStyleId(sheetXml, addr)));
+        var quando = function(a){ if(!a || !a.em) return ""; var t = new Date(a.em); return isNaN(t) ? "" : " (assinado em "+t.toLocaleDateString("pt-BR")+")"; };
+        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+textoAssinado(d, "tecnico", d.responsavelColeta)+quando(assinT));
+        sheetXml = xmlSetCellText(sheetXml, "S25", textoAssinado(d, "engenheiro", d.engenheiro)+quando(assinE));
+        ["E25","K25","S25"].forEach(function(addr){
+          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureAlignStyle(state, xmlGetCellStyleId(sheetXml, addr), { wrapText:"0", shrinkToFit:"1", vertical:"top" }));
         });
-        sheetXml = xmlSetRowHeight(sheetXml, 25, (assinT || assinE) ? 72 : 34); // linha 25
+        // com assinatura, a linha 25 ganha altura para a imagem caber embaixo do nome
+        sheetXml = xmlSetRowHeight(sheetXml, 25, (assinT || assinE) ? 52 : 18);
 
         sheetXml = xmlAddPageSetupLandscape(sheetXml);
 
@@ -5590,7 +5816,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         zip.file("xl/styles.xml", stylesXml);
 
         // v1.18: imagem das assinaturas — coleta (E25:J25) e engenheiro (S25:Y25)
-        return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinaturasParaXlsx(d, [5,10], [19,25], 25))
+        return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinaturasParaXlsx(d, [5,10], [19,25], 25).map(function(a){ return Object.assign(a, { pe:0.96, alt:0.62 }); }))
           .then(function(){ return zip.generateAsync({type:"blob"}); });
       });
     }).then(function(blob){

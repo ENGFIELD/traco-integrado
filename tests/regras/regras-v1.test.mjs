@@ -59,6 +59,15 @@ test("FVS travada: não altera nem apaga; nova revisão e vínculo passam", asyn
   await assertSucceeds(m.doc("fvs/tr").set({ numero: "1", revisao: 1, travada: false, assinaturas: [] }));
   await assertSucceeds(m.doc("fvs/tr").update({ numero: "2" }));
 });
+test("v1.19 FVS travada: dá baixa em NC e acrescenta assinatura do estagiário; não tira a da engenharia", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("fvs/t2").set({ numero: "5", revisao: 0, travada: false }));
+  await assertSucceeds(m.doc("fvs/t2").set({ numero: "5", revisao: 0, travada: true, assinaturas: [{ papel: "engenheiro" }], naoConformidades: [{ descricao: "x", concluida: false }] }));
+  await assertSucceeds(m.doc("fvs/t2").update({ naoConformidades: [{ descricao: "x", concluida: true }], updatedAt: "y" }));
+  await assertSucceeds(m.doc("fvs/t2").update({ assinaturas: [{ papel: "engenheiro" }, { papel: "estagiario" }], inspecionadoPor: "Matheus" }));
+  await assertFails(m.doc("fvs/t2").update({ assinaturas: [{ papel: "estagiario" }] }));
+  await assertFails(m.doc("fvs/t2").update({ naoConformidades: [], numero: "6" }));
+});
 test("fichas antigas (sem travada) continuam normais", async () => {
   const m = db("matheus.alves@sig.eng.br");
   await assertSucceeds(m.doc("fvs/antiga").set({ numero: "9" }));
