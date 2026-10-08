@@ -442,3 +442,15 @@ legend { font-size: 16px; }
 .pav-sel select[data-pav-trecho] { flex: 1 1 160px; }
 .unidade-add#nova-pavimento-caixa { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
 .unidade-add#nova-pavimento-caixa .btn { flex: 0 0 auto; }
+
+/* ---------- "Hoje você precisa…" (v1.6) ---------- */
+.dash-card-hoje { margin-bottom: 14px; border-left: 4px solid var(--accent-strong); }
+.dash-card-hoje .dash-li .dir { font: 800 15px var(--font-display); color: var(--text-muted); min-width: 18px; text-align: center; }
+.hoje-cont { margin-left: auto; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.hoje-mais { display: block; width: 100%; min-height: 44px; border: none; border-top: 1px solid var(--border); background: none; font: 600 13.5px var(--font-body); color: var(--text-muted); cursor: pointer; }
+.hoje-mais:hover { background: var(--surface-3); color: var(--text); }
+
+/* ---------- campos de busca: lupa à esquerda sem cobrir o texto (v1.6) ---------- */
+.search { position: relative; }
+.search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; z-index: 1; }
+.search input, .search input[type="text"] { padding-left: 38px !important; }

@@ -16,7 +16,7 @@ import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml } from "./modulos/obra/corte-predio.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
-import { initCronograma, definirDocumento as definirCronograma, renderViewCronograma, metasDaSemana, estruturaPrevista } from "./modulos/cronograma/cronograma.js";
+import { initCronograma, definirDocumento as definirCronograma, renderViewCronograma, metasDaSemana, estruturaPrevista, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -31,6 +31,10 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   auth.useEmulator("http://127.0.0.1:9099");
   dbf.useEmulator("127.0.0.1", 8080);
 }
+// v1.6: cache local no aparelho (IndexedDB). Economiza leituras da cota grátis
+// e deixa o app abrir mais rápido; também ajuda sem sinal. Se o navegador não
+// suportar (ou houver outra aba sem cache), o app segue normal, sem cache.
+dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn("cache local indisponível:", e && e.code); });
 
 /* ===== bloco 2 — aplicação ===== */
 (function(){
@@ -968,6 +972,101 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     return { niveis:niveis, cont:cont, topo:topo, pct:pct, previsto:previsto };
   }
 
+  /* ---------------- v1.6: assistente "Hoje você precisa…" (regras, sem IA) ----------------
+     Junta o que exige ação hoje em todas as áreas, dá uma prioridade (maior =
+     mais urgente) e o Início mostra as 5 primeiras. Cada sugestão leva direto
+     ao registro. Nada é gravado: é só leitura dos dados já carregados. */
+  function sugestoesDeHoje(){
+    var hoje = todayISO(), amanha = ctSomarDias(hoje, 1), out = [];
+    var dias = function(a, b){ return diffDias(a, b) || 0; };
+    // 1) Corpos de prova — agrupados por concretagem + idade (uma concretagem
+    //    tem várias NFs; cobrar/romper é feito por lote no laboratório)
+    var grupos = {};
+    var grupo = function(chave, base){ return grupos[chave] || (grupos[chave] = Object.assign({ nfs:[], locais:{} }, base)); };
+    ctRowsArray().forEach(function(r){
+      var loc = (r.local||"").split(/[—-]/)[0].trim() || "sem local";
+      CT_IDADES.forEach(function(i){
+        var st = ctStatusIdade(r, i), d = r[i.dataCampo];
+        var g = null;
+        if(st==="pendente") g = grupo("p|"+i.key+"|"+r.dataConcretagem, { tipo:"pendente", idade:i.key, conc:r.dataConcretagem, venc:d });
+        else if(st==="aguardando" && (d===hoje || d===amanha)) g = grupo("r|"+i.key+"|"+d, { tipo:"romper", idade:i.key, conc:r.dataConcretagem, venc:d, lab:r.laboratorio });
+        if(g){ g.nfs.push(r); g.locais[loc] = 1; }
+      });
+      if(ctAbaixoFck(r) && !/CONCLU|NC|n[ãa]o conformidade/i.test(r.observacao||"")) out.push({ cat:"ct-fck", prio: 75, icone:"alert", tom:"bad",
+        titulo:"Resultado abaixo do fck — NF "+r.notaRemessa, sub:loc+" · 28d "+String(ctMelhor28(r)).replace(".", ",")+" MPa de "+r.fck+" MPa: avaliar NC",
+        abrir:{ ct:r._id } });
+    });
+    Object.keys(grupos).forEach(function(k){
+      var g = grupos[k], n = g.nfs.length, locais = Object.keys(g.locais).join(", ");
+      var alvo = n===1 ? { ct:g.nfs[0]._id } : { view:"ct" };
+      var nfsTxt = n===1 ? "NF "+g.nfs[0].notaRemessa : n+" notas";
+      if(g.tipo==="pendente") out.push({ cat:"ct-atraso", prio: 70 + Math.min(20, dias(g.venc, hoje)), icone:"flask", tom:"bad",
+        titulo:"Cobrar resultado de "+g.idade+" dias — "+nfsTxt+" da concretagem de "+fmtDateBR(g.conc).slice(0,5),
+        sub:locais+" · venceu em "+fmtDateBR(g.venc)+" ("+dias(g.venc, hoje)+" dia(s))", abrir:alvo });
+      else out.push({ cat:"ct-romper", prio: g.venc===hoje ? 85 : 60, icone:"flask", tom:"warn",
+        titulo:"Romper CPs de "+g.idade+" dias "+(g.venc===hoje ? "hoje" : "amanhã")+" — "+nfsTxt+" de "+fmtDateBR(g.conc).slice(0,5),
+        sub:locais+(g.lab ? " · "+g.lab : ""), abrir:alvo });
+    });
+    // 2) Cronograma: atividades críticas atrasadas ou que terminam hoje/amanhã
+    var cr = cronogramaAtual();
+    if(cr){
+      cr.tarefas.forEach(function(t){
+        if(t.resumo || !t.ini || t.pct>=100 || t.folga==null) return;
+        var nome = t.nome.length<=6 && t.caminho.length ? t.caminho[t.caminho.length-1]+" — "+t.nome : t.nome;
+        if(t.folga<=0 && t.fim < hoje) out.push({ cat:"cron", prio: 80 + Math.min(15, dias(t.fim, hoje)), icone:"clock", tom:"bad",
+          titulo:"Atividade crítica atrasada: "+nome, sub:"terminava em "+fmtDateBR(t.fim)+" · "+t.pct+"% · atraso aqui atrasa a obra", abrir:{ view:"cronograma" } });
+        else if(t.folga<=0 && (t.fim===hoje || t.fim===amanha)) out.push({ cat:"cron", prio: 65, icone:"clock", tom:"warn",
+          titulo:"Concluir "+(t.fim===hoje ? "hoje" : "amanhã")+" (crítica): "+nome, sub:t.pct+"% feito · "+(t.caminho[0]||""), abrir:{ view:"cronograma" } });
+      });
+      var prev = estruturaPrevista(hoje), av = avancoEstrutura();
+      if(prev && prev.previsto!=null && av.topo!=null && av.topo < prev.previsto) out.push({ cat:"estrutura", prio: 72, icone:"layers", tom:"bad",
+        titulo:"Estrutura "+(prev.previsto-av.topo)+" pavimento(s) atrás do cronograma",
+        sub:"executado até "+NIVEIS_OBRA[av.topo]+" · previsto "+NIVEIS_OBRA[prev.previsto], abrir:{ view:"cronograma" } });
+    }
+    // 3) Não conformidades abertas há muito tempo
+    todasNaoConformidades().forEach(function(n){
+      if(n.concluida || n.diasAberto==null || n.diasAberto < 15) return;
+      out.push({ cat:"nc", prio: 40 + Math.min(25, Math.floor(n.diasAberto/10)), icone:"alert", tom:"bad",
+        titulo:"NC aberta há "+n.diasAberto+" dias: "+(n.descricao||"(sem descrição)"), sub:(n.ficha.codigo||"FVS")+" "+(n.ficha.numero||"")+" · "+(n.pavimentos[0]||n.ficha.local||""),
+        abrir:{ fvs:n.fichaId } });
+    });
+    // 4) Aço: entrega atrasada / hoje / amanhã
+    acoMap.forEach(function(e){
+      var st = acoSituacao(e, hoje), kg = acoPeso(e);
+      var desc = (e.fornecedor||"")+(kg ? " · "+(Math.round(kg/100)/10).toString().replace(".", ",")+" t" : "")+(e.destino ? " · "+e.destino : "");
+      if(st==="atrasada") out.push({ cat:"aco", prio: 68, icone:"truck", tom:"bad", titulo:"Entrega de aço atrasada — pedido "+(e.pedido||"s/ nº"),
+        sub:desc+" · previa "+fmtDateBR(e.dataPrevista), abrir:{ view:"aco" } });
+      else if(st==="programada" && (e.dataPrevista===hoje || e.dataPrevista===amanha)) out.push({ cat:"aco", prio: e.dataPrevista===hoje ? 62 : 50, icone:"truck", tom:"warn",
+        titulo:"Receber aço "+(e.dataPrevista===hoje ? "hoje" : "amanhã")+" — pedido "+(e.pedido||"s/ nº"), sub:desc+" · preparar local de descarga", abrir:{ view:"aco" } });
+    });
+    // 5) Concretagem acima de 2h30 sem ação corretiva
+    rastMap.forEach(function(r, id){
+      if(rastStatus(r).key==="pendente") out.push({ cat:"rast", prio: 58, icone:"truck", tom:"warn",
+        titulo:"Registrar ação corretiva — concretagem "+fmtDateBR(r.data), sub:(r.blocoPav||"")+" · betonada acima de 2h30", abrir:{ rast:id } });
+    });
+    // 6) FVS aberta muito depois da concretagem
+    fvsMap.forEach(function(f, id){
+      var base = f.dataConcretagem || f.dataAbertura;
+      if(f.fechado || !base) return;
+      var d = dias(base, hoje);
+      if(d >= 10) out.push({ cat:"fvs", prio: 30 + Math.min(20, Math.floor(d/5)), icone:"check", tom:"info",
+        titulo:"Fechar "+(f.codigo||"FVS")+" · "+(f.numero||"s/ nº"), sub:(fvsPavimentosList(f)[0]||f.local||"")+" · aberta há "+d+" dias da concretagem", abrir:{ fvs:id } });
+    });
+    out.sort(function(a,b){ return b.prio - a.prio; });
+    return out;
+  }
+  // As 5 principais com variedade: no máximo 2 por área (o resto fica em "ver todas")
+  function principaisDeHoje(lista, max){
+    var porCat = {}, top = [];
+    lista.forEach(function(x){
+      if(top.length >= max) return;
+      var c = x.cat.split("-")[0];
+      if((porCat[c]||0) >= 2) return;
+      porCat[c] = (porCat[c]||0) + 1; top.push(x);
+    });
+    return top;
+  }
+
   /* ---------------- painel geral (tela inicial) ---------------- */
   function renderViewDashboard(){
     var container = document.getElementById("view-dashboard");
@@ -1048,6 +1147,19 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         (e.destino||"sem destino")+(p? " · "+Math.round(p).toLocaleString("pt-BR")+" kg":""),
         st==="atrasada" ? "atrasada" : fmtDateBR(e.dataPrevista), st==="atrasada"?"bad":"");
     }).join("");
+    // v1.6: "Hoje você precisa…" — as 5 ações mais urgentes de todas as áreas
+    var sugest = sugestoesDeHoje();
+    var visiveis = window.__hojeTudo ? sugest : principaisDeHoje(sugest, 5);
+    var hojeHtml = '<div class="dash-card dash-card-hoje"><div class="dash-card-h"><h3>Hoje você precisa…</h3>'
+      + '<span class="hoje-cont">'+(sugest.length ? sugest.length+" pendência(s)" : "")+'</span></div>'
+      + (sugest.length ? visiveis.map(function(x, i){
+          var alvo = x.abrir.fvs ? 'data-abrir-fvs="'+escapeHtml(x.abrir.fvs)+'"' : (x.abrir.rast ? 'data-abrir-rast="'+escapeHtml(x.abrir.rast)+'"'
+            : (x.abrir.ct ? 'data-hoje-ct="'+escapeHtml(x.abrir.ct)+'"' : 'data-goto-view="'+x.abrir.view+'"'));
+          return li(alvo, x.icone, x.tom, x.titulo, x.sub, String(i+1), "");
+        }).join("")
+        + (sugest.length > 5 ? '<button type="button" class="hoje-mais" data-hoje-tudo>'+(window.__hojeTudo ? "Mostrar só as 5 principais" : "Ver todas as "+sugest.length)+'</button>' : '')
+        : '<div class="dash-vazio">Nada urgente por enquanto. 👍</div>')
+      + '</div>';
     // Metas da semana a partir do cronograma (caminho crítico primeiro)
     var metas = metasDaSemana(todayISO(), 8);
     var metasHtml = "";
@@ -1080,6 +1192,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         + '<h2>'+saud+(primeiroNome?", "+escapeHtml(primeiroNome):"")+'</h2>'
         + '<p class="dash-sub">'+escapeHtml(DEFAULT_OBRA)+'</p>'
       + '</div>'
+      + hojeHtml
       + kpisHtml
       + '<div class="dash-card dash-card-avanco"><div class="dash-card-h"><h3>Avanço da estrutura</h3>'
         + '<button type="button" class="mais" data-goto-view="pavimento">FVS por pavimento →</button></div>'
@@ -1118,6 +1231,11 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     container.querySelectorAll("[data-abrir-fvs]").forEach(function(el){
       el.addEventListener("click", function(){ openModal("fvs", el.getAttribute("data-abrir-fvs")); });
     });
+    container.querySelectorAll("[data-hoje-ct]").forEach(function(el){
+      el.addEventListener("click", function(){ abrirFichaNf(el.getAttribute("data-hoje-ct")); });
+    });
+    var bt = container.querySelector("[data-hoje-tudo]");
+    if(bt) bt.addEventListener("click", function(){ window.__hojeTudo = !window.__hojeTudo; renderViewDashboard(); });
     container.querySelectorAll("[data-abrir-rast]").forEach(function(el){
       el.addEventListener("click", function(){ openModal("rast", el.getAttribute("data-abrir-rast")); });
     });
@@ -1615,6 +1733,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         await batch.commit();
       }
       await ctCol.doc("_meta").set({
+        atualizadoEm: nowISO(), // v1.6: entra na sincronização incremental
         ultimaImportacaoEm: nowISO(), ultimaImportacaoPor: currentUserEmail||"",
         ultimoArquivo: file.name||"", ultimoTotalLinhas: linhas.length
       }, {merge:true});
@@ -2666,16 +2785,46 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       snap.docs.forEach(function(d){ rastMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
-    unsubCt = ctCol.onSnapshot(function(snap){
-      ctMap = new Map();
-      snap.docs.forEach(function(d){ ctMap.set(d.id, d.data()); });
+    // v1.6: Controle Tecnológico em sincronização INCREMENTAL. Ao abrir o app,
+    // as notas vêm do cache do aparelho (0 leituras) e só as alteradas desde a
+    // última vez são baixadas (atualizadoEm > última). Uma vez por semana, ou
+    // num aparelho novo, baixa tudo de novo por segurança.
+    var CT_SYNC_KEY = "traco-ct-sync-completa";
+    var precisaCompleta = true;
+    try{ precisaCompleta = (Date.now() - Number(localStorage.getItem(CT_SYNC_KEY)||0)) > 7*86400000; }catch(ex){}
+    ctMap = new Map();
+    var tratarCt = function(snap){
+      snap.docChanges().forEach(function(ch){
+        if(ch.type==="removed"){ if(precisaCompleta) ctMap.delete(ch.doc.id); return; } // no modo incremental, "removed" = só saiu do filtro
+        ctMap.set(ch.doc.id, ch.doc.data());
+      });
       render();
       // v1.5: rastreabilidade aberta mostra os resultados de CT das suas NFs —
       // atualiza quando chega resultado novo (sem atrapalhar quem está digitando).
       var ae = document.activeElement;
       if(draft && draft.type==="rast" && !document.getElementById("overlay").hidden
         && !(ae && document.getElementById("modal").contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) renderModal();
-    }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
+    };
+    var erroCt = function(err){ setSync("off","erro de sincronização"); console.error(err); };
+    var escutarCt = function(desde){
+      var q = desde ? ctCol.where("atualizadoEm", ">", desde) : ctCol;
+      unsubCt = q.onSnapshot(function(snap){
+        tratarCt(snap);
+        if(!desde && !snap.metadata.fromCache){ try{ localStorage.setItem(CT_SYNC_KEY, String(Date.now())); }catch(ex){} }
+      }, erroCt);
+    };
+    if(precisaCompleta){ escutarCt(null); }
+    else {
+      ctCol.get({ source:"cache" }).then(function(snap){
+        if(!snap.size){ precisaCompleta = true; escutarCt(null); return; }
+        var maior = "";
+        snap.docs.forEach(function(d){ var x = d.data(); ctMap.set(d.id, x); if(x.atualizadoEm && String(x.atualizadoEm) > maior) maior = String(x.atualizadoEm); });
+        render();
+        // margem de 2 dias: relógio de outro celular atrasado não faz perder alteração
+        var t = Date.parse(maior);
+        escutarCt(isNaN(t) ? null : new Date(t - 2*86400000).toISOString());
+      }).catch(function(){ precisaCompleta = true; escutarCt(null); });
+    }
     if(unsubPlantas) unsubPlantas();
     unsubPlantas = plantasCol.onSnapshot(function(snap){
       plantasMap = new Map();
