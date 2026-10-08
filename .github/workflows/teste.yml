@@ -3,10 +3,15 @@
 # nem no banco de dados.
 name: Testar e gerar link de teste
 
+# Só em pull request (antes rodava duas vezes: no push E no pull request).
 on:
   pull_request:
-  push:
-    branches-ignore: [main]
+  workflow_dispatch:
+
+# um push novo cancela o teste antigo do mesmo pull request
+concurrency:
+  group: teste-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
