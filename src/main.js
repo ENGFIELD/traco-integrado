@@ -17,6 +17,9 @@ import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml, corteEtapaHtml } from "./modulos/obra/corte-predio.js";
 import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapas.js";
+import { rotuloArea, rotuloSvg, rotuloCanvas } from "./modulos/rastreabilidade/rotulo-mapa.js";
+import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
+import { adicionarAssinaturasXlsx } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje } from "./modulos/aco/aco-cronograma.js";
 import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, definirEtapasManuais, etapasDaObra, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, semanaDe, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
@@ -577,6 +580,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // v1.5: cronograma (ver src/modulos/cronograma/) — só o documento "atual" é escutado
   var cronCol = dbf.collection("cronogramas");
   var cronErroAcesso = false, unsubCron = null, unsubCronProg = null, unsubCronEtapas = null;
+  // v1.15: assinatura eletrônica de cada pessoa (assinaturas/<uid>) e cópias das FVS antes de cada nova revisão
+  var assinCol = dbf.collection("assinaturas");
+  var fvsRevCol = dbf.collection("fvsRevisoes");
+  var minhaAssinatura = null, unsubAssin = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
@@ -3478,6 +3485,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     atualizarIndicadorConexao();
     conferirPendentesAnteriores();
     subscribeCollections();
+    // v1.15: a minha assinatura cadastrada (para o botão "Assinar" das FVS)
+    if(unsubAssin) unsubAssin();
+    unsubAssin = assinCol.doc(user.uid).onSnapshot(function(snap){
+      minhaAssinatura = snap.exists ? snap.data() : null;
+      if(draft && draft.type==="fvs") renderModal();
+    }, function(err){ console.warn("assinaturas:", err && err.code); });
     render();
     // Dá tempo das fichas chegarem do servidor antes de oferecer o rascunho.
     setTimeout(oferecerRascunhoPendente, 2500);
@@ -3492,6 +3505,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubCron){ unsubCron(); unsubCron=null; }
     if(unsubCronProg){ unsubCronProg(); unsubCronProg=null; }
     if(unsubCronEtapas){ unsubCronEtapas(); unsubCronEtapas=null; }
+    if(unsubAssin){ unsubAssin(); unsubAssin=null; } minhaAssinatura = null;
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -3906,6 +3920,20 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       });
     });
     wireModalEvents();
+    // v1.15: assinatura / ficha travada
+    if(draft.type==="fvs"){
+      var bA = m.querySelector("[data-assinar]"); if(bA) bA.addEventListener("click", assinarFvs);
+      var bC = m.querySelector("[data-cad-assin]"); if(bC) bC.addEventListener("click", abrirMinhaAssinatura);
+      var bR = m.querySelector("[data-nova-rev]"); if(bR) bR.addEventListener("click", novaRevisaoFvs);
+      m.classList.toggle("ficha-travada", !!draft.data.travada);
+      if(draft.data.travada){
+        m.querySelectorAll(".modal-body input, .modal-body select, .modal-body textarea").forEach(function(el){ el.disabled = true; });
+        // botões do corpo também (teclado), menos o bloco de assinaturas, o aviso e "abrir rastreabilidade"
+        m.querySelectorAll(".modal-body button").forEach(function(el){
+          if(!el.closest(".fvs-assin-bloco, .fvs-travada-banner") && el.id!=="open-linked-rast") el.disabled = true;
+        });
+      }
+    } else m.classList.remove("ficha-travada");
     if(draftAlterado()) guardarRascunho();
   }
 
@@ -3944,6 +3972,90 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var porGrupo = checklist[k] || {};
       return Object.keys(porGrupo).some(function(gk){ return porGrupo[gk]==="X"; });
     });
+  }
+
+  /* ---------------- v1.15: assinatura e ficha travada (Fase 2, itens 8 e 9) ----------------
+     Assinar = acrescentar em d.assinaturas uma cópia da assinatura cadastrada
+     (com data e hora) e salvar a ficha pelo caminho normal (saveDraft), que
+     funciona sem sinal. A assinatura da ENGENHARIA trava a ficha (d.travada):
+     ela não pode mais ser alterada nem excluída (também nas regras do banco).
+     Para corrigir: "Nova revisão" guarda uma cópia completa da ficha como está
+     em fvsRevisoes (nunca apagada) e libera a ficha com revisão +1. */
+  function fvsTravadaBannerHtml(d){
+    if(!d.travada) return "";
+    var eng = (d.assinaturas||[]).filter(function(s){ return s.papel==="engenheiro"; }).slice(-1)[0];
+    return '<div class="fvs-travada-banner"><b>🔒 Ficha assinada e travada</b>'
+      + '<span>'+(eng ? 'Assinada por '+escapeHtml(eng.nome)+' em '+escapeHtml(fmtDateTimeBR(eng.em))+'. ' : '')
+      + 'Para corrigir algo, crie uma nova revisão: a versão atual fica guardada para consulta.</span>'
+      + '<button type="button" class="btn" data-nova-rev>Nova revisão</button></div>';
+  }
+  function fvsAssinaturasFieldHtml(d, id){
+    var acoes = "";
+    if(!d.travada){
+      if(!id) acoes = '<div class="hint">Salve a ficha para poder assinar.</div>';
+      else if(!minhaAssinatura) acoes = '<button type="button" class="btn" data-cad-assin>Cadastrar minha assinatura</button>';
+      else {
+        var papel = minhaAssinatura.papel || "engenheiro";
+        var ja = (d.assinaturas||[]).some(function(s){ return s.email===currentUserEmail && s.papel===papel; });
+        acoes = ja ? '<div class="hint">Você já assinou esta ficha.</div>'
+          : '<button type="button" class="btn primary" data-assinar>Assinar como '+escapeHtml(PAPEIS_ASSIN[papel]||papel)+'</button>'
+            + (papel==="engenheiro" ? '<div class="hint" style="margin-top:6px">A assinatura da engenharia fecha e trava a ficha.</div>' : '');
+      }
+    }
+    var hist = (d.historicoRevisoes||[]).length ? '<div class="assin-hist"><b>Revisões anteriores</b>'
+      + d.historicoRevisoes.map(function(h){ return '<div>Rev. '+String(h.rev).padStart(2,"0")+' · '+escapeHtml(fmtDateTimeBR(h.em))+' · '+escapeHtml(h.por||"")+' — '+escapeHtml(h.motivo||"")+'</div>'; }).join("")+'</div>' : '';
+    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturasHtml(d.assinaturas, fmtDateTimeBR)
+      + '<div class="assin-acoes-ficha">'+acoes+'</div>'+hist+'</fieldset>';
+  }
+  function abrirMinhaAssinatura(){
+    var u = auth.currentUser; if(!u) return;
+    abrirCadastroAssinatura({ atual:minhaAssinatura, emailNome:(u.displayName||""),
+      salvar:function(dados){
+        dados.email = currentUserEmail; dados.atualizadoEm = nowISO();
+        var envio = assinCol.doc(u.uid).set(dados);
+        return Promise.race([envio, new Promise(function(res){ setTimeout(res, 8000); })]);
+      } });
+  }
+  async function assinarFvs(){
+    if(!draft || draft.type!=="fvs" || !draft.id || !minhaAssinatura || draft.data.travada) return;
+    var d = draft.data, papel = minhaAssinatura.papel || "engenheiro";
+    var ncAbertas = fichaNaoConformidades(d).filter(function(n){ return !n.concluida; }).length;
+    var txt = "Assinar a ficha "+(d.codigo||"FVS")+" "+(d.numero||"")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?";
+    if(papel==="engenheiro") txt += "\n\nA ficha será FECHADA e TRAVADA: depois disso só dá para corrigir criando uma nova revisão."
+      + (ncAbertas ? "\n\nAtenção: há "+ncAbertas+" não conformidade(s) sem conclusão." : "");
+    if(!confirm(txt)) return;
+    var antes = JSON.stringify(d);
+    d.assinaturas = (d.assinaturas||[]).concat([{ papel:papel, nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"",
+      email:currentUserEmail, uid:(auth.currentUser||{}).uid||"", em:nowISO(), imagem:minhaAssinatura.imagem||"", revisao:d.revisao||0 }]);
+    if(papel==="engenheiro"){
+      if(!d.engenheiro) d.engenheiro = minhaAssinatura.nome||"";
+      if(!d.fechado){ d.fechado = true; if(!d.dataFechamento) d.dataFechamento = todayISO(); }
+      d.travada = true; d.travadaEm = nowISO(); d.travadaPor = currentUserEmail;
+    } else if(papel==="tecnico" && !d.inspecionadoPor){ d.inspecionadoPor = minhaAssinatura.nome||""; }
+    var ok = await saveDraft(true);
+    if(!ok && draft && draft.type==="fvs"){ draft.data = JSON.parse(antes); renderModal(); }
+  }
+  async function novaRevisaoFvs(){
+    if(!draft || draft.type!=="fvs" || !draft.id || !draft.data.travada) return;
+    var motivo = prompt("Nova revisão da ficha "+(draft.data.codigo||"")+" "+(draft.data.numero||"")+".\n\nA versão assinada fica guardada para consulta. Qual o motivo da revisão?");
+    if(motivo==null) return;
+    motivo = motivo.trim();
+    if(!motivo){ alert("Informe o motivo da revisão."); return; }
+    var d = draft.data, rev = d.revisao||0;
+    var copia = JSON.parse(JSON.stringify(d));
+    try{
+      var ref = fvsRevCol.doc();
+      // cópia completa da ficha como estava (nunca é alterada nem apagada)
+      var envio = ref.set({ fvsId:draft.id, revisao:rev, motivo:motivo, em:nowISO(), por:currentUserEmail, ficha:paraFirestore(copia) });
+      await Promise.race([envio, new Promise(function(res){ setTimeout(res, 8000); })]);
+      d.historicoRevisoes = (d.historicoRevisoes||[]).concat([{ rev:rev, em:nowISO(), por:currentUserEmail, motivo:motivo, copiaId:ref.id }]);
+      d.revisao = rev+1; d.travada = false; d.travadaEm = ""; d.travadaPor = "";
+      d.assinaturas = []; d.fechado = false;
+      await saveDraft(true);
+    }catch(ex){
+      console.error(ex);
+      alert("Não foi possível criar a revisão: "+(ex && ex.code==="permission-denied" ? "o banco ainda não aceita revisões (falta publicar as regras)." : (ex && ex.message ? ex.message : "erro desconhecido"))+".");
+    }
   }
 
   function fvsModalHtml(d, id){
@@ -4058,8 +4170,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }
 
     return ''
-      + '<div class="modal-head"><h2 id="modal-title">'+(id?"Editar ficha FVS":"Nova ficha FVS")+'</h2>'+statusBadgeFvs(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
+      + '<div class="modal-head"><h2 id="modal-title">'+(id?(d.travada?"Ficha FVS assinada":"Editar ficha FVS"):"Nova ficha FVS")+(d.revisao?' <small class="fvs-rev">Rev. '+String(d.revisao).padStart(2,"0")+'</small>':'')+'</h2>'+statusBadgeFvs(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
       + '<div class="modal-body">'
+      + fvsTravadaBannerHtml(d)
       + (anyReprovado && (d.naoConformidades||[]).length===0 ? '<div class="banner">Há item(ns) marcado(s) como reprovado (X). Considere registrar uma não conformidade abaixo.</div>' : '')
       + '<fieldset><legend>Identificação</legend><div class="grid3">'
         + field("Código FVS","codigo",d.codigo,"text")
@@ -4081,6 +4194,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '<fieldset><legend>Não conformidades</legend>'+ncListFieldHtml(d)+'</fieldset>'
       + '<fieldset><legend>Observações</legend>'+field("","observacoes",d.observacoes,"textarea")+'</fieldset>'
       + '<fieldset><legend>Rastreabilidade de concreto vinculada</legend>'+linkHtml+'</fieldset>'
+      + fvsAssinaturasFieldHtml(d, id)
       + lastUpdatedHtml(d)
       + '</div>'
       + '<div class="modal-foot">'
@@ -4873,6 +4987,30 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(ncs.length===1) return ncs[0][campo]||"";
     return ncs.map(function(nc, i){ return (i+1)+") "+(nc[campo]||""); }).join("\n\n");
   }
+  // v1.15: última assinatura de cada papel (a da revisão atual) e o texto "assinado em …"
+  function assinaturaDoPapel(d, papel){
+    return (d.assinaturas||[]).filter(function(s){ return s.papel===papel; }).slice(-1)[0] || null;
+  }
+  function textoAssinado(d, papel, nome){
+    var a = assinaturaDoPapel(d, papel);
+    if(!a) return nome||"";
+    return (nome||a.nome||"")+(a.crea ? " · "+a.crea : "");
+  }
+  // linha que vai embaixo do traço de assinatura: "assinado eletronicamente em 08/10/2026 13:53"
+  function rodapeAssinado(d, papel){
+    var a = assinaturaDoPapel(d, papel);
+    if(!a || !a.em) return "";
+    var t = new Date(a.em); if(isNaN(t)) return "";
+    var z = function(n){ return String(n).padStart(2,"0"); };
+    return "\nassinado eletronicamente em "+z(t.getDate())+"/"+z(t.getMonth()+1)+"/"+t.getFullYear()+" "+z(t.getHours())+":"+z(t.getMinutes());
+  }
+  // imagens das assinaturas para o Excel: inspeção (técnico) e engenharia, nos campos do rodapé
+  function assinaturasParaXlsx(d, insp, eng, row){
+    var out = [], t = assinaturaDoPapel(d, "tecnico"), e = assinaturaDoPapel(d, "engenheiro");
+    if(t && t.imagem && insp) out.push({ imagem:t.imagem, col:insp[0], colFim:insp[1], row:row });
+    if(e && e.imagem && eng) out.push({ imagem:e.imagem, col:eng[0], colFim:eng[1], row:row });
+    return out;
+  }
   function fillNcObsFooterTemplate(sheetXml, state, d, layout){
     var ncs = fichaNaoConformidades(d);
     if(layout.nc && ncs.length){
@@ -4901,9 +5039,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }
     if(layout.footer){
       var f = layout.footer, r = f.row, L = f.labels;
-      if(f.cols.inspecionado) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.inspecionado[0])+r, (L.inspecionado||"")+(d.inspecionadoPor||"")+"\n\n___________________________");
+      if(f.cols.inspecionado) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.inspecionado[0])+r, (L.inspecionado||"")+textoAssinado(d, "tecnico", d.inspecionadoPor)+"\n\n___________________________"+rodapeAssinado(d, "tecnico"));
       if(f.cols.dataAbertura) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.dataAbertura[0])+r, (L.dataAbertura||"")+(d.dataAbertura?fmtDateBR(d.dataAbertura):"_______ / _______ / _______"));
-      if(f.cols.engenheiro) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.engenheiro[0])+r, (L.engenheiro||"ENGENHEIRO")+": "+(d.engenheiro||"")+"\n\n__________________________________");
+      if(f.cols.engenheiro) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.engenheiro[0])+r, (L.engenheiro||"ENGENHEIRO")+": "+textoAssinado(d, "engenheiro", d.engenheiro)+"\n\n__________________________________"+rodapeAssinado(d, "engenheiro"));
       if(f.cols.dataFechamento) sheetXml = xmlSetCellText(sheetXml, colLetter(f.cols.dataFechamento[0])+r, (L.dataFechamento||"")+(d.dataFechamento?fmtDateBR(d.dataFechamento):"_______/_______/_______"));
     }
     return sheetXml;
@@ -4943,7 +5081,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         stylesXml = state.stylesXml;
         zip.file("xl/worksheets/sheet1.xml", sheetXml);
         zip.file("xl/styles.xml", stylesXml);
-        return zip.generateAsync({type:"blob"});
+        // v1.15: imagem das assinaturas no rodapé do modelo
+        var ft = layout.footer;
+        var assinXlsx = ft ? assinaturasParaXlsx(d, ft.cols.inspecionado, ft.cols.engenheiro, ft.row) : [];
+        return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinXlsx)
+          .then(function(){ return zip.generateAsync({type:"blob"}); });
       });
     }).then(function(blob){
       triggerDownload(blob, safeName(tipoInfo.codigo)+"_"+safeName(d.numero)+".xlsx");
@@ -4964,7 +5106,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       rows.push([(tipoInfo?tipoInfo.codigo+" — "+tipoInfo.titulo:d.codigo+" — "+d.descricao)]);
       rows.push(["Obra", d.obra||"", "Local", d.local||""]);
       rows.push(["Nº da ficha", d.numero||"", "Data de abertura", d.dataAbertura?fmtDateBR(d.dataAbertura):""]);
-      rows.push(["Inspecionado por", d.inspecionadoPor||"", "Engenheiro responsável", d.engenheiro||""]);
+      rows.push(["Inspecionado por", textoAssinado(d, "tecnico", d.inspecionadoPor)+rodapeAssinado(d, "tecnico").replace("\n"," — "), "Engenheiro responsável", textoAssinado(d, "engenheiro", d.engenheiro)+rodapeAssinado(d, "engenheiro").replace("\n"," — ")]);
       rows.push(["Data de concretagem", d.dataConcretagem?fmtDateBR(d.dataConcretagem):"", "Data de fechamento", d.dataFechamento?fmtDateBR(d.dataFechamento):""]);
       rows.push([]);
 
@@ -5111,9 +5253,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           sheetXml = xmlSetCellStyleId(sheetXml, "A35", newStyleObs);
         }
 
-        sheetXml = xmlSetCellText(sheetXml, "A42", " Inspecionado por: "+(d.inspecionadoPor||"")+"\n\n___________________________");
+        sheetXml = xmlSetCellText(sheetXml, "A42", " Inspecionado por: "+textoAssinado(d, "tecnico", d.inspecionadoPor)+"\n\n___________________________"+rodapeAssinado(d, "tecnico"));
         sheetXml = xmlSetCellText(sheetXml, "F42", "Data de abertura da FVS: \n\n"+(d.dataAbertura ? fmtDateBR(d.dataAbertura) : "_______ / _______ / _______"));
-        sheetXml = xmlSetCellText(sheetXml, "K42", "ENGENHEIRO: "+(d.engenheiro||"")+"\n\n__________________________________");
+        sheetXml = xmlSetCellText(sheetXml, "K42", "ENGENHEIRO: "+textoAssinado(d, "engenheiro", d.engenheiro)+"\n\n__________________________________"+rodapeAssinado(d, "engenheiro"));
         sheetXml = xmlSetCellText(sheetXml, "S42", "Data de fechamento da FVS: \n\n"+(d.dataFechamento ? fmtDateBR(d.dataFechamento) : "_______/_______/_______"));
 
         stylesXml = state.stylesXml;
@@ -5163,7 +5305,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         out.file("xl/media/image2.png", imageBytes);
         out.file("xl/sharedStrings.xml", sharedStringsXml);
 
-        return out.generateAsync({type:"blob"});
+        // v1.15: imagem das assinaturas nos campos "Inspecionado por" (A42:E42) e "ENGENHEIRO" (K42:R42)
+        return adicionarAssinaturasXlsx(out, sheetFile, assinaturasParaXlsx(d, [1,5], [11,18], 42))
+          .then(function(){ return out.generateAsync({type:"blob"}); });
       });
     }).then(function(blob){
       triggerDownload(blob, "FVS_"+safeName(d.codigo)+"_"+safeName(d.numero)+".xlsx");
@@ -5888,30 +6032,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       poly.setAttribute("stroke", a.cor);
       poly.setAttribute("stroke-width", Math.max(2, vw*0.003));
       svgEl.appendChild(poly);
-      var cx = a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length*vw;
-      var cy = a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length*vh;
-      var fontSize = Math.max(16, vw*0.022);
-      var texto = "BT "+a.linhaSeq, nf = nfDaArea(a), fs2 = fontSize*0.8;
-      var rot = document.createElementNS(ns, "rect");
-      var rw = Math.max(texto.length*fontSize*0.62, nf.length*fs2*0.6)+fontSize*0.4, rh = nf ? fontSize*2.6 : fontSize*1.5;
-      rot.setAttribute("x", cx-rw/2); rot.setAttribute("y", cy-rh/2);
-      rot.setAttribute("width", rw); rot.setAttribute("height", rh);
-      rot.setAttribute("rx", 4); rot.setAttribute("fill", "#ffffff"); rot.setAttribute("fill-opacity","0.85");
-      svgEl.appendChild(rot);
-      var txt = document.createElementNS(ns, "text");
-      txt.setAttribute("x", cx); txt.setAttribute("y", nf ? cy-fontSize*0.55 : cy);
-      txt.setAttribute("text-anchor", "middle"); txt.setAttribute("dominant-baseline", "central");
-      txt.setAttribute("font-size", fontSize); txt.setAttribute("font-weight", "700"); txt.setAttribute("fill", a.cor);
-      txt.textContent = texto;
-      svgEl.appendChild(txt);
-      if(nf){
-        var txt2 = document.createElementNS(ns, "text");
-        txt2.setAttribute("x", cx); txt2.setAttribute("y", cy+fontSize*0.65);
-        txt2.setAttribute("text-anchor", "middle"); txt2.setAttribute("dominant-baseline", "central");
-        txt2.setAttribute("font-size", fs2); txt2.setAttribute("font-weight", "600"); txt2.setAttribute("fill", "#1a1a1a");
-        txt2.textContent = nf;
-        svgEl.appendChild(txt2);
-      }
+      // v1.15: rótulo no centro visual, tamanho igual ao do editor e do PNG
+      var textos = { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) };
+      rotuloSvg(svgEl, rotuloArea(a.pontos, vw, vh, textos), textos, a.cor);
     });
 
     if(mapaEstado && mapaEstado.desenhando && mapaEstado.pontosAtual.length>0){
@@ -5958,7 +6081,32 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // Redesenha a planta e cada área direto num <canvas> novo (mesma lógica de
   // redesenharSvg, só que em 2D canvas em vez de SVG) e acrescenta um
   // cabeçalho com o nº da rastreabilidade + a legenda embaixo.
-  function exportarMapeamentoPng(m){
+  // v1.15: a planta é desenhada de novo em ALTA resolução só para exportar
+  // (antes saía com a mesma imagem da tela, ~2000 px de largura). Limite de
+  // tamanho do canvas: iPhone/iPad aceitam até ~16,7 MP; os demais, bem mais.
+  async function plantaAltaResolucao(mp, canvasBase){
+    var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+    var limite = ios ? 14e6 : 32e6;
+    if(mp.tipo==="imagem" || !window.pdfjsLib) return canvasBase; // imagem já está no tamanho original
+    try{
+      var pdf = await pdfjsLib.getDocument(mp.plantaUrl).promise;
+      var page = await pdf.getPage(Math.min(Math.max(mp.pagina||1, 1), pdf.numPages));
+      var v1 = page.getViewport({ scale:1 });
+      var escala = Math.min(12, Math.sqrt(limite / (v1.width*v1.height)));
+      if(v1.width*escala <= canvasBase.width) return canvasBase;
+      var vp = page.getViewport({ scale:escala });
+      var c = document.createElement("canvas");
+      c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+      var ctx = c.getContext("2d");
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, c.width, c.height);
+      await page.render({ canvasContext:ctx, viewport:vp, intent:"print" }).promise;
+      return c;
+    }catch(ex){
+      console.warn("exportar mapeamento: alta resolução falhou, usando a da tela", ex);
+      return canvasBase;
+    }
+  }
+  async function exportarMapeamentoPng(m){
     var mp = draft.data.mapeamento;
     var canvasBase = m.querySelector("#mapa-canvas");
     var statusEl = m.querySelector("#mapa-status");
@@ -5966,26 +6114,31 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(statusEl) statusEl.textContent = "Carregue a planta antes de exportar.";
       return;
     }
+    if(statusEl) statusEl.textContent = "Gerando a imagem em alta resolução…";
+    var planta = await plantaAltaResolucao(mp, canvasBase);
     var areas = mp.areas || [];
-    var vw = canvasBase.width, vh = canvasBase.height;
-    var padMargem = 24, padTopo = 74, linhaLegenda = 28;
-    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + 20) : 36;
+    var vw = planta.width, vh = planta.height;
+    // cabeçalho e legenda crescem junto com a planta (k = 1 numa planta de 2000 px)
+    var k = Math.max(1, vw/2000);
+    var padMargem = Math.round(24*k), padTopo = Math.round(74*k), linhaLegenda = Math.round(28*k);
+    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + Math.round(20*k)) : Math.round(36*k);
     var out = document.createElement("canvas");
     out.width = vw + padMargem*2;
     out.height = padTopo + vh + alturaLegenda + padMargem;
     var ctx = out.getContext("2d");
+    if(!ctx){ if(statusEl) statusEl.textContent = "Imagem grande demais para este aparelho."; return; }
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, out.width, out.height);
 
     ctx.fillStyle = "#1a1a1a";
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText("Mapeamento da concretagem — "+rastRotulo(draft.data), padMargem, 30);
-    ctx.font = "13px sans-serif";
+    ctx.font = "bold "+Math.round(20*k)+"px Arial, Helvetica, sans-serif";
+    ctx.fillText("Mapeamento da concretagem — "+rastRotulo(draft.data), padMargem, Math.round(30*k));
+    ctx.font = Math.round(13*k)+"px Arial, Helvetica, sans-serif";
     ctx.fillStyle = "#666666";
-    ctx.fillText("Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"), padMargem, 52);
+    ctx.fillText("Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"), padMargem, Math.round(52*k));
 
     try{
-      ctx.drawImage(canvasBase, padMargem, padTopo);
+      ctx.drawImage(planta, padMargem, padTopo);
     }catch(ex){
       console.error("exportarMapeamentoPng: falha ao desenhar a planta", ex);
       if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem (falha ao ler a planta). Tente de novo depois de recarregar a página.";
@@ -6001,46 +6154,36 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       });
       ctx.closePath();
       ctx.globalAlpha = 0.32; ctx.fillStyle = a.cor; ctx.fill(); ctx.globalAlpha = 1;
-      ctx.strokeStyle = a.cor; ctx.lineWidth = Math.max(2, vw*0.003); ctx.stroke();
-
-      var cx = padMargem + (a.pontos.reduce(function(s,p){return s+p[0];},0)/a.pontos.length)*vw;
-      var cy = padTopo + (a.pontos.reduce(function(s,p){return s+p[1];},0)/a.pontos.length)*vh;
-      var fontSize = Math.max(16, vw*0.022);
-      var texto = "BT "+a.linhaSeq, nf = nfDaArea(a), fs2 = Math.round(fontSize*0.8);
-      ctx.font = "bold "+fontSize+"px sans-serif";
-      var w1 = ctx.measureText(texto).width;
-      ctx.font = "600 "+fs2+"px sans-serif";
-      var w2 = nf ? ctx.measureText(nf).width : 0;
-      var rw = Math.max(w1, w2) + fontSize, rh = nf ? fontSize*2.6 : fontSize*1.5;
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.fillRect(cx-rw/2, cy-rh/2, rw, rh);
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillStyle = a.cor; ctx.font = "bold "+fontSize+"px sans-serif";
-      ctx.fillText(texto, cx, nf ? cy-fontSize*0.55 : cy);
-      if(nf){ ctx.fillStyle = "#1a1a1a"; ctx.font = "600 "+fs2+"px sans-serif"; ctx.fillText(nf, cx, cy+fontSize*0.65); }
-      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.strokeStyle = a.cor; ctx.lineWidth = Math.max(2, vw*0.003); ctx.lineJoin = "round"; ctx.stroke();
+    });
+    // rótulos por cima de todas as áreas (mesma regra do editor: centro visual, tamanho pela planta)
+    areas.forEach(function(a){
+      if(!a.pontos || a.pontos.length<3) return;
+      var textos = { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) };
+      rotuloCanvas(ctx, rotuloArea(a.pontos, vw, vh, textos), textos, a.cor, padMargem, padTopo, 1);
     });
 
-    var yLeg = padTopo + vh + 28;
+    var yLeg = padTopo + vh + Math.round(28*k);
     if(areas.length===0){
-      ctx.fillStyle = "#666666"; ctx.font = "13px sans-serif";
+      ctx.fillStyle = "#666666"; ctx.font = Math.round(13*k)+"px Arial, Helvetica, sans-serif";
       ctx.fillText("Nenhuma área demarcada.", padMargem, yLeg);
     }else{
       areas.forEach(function(a, ai){
         var linha = (draft.data.linhas||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
         var y = yLeg + ai*linhaLegenda;
         ctx.fillStyle = a.cor;
-        ctx.fillRect(padMargem, y-13, 14, 14);
-        ctx.fillStyle = "#1a1a1a"; ctx.font = "bold 13px sans-serif";
-        ctx.fillText("BT "+a.linhaSeq + (linha && linha.notaFiscal ? "   ·   NF "+linha.notaFiscal : ""), padMargem+22, y-2);
+        ctx.fillRect(padMargem, y-Math.round(13*k), Math.round(14*k), Math.round(14*k));
+        ctx.fillStyle = "#1a1a1a"; ctx.font = "bold "+Math.round(13*k)+"px Arial, Helvetica, sans-serif";
+        ctx.fillText("BT "+a.linhaSeq + (linha && linha.notaFiscal ? "   ·   NF "+linha.notaFiscal : ""), padMargem+Math.round(22*k), y-Math.round(2*k));
       });
     }
 
     out.toBlob(function(blob){
       if(!blob){
-        if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem pra exportar.";
+        if(statusEl) statusEl.textContent = "Não foi possível gerar a imagem pra exportar (pouca memória no aparelho?).";
         return;
       }
+      if(statusEl) statusEl.textContent = "Imagem gerada: "+out.width+" × "+out.height+" px.";
       var url = URL.createObjectURL(blob);
       var link = document.createElement("a");
       link.href = url;
@@ -6231,6 +6374,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
     document.getElementById("btn-view-aco").addEventListener("click", function(){ switchView("aco"); });
     document.getElementById("btn-view-cronograma").addEventListener("click", function(){ switchView("cronograma"); });
+    document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
     initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
@@ -6306,6 +6450,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       tela("Plantas", "plantas", "map");
       tela("Entregas de aço", "aco", "truck");
       tela("Cronograma da obra", "cronograma", "clock");
+      out.push({ grupo:"Telas", titulo:"Minha assinatura", icone:"pen", busca:"assinatura assinar", abrir:abrirMinhaAssinatura });
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
       var fichas = [];

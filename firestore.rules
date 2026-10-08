@@ -22,10 +22,39 @@ service cloud.firestore {
       return request.auth != null && !somenteLeitura();
     }
 
+    // v1.15: ficha assinada pela engenharia fica travada (travada:true).
+    function fichaTravada() {
+      return resource.data.get('travada', false) == true;
+    }
+
     // Fichas FVS
     match /fvs/{docId} {
       allow read: if request.auth != null;
-      allow write: if podeEditar();
+      allow create: if podeEditar();
+      // Travada: só aceita (a) uma NOVA REVISÃO (número da revisão sobe) ou
+      // (b) o vínculo com a rastreabilidade. Nada mais muda na ficha assinada.
+      allow update: if podeEditar() && (
+        !fichaTravada()
+        || request.resource.data.get('revisao', 0) > resource.data.get('revisao', 0)
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rastreabilidadeId', 'updatedAt', 'updatedByEmail'])
+      );
+      allow delete: if podeEditar() && !fichaTravada();
+    }
+
+    // v1.15: cópia de cada FVS antes de uma nova revisão (histórico para
+    // auditoria) — só se cria, nunca se altera nem apaga.
+    match /fvsRevisoes/{docId} {
+      allow read: if request.auth != null;
+      allow create: if podeEditar();
+      allow update, delete: if false;
+    }
+
+    // v1.15: assinatura cadastrada de cada pessoa (o id do documento é o uid
+    // do login). Só a própria pessoa grava a sua; ninguém apaga.
+    match /assinaturas/{uid} {
+      allow read: if request.auth != null;
+      allow create, update: if podeEditar() && request.auth.uid == uid;
+      allow delete: if false;
     }
 
     // Controles de rastreabilidade de concreto (FORM-15)

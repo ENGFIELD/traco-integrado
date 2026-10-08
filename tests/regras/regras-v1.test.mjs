@@ -38,3 +38,37 @@ test("sem login não lê nem grava", async () => {
   await assertFails(anon.doc("fvs/a").get());
   await assertFails(anon.doc("fvs/z").set({ y: 1 }));
 });
+
+// v1.15: assinatura eletrônica, ficha travada e revisões
+test("assinatura: cada um grava só a sua; ninguém apaga", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("assinaturas/matheus.alves").set({ nome: "Matheus", imagem: "data:image/png;base64,AA" }));
+  await assertFails(m.doc("assinaturas/outra.pessoa").set({ nome: "x" }));
+  await assertSucceeds(db("outra.pessoa@sig.eng.br").doc("assinaturas/matheus.alves").get());
+  await assertFails(m.doc("assinaturas/matheus.alves").delete());
+  await assertFails(db("jessica.araujo@sig.eng.br").doc("assinaturas/jessica.araujo").set({ nome: "J" }));
+});
+test("FVS travada: não altera nem apaga; nova revisão e vínculo passam", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("fvs/tr").set({ numero: "1", revisao: 0, travada: false }));
+  await assertSucceeds(m.doc("fvs/tr").set({ numero: "1", revisao: 0, travada: true, assinaturas: [{ nome: "Eng" }] }));
+  await assertFails(m.doc("fvs/tr").update({ numero: "2" }));
+  await assertFails(m.doc("fvs/tr").set({ numero: "1", revisao: 0, travada: false }));
+  await assertFails(m.doc("fvs/tr").delete());
+  await assertSucceeds(m.doc("fvs/tr").update({ rastreabilidadeId: "r1", updatedAt: "x" }));
+  await assertSucceeds(m.doc("fvs/tr").set({ numero: "1", revisao: 1, travada: false, assinaturas: [] }));
+  await assertSucceeds(m.doc("fvs/tr").update({ numero: "2" }));
+});
+test("fichas antigas (sem travada) continuam normais", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("fvs/antiga").set({ numero: "9" }));
+  await assertSucceeds(m.doc("fvs/antiga").update({ numero: "10" }));
+  await assertSucceeds(m.doc("fvs/antiga").delete());
+});
+test("revisões guardadas: cria, não altera nem apaga", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("fvsRevisoes/r1").set({ fvsId: "tr", revisao: 0 }));
+  await assertFails(m.doc("fvsRevisoes/r1").update({ revisao: 5 }));
+  await assertFails(m.doc("fvsRevisoes/r1").delete());
+  await assertFails(db("jessica.araujo@sig.eng.br").doc("fvsRevisoes/r2").set({ x: 1 }));
+});

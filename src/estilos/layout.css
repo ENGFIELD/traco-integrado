@@ -608,3 +608,30 @@ body.somente-leitura .fvs-semana-acao, body.somente-leitura .et-sel { display: n
 .et-sel select { max-width: 200px; min-height: 36px; }
 .et-item .et-origem { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 @media (max-width: 640px) { .et-item { grid-template-columns: 1fr; } .et-sel { justify-content: flex-start; } .et-sel select { max-width: 100%; flex: 1 1 140px; } }
+
+/* v1.15: assinatura eletrônica e ficha travada */
+.assin-modal { max-width: 720px; }
+.assin-pad-caixa { position: relative; margin-top: 12px; border-radius: 12px; background: #fff; border: 1.5px dashed var(--text-muted); }
+.assin-pad { display: block; width: 100%; height: 190px; touch-action: none; cursor: crosshair; border-radius: 12px; }
+.assin-linha { position: absolute; left: 24px; right: 24px; bottom: 34px; border-top: 1px solid #b9b9b9; padding-top: 4px; font-size: 11.5px; color: #8a8a8a; pointer-events: none; }
+.assin-acoes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.assin-acoes label.btn { cursor: pointer; }
+.assin-msg { color: var(--text-muted); flex: 1 1 200px; }
+.assin-atual { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: 13px; color: var(--text-muted); }
+.assin-atual img, .assin-item img { background: #fff; border-radius: 8px; border: 1px solid var(--border); padding: 4px 8px; height: 56px; max-width: 200px; object-fit: contain; }
+.assin-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 10px; }
+.assin-item { display: flex; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); min-width: 0; }
+.assin-info { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
+.assin-info span, .assin-info small { color: var(--text-muted); }
+.assin-acoes-ficha { margin-top: 10px; }
+.assin-hist { margin-top: 12px; font-size: 12.5px; color: var(--text-muted); display: grid; gap: 3px; }
+.assin-hist b { color: var(--text); }
+.fvs-rev { font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); font-weight: 600; margin-left: 6px; }
+.fvs-travada-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 12px 14px; margin-bottom: 14px; border-radius: 12px; background: var(--good-soft); border: 1px solid var(--good); }
+.fvs-travada-banner b { color: var(--good); }
+.fvs-travada-banner span { flex: 1 1 260px; font-size: 13.5px; }
+/* ficha travada: nada no corpo responde ao toque, só o bloco de assinaturas e o banner */
+.ficha-travada .modal-body > fieldset:not(.fvs-assin-bloco) { pointer-events: none; }
+.ficha-travada #btn-save, .ficha-travada #btn-delete, .ficha-travada #btn-toggle-close { display: none !important; }
+body.somente-leitura [data-assinar], body.somente-leitura [data-cad-assin], body.somente-leitura [data-nova-rev], body.somente-leitura #btn-minha-assinatura { display: none !important; }
+.ficha-travada .modal-body #open-linked-rast { pointer-events: auto; }
