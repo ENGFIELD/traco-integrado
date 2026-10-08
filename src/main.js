@@ -10,13 +10,14 @@ import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
+import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml } from "./modulos/obra/corte-predio.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
-import { initCronograma, definirDocumento as definirCronograma, renderViewCronograma, metasDaSemana, estruturaPrevista, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
+import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -503,6 +504,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   var fvsCol = dbf.collection("fvs");
   var rastCol = dbf.collection("rastreabilidade");
   var ctCol = dbf.collection("controleTecnologico");
+  // v1.8: cópia da última planilha importada (modelo para exportar no mesmo layout).
+  // Só é lida quando alguém exporta — não pesa na abertura do app.
+  var modelosCol = dbf.collection("planilhasModelo");
   // Biblioteca de plantas de forma: cada planta é cadastrada uma única vez
   // aqui (comprimida, ver comprimirPlantaEmImagem) e depois só é escolhida
   // numa lista dentro de cada rastreabilidade (ver mapeamentoFieldHtml) —
@@ -514,7 +518,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   var acoMap = new Map(), acoErroAcesso = false, unsubAco = null;
   // v1.5: cronograma (ver src/modulos/cronograma/) — só o documento "atual" é escutado
   var cronCol = dbf.collection("cronogramas");
-  var cronErroAcesso = false, unsubCron = null;
+  var cronErroAcesso = false, unsubCron = null, unsubCronProg = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
@@ -1169,6 +1173,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '<div class="metas-resumo">Semana de '+fmtDateBR(metas.semana.ini).slice(0,5)+' a '+fmtDateBR(metas.semana.fim).slice(0,5)
           + ' · <b>'+metas.total+'</b> atividade(s) · <b class="'+(metas.criticas?"txt-bad":"")+'">'+metas.criticas+'</b> no caminho crítico'
           + (metas.atrasadas ? ' · <b class="txt-bad">'+metas.atrasadas+'</b> atrasada(s) no total' : '')+'</div>'
+        + (function(){ var av = avancoObra(todayISO()); if(!av) return "";
+            var dif = av.real - av.previsto;
+            return '<div class="metas-avanco"><div class="cr-barra" title="real '+av.real+'% · previsto '+av.previsto+'%"><i class="real" style="width:'+av.real+'%"></i><i class="prev" style="left:'+av.previsto+'%"></i></div>'
+              + '<span>Obra <b>'+av.real+'%</b> concluída · previsto hoje '+av.previsto+'% · <b class="'+(dif<0?"txt-bad":"")+'">'+(dif>=0?"+":"")+dif+' p.p.</b></span></div>'; })()
         + (metas.itens.length ? metas.itens.map(function(x){
             var t = x.t;
             // "E5", "3º", "COB": nome curto é o pavimento — mostra o serviço junto
@@ -1738,14 +1746,90 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         ultimoArquivo: file.name||"", ultimoTotalLinhas: linhas.length
       }, {merge:true});
 
+      var modeloOk = true;
+      try{ await ctSalvarModelo(file, buf); }catch(exM){ modeloOk = false; console.warn("modelo da planilha:", exM); }
       ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s)"
-        +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")+".", "ok");
+        +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")+"."
+        +(modeloOk ? "" : " (Não consegui guardar a planilha como modelo de exportação.)"), "ok");
     } catch(ex){
       console.error(ex);
       ctSetStatus("Não foi possível importar: "+(ex && ex.message ? ex.message : "erro desconhecido")+".", "err");
     } finally {
       ctImportando = false;
       if(bar) bar.classList.remove("busy");
+    }
+  }
+
+  /* ---- v1.8: modelo da planilha (para exportar no mesmo formato) ----
+     O arquivo importado é guardado em base64, em partes de até 700 mil
+     caracteres (limite de 1 MB por documento do Firestore):
+       planilhasModelo/ct        → { arquivo, em, por, partes, bytes }
+       planilhasModelo/ct_p0..N  → { dados }  */
+  var CT_MODELO_PARTE = 700000;
+  function bufParaB64(buf){
+    var u8 = new Uint8Array(buf), s = "";
+    for(var i=0;i<u8.length;i+=0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i+0x8000));
+    return btoa(s);
+  }
+  function b64ParaU8(b64){
+    var s = atob(b64), u8 = new Uint8Array(s.length);
+    for(var i=0;i<s.length;i++) u8[i] = s.charCodeAt(i);
+    return u8;
+  }
+  async function ctSalvarModelo(file, buf){
+    var b64 = bufParaB64(buf);
+    if(b64.length > CT_MODELO_PARTE*12) throw new Error("planilha grande demais para guardar como modelo");
+    var partes = Math.ceil(b64.length / CT_MODELO_PARTE);
+    for(var i=0;i<partes;i++) await modelosCol.doc("ct_p"+i).set({ dados: b64.slice(i*CT_MODELO_PARTE, (i+1)*CT_MODELO_PARTE) });
+    await modelosCol.doc("ct").set({ arquivo:file.name||"", em:nowISO(), por:currentUserEmail||"", partes:partes, bytes:buf.byteLength });
+  }
+  async function ctCarregarModelo(){
+    var meta = await modelosCol.doc("ct").get();
+    if(!meta.exists) return null;
+    var m = meta.data(), pedacos = [];
+    for(var i=0;i<m.partes;i++){
+      var p = await modelosCol.doc("ct_p"+i).get();
+      if(!p.exists) return null;
+      pedacos.push(p.data().dados);
+    }
+    return { arquivo:m.arquivo, em:m.em, dados:b64ParaU8(pedacos.join("")) };
+  }
+  // Exporta TODAS as notas do app na planilha-modelo (não só as filtradas na tela)
+  async function ctExportarPlanilha(arquivoEscolhido){
+    var btn = document.getElementById("ct-btn-exportar");
+    if(btn) btn.disabled = true;
+    try{
+      await garantirLibs();
+      var modelo;
+      if(arquivoEscolhido){
+        var bufE = await arquivoEscolhido.arrayBuffer();
+        modelo = { arquivo:arquivoEscolhido.name, dados:new Uint8Array(bufE) };
+        try{ await ctSalvarModelo(arquivoEscolhido, bufE); }catch(exM){ console.warn(exM); }
+      } else {
+        ctSetStatus("Buscando a planilha-modelo…");
+        modelo = await ctCarregarModelo();
+      }
+      if(!modelo){
+        ctSetStatus("Ainda não há planilha-modelo guardada. Escolha a planilha do Controle Tecnológico (a mesma que costuma importar) — ela vira o modelo e a exportação sai no mesmo layout.", "err");
+        var fi = document.getElementById("ct-modelo-input");
+        if(fi) fi.click();
+        return;
+      }
+      ctSetStatus("Preenchendo a planilha…");
+      var zip = await JSZip.loadAsync(modelo.dados);
+      var regs = ctRowsArray();
+      var res = await preencherPlanilhaCt(zip, regs, CT_COLS);
+      var blob = await zip.generateAsync({ type:"blob", compression:"DEFLATE", mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      var base = String(modelo.arquivo||"Controle Tecnologico.xlsx").replace(/\.xlsx?$/i, "").replace(/\s*\(app \d{2}-\d{2}-\d{4}\)$/, "");
+      triggerDownload(blob, base+" (app "+fmtDateBR(todayISO()).replace(/\//g,"-")+").xlsx");
+      ctSetStatus("Planilha exportada no layout de \""+modelo.arquivo+"\": "+res.atualizadas+" nota(s) atualizada(s)"
+        +(res.novas ? ", "+res.novas+" nota(s) lançada(s) no app acrescentada(s)" : "")+" · "+res.celulas+" célula(s) preenchida(s)."
+        +(res.avisos.length ? " "+res.avisos.join(" ") : ""), "ok");
+    } catch(ex){
+      console.error(ex);
+      ctSetStatus("Não foi possível exportar: "+(ex && ex.message ? ex.message : "erro desconhecido")+".", "err");
+    } finally {
+      if(btn) btn.disabled = false;
     }
   }
 
@@ -1815,6 +1899,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     { key:"abaixo", label:"Abaixo do fck", teste:ctAbaixoFck },
     { key:"recuperou", label:"Atingiu só aos 63d", teste:ctRecuperou63 },
     { key:"aguardando", label:"Aguardando", teste:ctAguardando },
+    // v1.8: NF sem rastreabilidade ligada (nem pela NF nas betonadas, nem manual)
+    { key:"semvinculo", label:"Sem vínculo com rastreabilidade", teste:function(r){ return !ctLigacoes(r).confirmadas.length; } },
     { key:"completo", label:"Completas", teste:function(r){ return !ctTemPendencia(r) && !ctAguardando(r); } }
   ];
   function ctRowsFiltradas(){
@@ -1971,6 +2057,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '<button class="btn primary" id="ct-btn-nova" type="button"><svg class="ti-i" data-i="plus"></svg>Lançar nota / resultado</button>'
       + '<button class="btn" id="ct-btn-importar" type="button"><svg class="ti-i" data-i="file"></svg>Importar planilha…</button>'
       + '<input type="file" id="ct-file-input" accept=".xlsx" hidden>'
+      + '<button class="btn" id="ct-btn-exportar" type="button" title="Gera a planilha do Controle Tecnológico no mesmo layout da importada, com os dados do app"><svg class="ti-i" data-i="download"></svg>Exportar planilha</button>'
+      + '<input type="file" id="ct-modelo-input" accept=".xlsx" hidden>'
       + '<div class="ct-acoes-info"><span>'+ctUltimoImportInfo()+'</span><div class="ct-import-msg" id="ct-import-msg"></div></div>'
     + '</div>';
 
@@ -2007,6 +2095,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       fileInput.value = "";
     });
     document.getElementById("ct-btn-nova").addEventListener("click", function(){ abrirFichaNf(null); });
+    document.getElementById("ct-btn-exportar").addEventListener("click", function(){ ctExportarPlanilha(null); });
+    var modeloInput = document.getElementById("ct-modelo-input");
+    modeloInput.addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      modeloInput.value = "";
+      if(f) ctExportarPlanilha(f);
+    });
     document.getElementById("ct-f-busca").addEventListener("input", function(e){ filtrosCt.busca = e.target.value; renderCtTable(); });
     [["ct-f-de","de"],["ct-f-ate","ate"],["ct-f-concreteira","concreteira"],["ct-f-laboratorio","laboratorio"]].forEach(function(p){
       document.getElementById(p[0]).addEventListener("change", function(e){ filtrosCt[p[1]] = e.target.value; renderCtTable(); });
@@ -2846,6 +2941,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       definirCronograma(snap.exists ? snap.data() : null);
       render();
     }, function(err){ cronErroAcesso = true; console.warn("cronogramas:", err && err.code); render(); });
+    // v1.8: % lançado no app por atividade (documento pequeno, separado do cronograma)
+    if(unsubCronProg) unsubCronProg();
+    unsubCronProg = cronCol.doc("progresso").onSnapshot(function(snap){
+      definirProgressoCron(snap.exists ? snap.data() : null);
+      render();
+    }, function(err){ console.warn("cronogramas/progresso:", err && err.code); });
   }
   function showApp(user){
     document.getElementById("auth-screen").hidden = true;
@@ -2867,6 +2968,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubCt){ unsubCt(); unsubCt=null; }
     if(unsubAco){ unsubAco(); unsubAco=null; }
     if(unsubCron){ unsubCron(); unsubCron=null; }
+    if(unsubCronProg){ unsubCronProg(); unsubCronProg=null; }
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }

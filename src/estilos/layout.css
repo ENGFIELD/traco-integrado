@@ -454,3 +454,18 @@ legend { font-size: 16px; }
 .search { position: relative; }
 .search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; z-index: 1; }
 .search input, .search input[type="text"] { padding-left: 38px !important; }
+
+/* v1.8: % das atividades editável pelo app */
+.cr-prog-edit { display: block; width: 100%; text-align: left; background: none; border: 1px dashed transparent; border-radius: 8px; padding: 4px 6px; margin: -4px -6px; cursor: pointer; font: inherit; color: inherit; }
+.cr-prog-edit:hover, .cr-prog-edit:focus-visible { border-color: var(--border-strong); background: var(--surface-2, rgba(0,0,0,.03)); }
+.cr-prog-edit .cr-lapis { color: var(--accent, #2563eb); font-weight: 600; margin-left: 4px; }
+.cr-app { color: var(--accent, #2563eb); font-weight: 600; }
+.cr-pct-mini { margin-left: 6px; font: inherit; font-size: 11.5px; color: var(--accent, #2563eb); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; cursor: pointer; }
+.cr-pct-modal { max-width: 460px; }
+.cr-pct-nome { display: flex; flex-direction: column; gap: 2px; margin: 0 0 12px; }
+.cr-pct-nome small, .cr-pct-nome span { color: var(--text-muted); font-size: 12.5px; }
+.cr-pct-valor { display: flex; align-items: center; gap: 6px; font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.cr-pct-valor input { width: 96px; font-size: 22px; font-weight: 700; padding: 6px 10px; }
+.cr-pct-modal input[type=range] { width: 100%; margin: 6px 0 10px; }
+.metas-avanco { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; font-size: 13px; }
+.metas-avanco .cr-barra { flex: 0 0 140px; }

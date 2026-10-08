@@ -17,6 +17,7 @@ export const ICONES = {
   chevr: '<path d="m9 6 6 6-6 6"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   file: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h6"/>',
+  download: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
 };
 export function pintarIcones(raiz) {
   (raiz || document).querySelectorAll("svg.ti-i[data-i]:not([data-ok])").forEach((s) => {

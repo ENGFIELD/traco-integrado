@@ -3,6 +3,10 @@
  *
  * Firestore: cronogramas/atual  → { arquivo, importadoEm, importadoPor, linhas:[{a,b,c,d,e,f}] }
  *            cronogramas/v_<data> → cópia de cada versão enviada (histórico)
+ *            cronogramas/progresso → { base: importadoEm, itens: { "<id>": { pct, em, por } } }
+ *              % de avanço lançado no app por atividade. Vale só para a versão
+ *              cujo importadoEm = base: enviar um cronograma novo recomeça do
+ *              % que vier no arquivo (o progresso anterior fica no histórico).
  * As linhas são guardadas como vieram da planilha; o cálculo (hierarquia,
  * folgas, caminho crítico) é refeito no navegador a cada carregamento.
  */
@@ -14,6 +18,7 @@ const COLS = ["a", "b", "c", "d", "e", "f"];
 
 let ctx = null;            // { col, todayISO, nowISO, usuario, fmtDateBR, garantirLibs, erroAcesso }
 let doc = null;            // cronogramas/atual
+let prog = null;           // cronogramas/progresso
 let cr = null;             // cronograma calculado
 let aba = "semana";
 let busca = "";
@@ -27,7 +32,46 @@ export function definirDocumento(d) {
     const linhas = doc.linhas.map((o) => COLS.map((k) => o[k]));
     cr = lerCronograma(linhas);
     calcularFolgas(cr);
+    cr.tarefas.forEach((t) => { t.pctArquivo = t.pct; });
   }
+  aplicarProgresso();
+}
+export function definirProgresso(p) { prog = p || null; aplicarProgresso(); }
+
+// Aplica o % lançado no app sobre o % do arquivo e recalcula os grupos
+// (resumos) afetados pela média ponderada pela duração — mesmo critério do
+// MS Project. Assim o Início, as metas e a estrutura usam o mesmo número.
+function aplicarProgresso() {
+  if (!cr) return;
+  cr.tarefas.forEach((t) => { t.pct = t.pctArquivo; t.pctApp = null; });
+  const itens = prog && doc && prog.base === doc.importadoEm ? prog.itens || {} : {};
+  const afetados = new Set();
+  Object.keys(itens).forEach((id) => {
+    const t = cr.porId.get(Number(id)), v = itens[id];
+    if (!t || t.resumo || !v || v.pct == null) return;
+    t.pct = v.pct; t.pctApp = v;
+    for (let p = t.pai; p != null; p = cr.porId.get(p).pai) afetados.add(p);
+  });
+  if (!afetados.size) return;
+  const S = new Map(), W = new Map(); // soma (dur × %) e soma dur das folhas abaixo de cada resumo
+  for (let i = cr.tarefas.length - 1; i >= 0; i--) {
+    const t = cr.tarefas[i];
+    if (!t.resumo) { S.set(t.id, (t.dur || 0) * t.pct); W.set(t.id, t.dur || 0); }
+    else if (afetados.has(t.id) && W.get(t.id) > 0) t.pct = Math.round(S.get(t.id) / W.get(t.id));
+    if (t.pai != null) { S.set(t.pai, (S.get(t.pai) || 0) + (S.get(t.id) || 0)); W.set(t.pai, (W.get(t.pai) || 0) + (W.get(t.id) || 0)); }
+  }
+}
+
+/** Avanço da obra hoje (ponderado pela duração): real × previsto — usado na aba e no Início */
+export function avancoObra(hoje) {
+  if (!cr) return null;
+  const folhas = cr.tarefas.filter((t) => !t.resumo && t.ini && t.fim && t.dur > 0);
+  const somaD = folhas.reduce((a, t) => a + t.dur, 0) || 1;
+  return {
+    real: Math.round(folhas.reduce((a, t) => a + t.dur * t.pct, 0) / somaD),
+    previsto: Math.round(folhas.reduce((a, t) => a + t.dur * pctPrevisto(t, hoje), 0) / somaD),
+    lancadasNoApp: cr.tarefas.filter((t) => t.pctApp).length,
+  };
 }
 export function cronogramaCarregado() { return cr; }
 
@@ -105,12 +149,9 @@ export function renderViewCronograma(container) {
   const atrasadas = cr.tarefas.filter((t) => !t.resumo && t.ini && statusTarefa(t, hoje) === "atrasada");
   const criticas = cr.tarefas.filter(critica);
   // Avanço ponderado pela duração (mesmo critério do MS Project): real × previsto para hoje
-  const folhas = cr.tarefas.filter((t) => !t.resumo && t.ini && t.fim && t.dur > 0);
-  const somaD = folhas.reduce((a, t) => a + t.dur, 0) || 1;
-  const realPond = Math.round(folhas.reduce((a, t) => a + t.dur * t.pct, 0) / somaD);
-  const prevPond = Math.round(folhas.reduce((a, t) => a + t.dur * pctPrevisto(t, hoje), 0) / somaD);
+  const av = avancoObra(hoje), realPond = av.real, prevPond = av.previsto;
   const kpis = `<div class="dash-kpis">
-    <div class="dash-kpi-card tone-info"><div class="n">${realPond}<small style="font-size:15px">%</small></div><div class="l">Obra concluída</div><div class="d">previsto para hoje: ${prevPond}% · MS Project: ${geral.pct}%</div></div>
+    <div class="dash-kpi-card tone-info"><div class="n">${realPond}<small style="font-size:15px">%</small></div><div class="l">Obra concluída</div><div class="d">previsto para hoje: ${prevPond}%${av.lancadasNoApp ? ` · ${av.lancadasNoApp} atividade(s) atualizada(s) no app` : ` · MS Project: ${geral.pct}%`}</div></div>
     <button type="button" class="dash-kpi-card tone-pendente" data-cr-aba="semana"><div class="n">${semana.length}</div><div class="l">Atividades nesta semana</div><div class="d">${semana.filter(critica).length} no caminho crítico</div></button>
     <button type="button" class="dash-kpi-card tone-nc" data-cr-aba="atrasadas"><div class="n">${atrasadas.length}</div><div class="l">Atividades atrasadas</div><div class="d">término vencido ou ≥25% abaixo do previsto</div></button>
     <button type="button" class="dash-kpi-card tone-ok" data-cr-aba="critico"><div class="n">${ctx.fmtDateBR(fim)}</div><div class="l">Término previsto</div><div class="d">${criticas.length} atividades críticas pendentes</div></button></div>`;
@@ -130,6 +171,9 @@ export function renderViewCronograma(container) {
   container.querySelectorAll("[data-cr-aba]").forEach((b) => b.addEventListener("click", () => { aba = b.dataset.crAba; renderViewCronograma(container); }));
   const bi = container.querySelector("[data-cr-busca]");
   bi.addEventListener("input", () => { busca = bi.value; const p = bi.selectionStart; renderViewCronograma(container); const n = container.querySelector("[data-cr-busca]"); n.focus(); n.setSelectionRange(p, p); });
+  container.querySelectorAll("[data-cr-pct]").forEach((el) => el.addEventListener("click", (ev) => {
+    ev.stopPropagation(); editarPct(+el.dataset.crPct, container);
+  }));
   container.querySelectorAll("[data-cr-abrir]").forEach((el) => el.addEventListener("click", () => {
     const id = +el.dataset.crAbrir; abertos.has(id) ? abertos.delete(id) : abertos.add(id); renderViewCronograma(container);
   }));
@@ -138,7 +182,7 @@ export function renderViewCronograma(container) {
 function cabecalho() {
   const info = doc ? `Versão de ${esc(doc.arquivo || "")} · enviada ${esc(String(doc.importadoEm || "").slice(0, 10).split("-").reverse().join("/"))} por ${esc(doc.importadoPor || "")}` : "Nenhum cronograma enviado ainda.";
   return `<div class="pav-header"><h2>Cronograma</h2></div>
-    <p class="view-desc">Cronograma da obra (MS Project). O caminho crítico é recalculado a cada versão enviada; as metas da semana aparecem no Início.</p>
+    <p class="view-desc">Cronograma da obra (MS Project). Toque no % de uma atividade para atualizar o avanço pelo app — o Início e as metas usam esse valor. Enviar um cronograma novo recomeça do % que vier no arquivo.</p>
     <div class="ct-acoes"><button class="btn primary" type="button" data-cr-enviar><svg class="ti-i" data-i="file"></svg>${doc ? "Enviar cronograma atualizado…" : "Enviar cronograma…"}</button>
       <input type="file" data-cr-arquivo accept=".xlsx,.xls" hidden>
       <div class="ct-acoes-info"><span>${info}</span><div class="ct-import-msg" data-cr-msg></div></div></div>`;
@@ -165,7 +209,8 @@ function linha(t, hoje) {
   return `<div class="cr-item ${critica(t) ? "critica" : ""}">
     <div class="cr-nome"><small>${esc(t.caminho.join(" › "))}</small><b>${esc(t.nome)}</b></div>
     <div class="cr-datas">${ctx.fmtDateBR(t.ini).slice(0, 5)} → ${ctx.fmtDateBR(t.fim).slice(0, 5)}<small>${t.dur ? String(t.dur).replace(".", ",") + " d" : ""}</small></div>
-    <div class="cr-prog">${barraHtml(t, hoje)}<small>${t.pct}% · prev. ${pctPrevisto(t, hoje)}%</small></div>
+    ${t.resumo ? `<div class="cr-prog">${barraHtml(t, hoje)}<small>${t.pct}% · prev. ${pctPrevisto(t, hoje)}%</small></div>`
+      : `<button type="button" class="cr-prog cr-prog-edit" data-cr-pct="${t.id}" title="Atualizar o % desta atividade">${barraHtml(t, hoje)}<small>${t.pct}% · prev. ${pctPrevisto(t, hoje)}%${t.pctApp ? ` <span class="cr-app">✎ app</span>` : ""} <span class="cr-lapis">editar</span></small></button>`}
     <div class="cr-tags">${critica(t) ? `<span class="pill has-nc"><span class="dot"></span>Crítica</span>` : (t.folga != null && t.pct < 100 ? `<span class="cr-folga">folga ${t.folga} d</span>` : "")}<span class="pill ${tom}"><span class="dot"></span>${rot}</span></div>
   </div>`;
 }
@@ -197,7 +242,7 @@ function arvore(hoje) {
   const pos = (iso) => ((idxUtil(iso) - a) / Math.max(1, b - a) * 100);
   return `<div class="cr-sub">Toque num grupo para abrir · linha vermelha = hoje · barra cheia = concluído</div><div class="cr-arvore">`
     + visiveis.map((t) => `<div class="cr-no n${Math.min(t.nivel, 4)} ${critica(t) ? "critica" : ""}" ${t.resumo ? `data-cr-abrir="${t.id}"` : ""}>
-        <div class="cr-no-nome">${t.resumo ? `<span class="cr-seta">${abertos.has(t.id) || t0 ? "▾" : "▸"}</span>` : ""}${esc(t.nome)}<small>${t.pct}%</small></div>
+        <div class="cr-no-nome">${t.resumo ? `<span class="cr-seta">${abertos.has(t.id) || t0 ? "▾" : "▸"}</span>` : ""}${esc(t.nome)}${t.resumo ? `<small>${t.pct}%</small>` : `<button type="button" class="cr-pct-mini" data-cr-pct="${t.id}" title="Atualizar %">${t.pct}%${t.pctApp ? " ✎" : ""}</button>`}</div>
         <div class="cr-gantt"><i class="hoje" style="left:${(h - a) / Math.max(1, b - a) * 100}%"></i>
           ${t.ini && t.fim ? `<i class="bar ${t.resumo ? "resumo" : ""}" style="left:${pos(t.ini)}%;width:${Math.max(0.4, pos(t.fim) - pos(t.ini))}%"><i style="width:${t.pct}%"></i></i>` : ""}</div>
       </div>`).join("") + `</div>`;
@@ -224,7 +269,13 @@ async function importar(arquivo, container) {
     if (tamanho > 900000) throw new Error("arquivo grande demais para guardar (" + Math.round(tamanho / 1024) + " KB)");
     msg.textContent = "Salvando " + teste.tarefas.length + " atividades…";
     const versao = "v_" + dados.importadoEm.replace(/[^\d]/g, "").slice(0, 14);
-    await Promise.all([ctx.col.doc("atual").set(dados), ctx.col.doc(versao).set(dados)]);
+    // guarda o progresso lançado no app junto da versão que está saindo (histórico)
+    if (doc && prog && prog.base === doc.importadoEm && prog.itens && Object.keys(prog.itens).length) {
+      const anterior = "p_" + String(doc.importadoEm).replace(/[^\d]/g, "").slice(0, 14);
+      await ctx.col.doc(anterior).set(prog);
+    }
+    await Promise.all([ctx.col.doc("atual").set(dados), ctx.col.doc(versao).set(dados),
+      ctx.col.doc("progresso").set({ base: dados.importadoEm, itens: {} })]);
     msg.className = "ct-import-msg ok";
     msg.textContent = `Cronograma atualizado: ${teste.tarefas.length} atividades, ${teste.tarefas.filter(critica).length} no caminho crítico. A versão anterior foi guardada no histórico.`;
   } catch (ex) {
@@ -232,4 +283,61 @@ async function importar(arquivo, container) {
     msg.className = "ct-import-msg err";
     msg.textContent = "Não foi possível importar: " + (ex && ex.message ? ex.message : "erro desconhecido") + ".";
   }
+}
+
+// ---------- atualizar o % de uma atividade pelo app ----------
+function editarPct(id, container) {
+  const t = cr && cr.porId.get(id);
+  if (!t || t.resumo) return;
+  const hoje = ctx.todayISO();
+  const ov = document.createElement("div");
+  ov.className = "overlay ct-ficha-ov";
+  ov.innerHTML = `<div class="modal cr-pct-modal" role="dialog" aria-modal="true">
+    <div class="modal-head"><h2>Avanço da atividade</h2><button class="close-x" data-fechar aria-label="Fechar">✕</button></div>
+    <div class="modal-body">
+      <p class="cr-pct-nome"><small>${esc(t.caminho.join(" › "))}</small><b>${esc(t.nome)}</b><span>${ctx.fmtDateBR(t.ini)} → ${ctx.fmtDateBR(t.fim)} · previsto para hoje: ${pctPrevisto(t, hoje)}%</span></p>
+      <div class="cr-pct-valor"><input type="number" min="0" max="100" step="1" inputmode="numeric" data-pct value="${t.pct}"><span>%</span></div>
+      <input type="range" min="0" max="100" step="5" data-pct-range value="${t.pct}" aria-label="% concluído">
+      <div class="chips">${[0, 25, 50, 75, 100].map((v) => `<button type="button" class="chip" data-pct-rapido="${v}">${v === 100 ? "Concluída (100%)" : v + "%"}</button>`).join("")}</div>
+      <p class="view-desc" style="margin-top:10px">No arquivo do MS Project: ${t.pctArquivo}%.${t.pctApp ? ` Atualizado no app por ${esc(t.pctApp.por || "")} em ${ctx.fmtDateBR(String(t.pctApp.em || "").slice(0, 10))}.` : ""}</p>
+      <div class="ct-import-msg" data-pct-msg></div>
+    </div>
+    <div class="modal-foot"><div>${t.pctApp ? `<button class="btn" data-pct-arquivo>Voltar ao % do arquivo</button>` : ""}</div>
+      <div><button class="btn" data-fechar>Cancelar</button><button class="btn primary" data-pct-salvar>Salvar</button></div></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const num = ov.querySelector("[data-pct]"), rng = ov.querySelector("[data-pct-range]");
+  const fechar = () => { ov.remove(); document.removeEventListener("keydown", tecla); };
+  const tecla = (ev) => { if (ev.key === "Escape") fechar(); };
+  document.addEventListener("keydown", tecla);
+  num.addEventListener("input", () => { rng.value = num.value; });
+  rng.addEventListener("input", () => { num.value = rng.value; });
+  const gravar = async (valor, botao) => {
+    botao.disabled = true;
+    const item = valor == null ? { pct: null, em: ctx.nowISO(), por: ctx.usuario() } : { pct: valor, em: ctx.nowISO(), por: ctx.usuario() };
+    try {
+      const envio = ctx.col.doc("progresso").set({ base: doc.importadoEm, itens: { [String(id)]: item } }, { merge: true });
+      const r = await Promise.race([envio.then(() => "ok"), new Promise((res) => setTimeout(() => res("pendente"), 10000))]);
+      if (r === "pendente") alert("Sem conexão no momento — o % será enviado quando o sinal voltar. Mantenha o app aberto.");
+      fechar();
+    } catch (ex) {
+      console.error(ex);
+      ov.querySelector("[data-pct-msg]").textContent = "Não foi possível salvar: " + (ex && ex.message ? ex.message : "erro desconhecido");
+      botao.disabled = false;
+    }
+  };
+  ov.addEventListener("click", (ev) => {
+    if (ev.target === ov || ev.target.closest("[data-fechar]")) return fechar();
+    const r = ev.target.closest("[data-pct-rapido]");
+    if (r) { num.value = rng.value = r.dataset.pctRapido; return; }
+    const a = ev.target.closest("[data-pct-arquivo]");
+    if (a) return gravar(null, a);
+    const sv = ev.target.closest("[data-pct-salvar]");
+    if (sv) {
+      const v = Math.round(Number(String(num.value).replace(",", ".")));
+      if (isNaN(v) || v < 0 || v > 100) { ov.querySelector("[data-pct-msg]").textContent = "Informe um valor de 0 a 100."; return; }
+      gravar(v, sv);
+    }
+  });
+  num.focus(); num.select();
 }
