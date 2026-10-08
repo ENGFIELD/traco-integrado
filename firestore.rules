@@ -27,6 +27,16 @@ service cloud.firestore {
       return resource.data.get('travada', false) == true;
     }
 
+    // v1.19: na ficha travada ainda pode (a) dar baixa / incluir não
+    // conformidades e (b) ACRESCENTAR a assinatura do estagiário/técnico
+    // (a lista de assinaturas só cresce: ninguém tira a da engenharia).
+    function baixaOuAssinaturaNaTravada() {
+      let campos = request.resource.data.diff(resource.data).affectedKeys();
+      return campos.hasOnly(['rastreabilidadeId', 'updatedAt', 'updatedByEmail', 'naoConformidades', 'assinaturas', 'inspecionadoPor'])
+        && (!campos.hasAny(['assinaturas'])
+            || request.resource.data.assinaturas.size() > resource.data.get('assinaturas', []).size());
+    }
+
     // Fichas FVS
     match /fvs/{docId} {
       allow read: if request.auth != null;
@@ -37,6 +47,7 @@ service cloud.firestore {
         !fichaTravada()
         || request.resource.data.get('revisao', 0) > resource.data.get('revisao', 0)
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rastreabilidadeId', 'updatedAt', 'updatedByEmail'])
+        || baixaOuAssinaturaNaTravada()
       );
       allow delete: if podeEditar() && !fichaTravada();
     }

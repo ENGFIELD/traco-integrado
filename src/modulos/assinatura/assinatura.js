@@ -77,7 +77,8 @@ export function abrirCadastroAssinatura(opts) {
       <div class="grid3">
         <div class="field"><label for="assin-nome">Nome completo</label><input id="assin-nome" type="text" autocomplete="name" value="${esc(a.nome || opts.emailNome || "")}"></div>
         <div class="field"><label for="assin-papel">Como você assina as fichas</label><select id="assin-papel">
-          ${Object.keys(PAPEIS).map((k) => `<option value="${k}"${(a.papel || "engenheiro") === k ? " selected" : ""}>${PAPEIS[k]}</option>`).join("")}</select></div>
+          <option value="">— escolha a sua função —</option>
+          ${Object.keys(PAPEIS).map((k) => `<option value="${k}"${a.papel === k ? " selected" : ""}>${PAPEIS[k]}</option>`).join("")}</select></div>
         <div class="field"><label for="assin-crea">CREA / CFT (opcional)</label><input id="assin-crea" type="text" inputmode="numeric" value="${esc(a.crea || "")}"></div>
       </div>
       ${a.imagem ? `<div class="assin-atual"><span>Assinatura atual:</span><img src="${esc(a.imagem)}" alt="Assinatura atual"></div>` : ""}
@@ -146,6 +147,7 @@ export function abrirCadastroAssinatura(opts) {
     if (!b) return;
     const nome = ov.querySelector("#assin-nome").value.trim();
     if (!nome) { msg.textContent = "Informe o nome completo."; return; }
+    if (!ov.querySelector("#assin-papel").value) { msg.textContent = "Escolha a sua função (engenheiro, estagiário, técnico…)."; return; }
     let imagem = a.imagem || "";
     if (!vazio) imagem = recortarAssinatura(cv);
     if (!imagem) { msg.textContent = "Assine no quadro ou importe uma foto da assinatura."; return; }
