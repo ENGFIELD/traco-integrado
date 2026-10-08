@@ -52,7 +52,49 @@ export function chavesDaEntrega(e) {
 }
 
 const situacao = (e, hoje) => e.status === "entregue" ? "entregue" : e.status === "cancelado" ? "cancelado"
+  : e._concretadoEm ? "concretada"
   : (e.dataPrevista && e.dataPrevista < hoje ? "atrasada" : "programada");
+
+/* v1.18: aço × concretagem. Se a laje já foi CONCRETADA (há rastreabilidade
+ * naquele pavimento), a armação dela chegou — não faz sentido cobrar o aço.
+ *
+ * Nível do prédio (00 Fundação … 27 Telhado, mesma lista do corte) da
+ * rastreabilidade → chave da laje: concretar o PISO do 4º pavimento é
+ * concretar o "Teto do 3º Pavimento" (chave pav:3), igual ao cronograma e ao
+ * projeto de armação. */
+export function chaveDoNivel(nivel) {
+  if (nivel == null || nivel < 2) return null;
+  if (nivel === 2) return "subsolo";                  // piso do 1º embasamento = teto do subsolo
+  if (nivel <= 6) return "emb:" + (nivel - 2);        // 2º–5º embasamento
+  if (nivel === 7) return "emb:5";                    // piso do 1º pavimento = teto do 5º embasamento
+  if (nivel <= 24) return "pav:" + (nivel - 7);       // 2º pav … cobertura
+  return { 25: "cob", 26: "dep", 27: "cm" }[nivel] || null;
+}
+/** concretagens: [{ data, niveis:[…] }] → Map chave → [datas em ordem] */
+export function concretadasPorChave(concretagens) {
+  const m = new Map();
+  (concretagens || []).forEach((c) => {
+    if (!c || !c.data) return;
+    (c.niveis || []).forEach((n) => {
+      const ch = chaveDoNivel(n); if (!ch) return;
+      if (!m.has(ch)) m.set(ch, []);
+      m.get(ch).push(c.data);
+    });
+  });
+  m.forEach((l) => l.sort());
+  return m;
+}
+/** Data da concretagem que mostra que o aço desta entrega já chegou ("" se não houver).
+ * Vale concretagem do mesmo pavimento a partir de 30 dias antes da data prevista. */
+export function chegouPelaConcretagem(e, concretadas) {
+  if (!e || e.status === "entregue" || e.status === "cancelado" || !concretadas || !concretadas.size) return "";
+  const desde = somarDias(e.dataPrevista || String(e.criadoEm || "").slice(0, 10) || "1900-01-01", -30);
+  let achou = "";
+  chavesDaEntrega(e).forEach((ch) => {
+    (concretadas.get(ch) || []).forEach((d) => { if (d >= desde && (!achou || d < achou)) achou = d; });
+  });
+  return achou;
+}
 
 /**
  * cr: cronograma calculado (cpm.lerCronograma) · entregas: [{id, ...entregasAco}]
@@ -76,9 +118,11 @@ export function acoParaLajes(cr, entregas, hoje, opcoes) {
     // a mesma chave aparece em lajes de épocas diferentes (teto e complemento do
     // 4º embasamento): só vale entrega de no máximo 60 dias antes do início
     const desde = somarDias(t.ini, -60);
+    // v1.18: laje já concretada → o aço chegou; nada a cobrar
+    if (((opcoes && opcoes.concretadas && opcoes.concretadas.get(chave)) || []).some((d) => d >= desde)) return;
     const ligadas = comChaves.filter((x) => x.ch.has(chave) && ((x.e.dataEntrega || x.e.dataPrevista || "9999") >= desde)).map((x) => x.e);
     let tipo = "ok";
-    const pendentes = ligadas.filter((e) => e.status !== "entregue");
+    const pendentes = ligadas.filter((e) => e.status !== "entregue" && !e._concretadoEm);
     if (!ligadas.length) tipo = "sem";
     else if (pendentes.some((e) => situacao(e, hoje) === "atrasada")) tipo = "atrasada";
     else if (pendentes.some((e) => e.dataPrevista && e.dataPrevista > somarDias(t.ini, TOLERANCIA))) tipo = "tarde";

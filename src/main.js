@@ -11,7 +11,7 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
-import { anterior as ctAnterior, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
+import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
@@ -23,7 +23,7 @@ import { semRepetidas as pecasSemRepetidas, pecasRepetidas } from "./modulos/ras
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { adicionarAssinaturasXlsx } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
-import { acoParaLajes, textoAviso as acoTextoLaje } from "./modulos/aco/aco-cronograma.js";
+import { acoParaLajes, textoAviso as acoTextoLaje, concretadasPorChave as acoConcretadasPorChave, chegouPelaConcretagem as acoChegouPelaConcretagem } from "./modulos/aco/aco-cronograma.js";
 import { initCronograma, definirDocumento as definirCronograma, definirProgresso as definirProgressoCron, definirEtapasManuais, etapasDaObra, avancoObra, renderViewCronograma, metasDaSemana, estruturaPrevista, semanaDe, cronogramaCarregado as cronogramaAtual } from "./modulos/cronograma/cronograma.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
@@ -1150,6 +1150,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     //    tem várias NFs; cobrar/romper é feito por lote no laboratório)
     var grupos = {};
     var grupo = function(chave, base){ return grupos[chave] || (grupos[chave] = Object.assign({ nfs:[], locais:{} }, base)); };
+    var decidir = [];
     ctRowsArray().forEach(function(r){
       var loc = (r.local||"").split(/[—-]/)[0].trim() || "sem local";
       CT_IDADES.forEach(function(i){
@@ -1159,6 +1160,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         else if(st==="aguardando" && (d===hoje || d===amanha)) g = grupo("r|"+i.key+"|"+d, { tipo:"romper", idade:i.key, conc:r.dataConcretagem, venc:d, lab:r.laboratorio });
         if(g){ g.nfs.push(r); g.locais[loc] = 1; }
       });
+      // v1.18: justificativa na planilha (ou já justificada) → o dono decide se conclui
+      if(ctSituacao(r)==="decidir") decidir.push(r);
       // v1.16: abaixo do fck aos 28 ou 63 dias → justificativa (causa + resolução) obrigatória
       if(ctJustPendente(r)){
         var idsAb = ctAbaixoEm(r);
@@ -1168,6 +1171,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           abrir:{ ct:r._id } });
       }
     });
+    if(decidir.length) out.push({ cat:"ct-decidir", prio: 62, icone:"flask", tom:"warn",
+      titulo: decidir.length===1 ? "Decidir: concluir a NF "+decidir[0].notaRemessa+"?" : decidir.length+" notas de concreto esperam a sua decisão",
+      sub: decidir.length===1 ? "justificativa: "+(ctObsJustificativa(decidir[0]) || ((decidir[0].justificativaFck||{}).causa||"")) : "têm justificativa — conclua ou deixe em aberto",
+      abrir: decidir.length===1 ? { ct:decidir[0]._id } : { view:"ct" } });
     Object.keys(grupos).forEach(function(k){
       var g = grupos[k], n = g.nfs.length, locais = Object.keys(g.locais).join(", ");
       var alvo = n===1 ? { ct:g.nfs[0]._id } : { view:"ct" };
@@ -1214,7 +1221,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         abrir:{ fvs:n.fichaId } });
     });
     // 4) Aço: entrega atrasada / hoje / amanhã
-    acoMap.forEach(function(e){
+    acoListaComConcretagem().forEach(function(e){
       var st = acoSituacao(e, hoje), kg = acoPeso(e);
       var desc = (e.fornecedor||"")+(kg ? " · "+(Math.round(kg/100)/10).toString().replace(".", ",")+" t" : "")+(e.destino ? " · "+e.destino : "");
       if(st==="atrasada") out.push({ cat:"aco", prio: 68, icone:"truck", tom:"bad", titulo:"Entrega de aço atrasada — pedido "+(e.pedido||"s/ nº"),
@@ -1242,10 +1249,36 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(d >= 10) out.push({ cat:"fvs", prio: 30 + Math.min(20, Math.floor(d/5)), icone:"check", tom:"info",
         titulo:"Fechar "+(f.codigo||"FVS")+" · "+(f.numero||"s/ nº"), sub:(fvsPavimentosList(f)[0]||f.local||"")+" · aberta há "+d+" dias da concretagem", abrir:{ fvs:id } });
     });
+    // 7) v1.18: fichas dos últimos 30 dias sem a SUA assinatura (pelo papel cadastrado)
+    if(minhaAssinatura && !somenteLeitura){
+      var papelA = minhaAssinatura.papel || "engenheiro", desdeA = ctSomarDias(hoje, -30), faltaA = [];
+      var semMinha = function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel===papelA || (papelA!=="engenheiro" && papelA!=="encarregado" && (a.papel==="tecnico" || a.papel==="estagiario")); }); };
+      if(papelA!=="encarregado"){
+        fvsMap.forEach(function(f, id){ var dt = f.dataConcretagem||f.dataAbertura||""; if(dt>=desdeA && !f.travada && semMinha(f)) faltaA.push({ fvs:id }); });
+        rastMap.forEach(function(r, id){ if((r.data||"")>=desdeA && semMinha(r)) faltaA.push({ rast:id }); });
+      }
+      if(faltaA.length) out.push({ cat:"assinar", prio: 52, icone:"check", tom:"warn",
+        titulo: faltaA.length===1 ? "Assinar 1 ficha" : "Assinar "+faltaA.length+" fichas (FVS e rastreabilidade)",
+        sub:"dos últimos 30 dias, ainda sem a assinatura de "+(PAPEIS_ASSIN[papelA]||papelA).toLowerCase(),
+        abrir: faltaA.length===1 ? faltaA[0] : { view:"board" } });
+    }
     out.sort(function(a,b){ return b.prio - a.prio; });
     return out;
   }
-  function acoLajes(){ return acoParaLajes(cronogramaAtual(), Array.from(acoMap.values()), todayISO()); }
+  // v1.18: aço × concretagem — pavimento concretado = aço chegou (não cobra)
+  function acoConcretadas(){
+    var lista = [];
+    rastMap.forEach(function(r){ lista.push({ data:r.data, niveis:niveisDoTexto((r.pavimentos && r.pavimentos.length) ? r.pavimentos : [r.blocoPav]) }); });
+    return acoConcretadasPorChave(lista);
+  }
+  function acoListaComConcretagem(){
+    var conc = acoConcretadas();
+    return Array.from(acoMap.values()).map(function(e){
+      var d = acoChegouPelaConcretagem(e, conc);
+      return d ? Object.assign({}, e, { _concretadoEm:d }) : e;
+    });
+  }
+  function acoLajes(){ return acoParaLajes(cronogramaAtual(), acoListaComConcretagem(), todayISO(), { concretadas:acoConcretadas() }); }
   // As 5 principais com variedade: no máximo 2 por área (o resto fica em "ver todas")
   function principaisDeHoje(lista, max){
     var porCat = {}, top = [];
@@ -1262,8 +1295,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // v1.17: "12 de 40 notas concluídas · 230 anteriores ao sistema" (cartão do Início)
   function ctResumoConclusao(){
     var rows = ctRowsArray(), ant = 0, conc = 0, tot = 0;
-    rows.forEach(function(r){ if(ctAnterior(r)){ ant++; return; } tot++; if(ctConcluidaRegra(r)) conc++; });
-    return conc+" de "+tot+" nota(s) concluída(s)"+(ant ? " · "+ant+" anterior(es) ao sistema" : "");
+    var dec = 0;
+    rows.forEach(function(r){ if(ctAnterior(r)){ ant++; return; } tot++; if(ctConcluidaRegra(r)) conc++; if(ctSituacao(r)==="decidir") dec++; });
+    return conc+" de "+tot+" nota(s) concluída(s)"+(dec ? " · "+dec+" para você decidir" : "")+(ant ? " · "+ant+" anterior(es) ao sistema" : "");
   }
   function renderViewDashboard(){
     var container = document.getElementById("view-dashboard");
@@ -1274,7 +1308,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     fvsMap.forEach(function(f){ if(fvsStatus(f).key==="aberto") fvsAbertas++; });
     var todasNc = todasNaoConformidades();
     var ncAbertas = todasNc.filter(function(i){ return !i.concluida; }).length;
-    var ctPendentes = ctRowsArray().filter(ctTemPendencia).length;
+    var ctPendentes = ctRowsArray().filter(ctPendente).length;
     var rastPendentes = 0;
     rastMap.forEach(function(r){ if(rastStatus(r).key==="pendente") rastPendentes++; });
 
@@ -1283,7 +1317,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var kpiCards = [
       { n:fvsAbertas, l:"FVS em aberto", t:"info", d:totalFvs+" fichas no total", ir:"board", sit:"aberto" },
       { n:ncAbertas, l:"NCs em aberto", t:"nc", d:todasNc.length+" registradas", ir:"nc" },
-      { n:ctPendentes, l:"Resultados de CP pendentes", t:"pendente", d:ctResumoConclusao(), ir:"ct", pend:true },
+      { n:ctPendentes, l:"Notas de CP pendentes", t:"pendente", d:ctResumoConclusao(), ir:"ct", pend:true },
       { n:rastPendentes, l:"Concretagens com pendência", t:rastPendentes?"pendente":"ok", d:"acima de 2h30 sem ação corretiva", ir:"board", sit:"pendente" }
     ];
     var kpisHtml = '<div class="dash-kpis">' + kpiCards.map(function(c){
@@ -1309,10 +1343,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           (i.diasAberto!=null? i.diasAberto+" dia(s)" : ""), (i.diasAberto>7?"bad":""));
       }).join("");
     // Corpos de prova com resultado atrasado
-    var ctLista = ctRowsArray().filter(ctTemPendencia).slice(0,5).map(function(r){
+    var ctLista = ctRowsArray().filter(ctPendente).slice(0,5).map(function(r){
       var idades = ctIdadesPendentes(r).map(function(x){ return x.key+"d"; }).join(", ");
-      return li('data-goto-view="ct" data-ct-pend="1"', "flask", "warn", (r.local||"(sem local)"),
-        "NF "+r.notaRemessa+" · "+(r.concreteira||"")+" · concretado "+fmtDateBR(r.dataConcretagem)+(r.observacao ? " · Obs.: "+r.observacao : ""), "falta "+idades, "bad");
+      var sitR = ctSituacao(r);
+      return li('data-hoje-ct="'+escapeHtml(r._id)+'"', "flask", "warn", (r.local||"(sem local)"),
+        "NF "+r.notaRemessa+" · "+(r.concreteira||"")+" · concretado "+fmtDateBR(r.dataConcretagem)+(r.observacao ? " · Obs.: "+r.observacao : ""),
+        idades ? "falta "+idades : (sitR==="decidir" ? "você decide" : "abaixo do fck"), "bad");
     }).join("");
     // FVS em aberto mais recentes
     var fvsLista = [];
@@ -1337,7 +1373,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
 
     // Próximas entregas de aço (atrasadas primeiro)
     var hojeAco = todayISO();
-    var acoLista = proximasEntregas(Array.from(acoMap.values()), hojeAco, 5).map(function(e){
+    var acoLista = proximasEntregas(acoListaComConcretagem(), hojeAco, 5).map(function(e){
       var st = acoSituacao(e, hojeAco), p = acoPeso(e);
       return li('data-goto-view="aco"', "truck", st==="atrasada"?"bad":"info",
         "Pedido "+(e.pedido||"s/ nº")+" · "+(e.fornecedor||""),
@@ -1516,7 +1552,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var ncHtml = '<div class="rel-num"><b class="'+(ncs.length?"rel-bad":"")+'">'+ncs.length+'</b> não conformidade(s) em aberto</div>'
       + lista(ncs.map(function(n){ return e(n.descricao||"(sem descrição)", 80)+' · '+e((n.ficha.codigo||"FVS")+" "+(n.ficha.numero||""))+(n.diasAberto!=null ? ' · <b>'+n.diasAberto+' dia(s)</b>' : ''); }), "Nenhuma NC em aberto.", 5);
     // aço
-    var acoTodas = Array.from(acoMap.values());
+    var acoTodas = acoListaComConcretagem();
     var recebido = acoTodas.filter(function(x){ return x.status==="entregue" && x.dataEntrega>=semAnt.ini && x.dataEntrega<=sem.fim; });
     var proximas = proximasEntregas(acoTodas, hoje, 6);
     var lajes = acoLajes().filter(function(x){ return x.tipo!=="ok"; });
@@ -1899,24 +1935,41 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // resultado não saiu E a observação não foi marcada como concluída.
   // v1.11: além da observação, a nota pode ser marcada como concluída no app
   // (campo concluida:true) — encerra a cobrança de todas as idades sem resultado.
-  function ctRowConcluidaPorObservacao(row){
-    return row.concluida===true || /CONCLU/i.test(row.observacao||"");
+  /* v1.18 (regras do dono, ver modulos/ct/regras-ct.js):
+     - anterior ao sistema (pela data da 1ª rastreabilidade): fora de tudo;
+     - só 28 e 63 dias são obrigatórios — 7 e 14 nunca viram pendência;
+     - concluída (no app, "Concluído" na planilha ou 28 e 63 ok) e "você
+       decide" (justificativa) não cobram resultado. */
+  var ctInicioCache = null;
+  function ctInicioSistema(){
+    if(ctInicioCache==null) ctInicioCache = ctPrimeiraRast();
+    return ctInicioCache;
   }
+  function ctAnterior(row){ return ctAnteriorRegra(row, ctInicioSistema()); }
+  // devolve a nota com anteriorAoSistema:true quando ela é anterior só pela data
+  function ctComAnterior(row){
+    if(!row || row.anteriorAoSistema!=null || !ctAnterior(row)) return row;
+    return Object.assign({}, row, { anteriorAoSistema:true });
+  }
+  function ctSituacao(row){ return ctSituacaoRegra(ctComAnterior(row)); }
+  function ctEmAberto(row){ return ctEmAbertoRegra(ctComAnterior(row)); }
   function ctStatusIdade(row, idade){
     var dataPrev = row[idade.dataCampo];
     if(!dataPrev) return "sem-data";
     var saiu = idade.campos.some(function(c){ return ctValorPreenchido(row[c]); });
     if(saiu) return "concluido";
-    // v1.17: anterior ao sistema e "Concluído" na observação da planilha contam
-    // como concluída (fora dos indicadores). Concluir pelo app exige 28 e 63 dias.
-    if(ctAnterior(row) || ctRowConcluidaPorObservacao(row)) return "dispensado";
+    var sit = ctSituacao(row);
+    if(sit==="anterior" || sit==="concluida" || sit==="decidir") return "dispensado";
     if(dataPrev > todayISO()) return "aguardando";
+    if(idade.key!=="28" && idade.key!=="63") return "dispensado";
     return "pendente";
   }
   function ctIdadesPendentes(row){
     return CT_IDADES.filter(function(idade){ return ctStatusIdade(row, idade)==="pendente"; });
   }
   function ctTemPendencia(row){ return ctIdadesPendentes(row).length>0; }
+  // v1.18: pendente = resultado obrigatório atrasado OU abaixo do fck / esperando a decisão do dono
+  function ctPendente(row){ return ctTemPendencia(row) || ctEmAberto(row); }
 
   // Liga a Nota de Remessa desta linha às linhas de rastreabilidade que
   // citam a mesma nota fiscal (mesmo campo já usado na busca ampliada do
@@ -2018,13 +2071,15 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       }
       if(!linhas.length) throw new Error("nenhuma linha com Nota de Remessa foi encontrada na planilha");
 
-      var novos=0, atualizados=0, preservados=0, anteriores=0;
+      var novos=0, atualizados=0, preservados=0, anteriores=0, ignoradas=0;
       // v1.17: início do sistema = data da 1ª rastreabilidade lançada no app
       var inicioSistema = "";
       rastMap.forEach(function(r){ if(r.data && (!inicioSistema || r.data < inicioSistema)) inicioSistema = r.data; });
       var ops = linhas.map(function(row){
         var id = "nf_"+safeName(row.notaRemessa);
         var existente = ctMap.get(id);
+        // v1.18: nota que o dono marcou como concluída no app não muda mais com a planilha
+        if(existente && existente.concluida===true){ ignoradas++; return null; }
         if(existente) atualizados++; else novos++;
         // v1.5: célula VAZIA na planilha não apaga o que foi lançado pelo site
         // (ex.: resultado de 28 dias preenchido na obra antes do laboratório
@@ -2044,7 +2099,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         // (só se ninguém marcou/desmarcou à mão: campo ainda ausente)
         if(ctAnterioresAoSistema([Object.assign({ _id:id }, data)], inicioSistema).length){ data.anteriorAoSistema = true; anteriores++; }
         return { id:id, data:data };
-      });
+      }).filter(Boolean);
       ctSetStatus("Gravando "+ops.length+" linha(s)…");
       // Grava em lotes (limite de 500 operações por commit no Firestore).
       for(var i=0;i<ops.length;i+=450){
@@ -2063,6 +2118,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       try{ await ctSalvarModelo(file, buf); }catch(exM){ modeloOk = false; console.warn("modelo da planilha:", exM); }
       ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s)"
         +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")
+        +(ignoradas ? "; "+ignoradas+" nota(s) que você concluiu no app ficaram como estavam" : "")
         +(anteriores ? "; "+anteriores+" nota(s) anterior(es) ao sistema (antes de "+fmtDateBR(inicioSistema)+") marcadas como concluídas, fora dos indicadores" : "")+"."
         +(modeloOk ? "" : " (Não consegui guardar a planilha como modelo de exportação.)"), "ok");
     } catch(ex){
@@ -2132,7 +2188,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       ctSetStatus("Preenchendo a planilha…");
       var zip = await JSZip.loadAsync(modelo.dados);
       // v1.16: a justificativa do resultado abaixo do fck vai junto na coluna Observação
-      var regs = ctRowsArray().map(function(r){ return ctJustificada(r) ? Object.assign({}, r, { observacao: ctObsComJustificativa(r) }) : r; });
+      // v1.18: + "CONCLUÍDO" nas notas concluídas no app (a planilha sai igual à do laboratório)
+      var regs = ctRowsArray().map(function(r){ return Object.assign({}, r, { observacao: ctObsExportada(r) }); });
       var res = await preencherPlanilhaCt(zip, regs, CT_COLS);
       var blob = await zip.generateAsync({ type:"blob", compression:"DEFLATE", mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       var base = String(modelo.arquivo||"Controle Tecnologico.xlsx").replace(/\.xlsx?$/i, "").replace(/\s*\(app \d{2}-\d{2}-\d{4}\)$/, "");
@@ -2157,7 +2214,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var out = [];
     ctMap.forEach(function(d, id){
       if(id==="_meta" || !d || !d.notaRemessa) return;
-      out.push(Object.assign({ _id:id }, d));
+      out.push(ctComAnterior(Object.assign({ _id:id }, d)));
     });
     out.sort(function(a,b){ return (b.dataConcretagem||"").localeCompare(a.dataConcretagem||"") || String(a.notaRemessa).localeCompare(String(b.notaRemessa)); });
     return out;
@@ -2181,7 +2238,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
   // v1.16 (regra do dono): abaixo do fck aos 28 OU aos 63 dias — mesmo que
   // recupere aos 63, o resultado de 28 abaixo exige justificativa (regras-ct.js).
-  function ctAbaixoFck(row){ return ctPrecisaJust(row); } // v1.17: anteriores ao sistema ficam de fora
+  // v1.18: abaixo do fck e ainda em aberto (concluídas e anteriores ao sistema ficam de fora)
+  function ctAbaixoFck(row){ var s = ctSituacao(row); return (s==="abaixo" || s==="decidir") && ctAbaixoEm(row).length>0; }
   // Ficou abaixo aos 28 dias, mas atingiu o fck aos 63
   function ctRecuperou63(row){
     var fck = ctNumero(row.fck), r = ctMelhor28(row), r63 = ctMelhor63(row);
@@ -2203,7 +2261,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
   var CT_SITUACOES = [
     { key:"todos", label:"Todas", teste:function(){ return true; } },
+    { key:"pendentes", label:"Pendentes (tudo)", teste:ctPendente },
     { key:"atrasado", label:"Resultado atrasado", teste:ctTemPendencia },
+    { key:"decidir", label:"Você decide (justificadas)", teste:function(r){ return ctSituacao(r)==="decidir"; } },
+    { key:"ok28", label:"Bateu aos 28 — aguarda 63", teste:function(r){ return ctSituacao(r)==="ok28"; } },
     { key:"semana", label:"Romper em 7 dias", teste:ctRomperEmBreve },
     { key:"abaixo", label:"Abaixo do fck", teste:ctAbaixoFck },
     { key:"semjust", label:"Abaixo do fck sem justificativa", teste:ctJustPendente },
@@ -2212,13 +2273,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // v1.8: NF sem rastreabilidade ligada (nem pela NF nas betonadas, nem manual)
     // v1.10: as marcadas "anterior ao sistema" não entram (não há o que ligar)
     { key:"semvinculo", label:"Sem vínculo com rastreabilidade", teste:function(r){ return r.anteriorAoSistema!==true && !ctLigacoes(r).confirmadas.length; } },
-    { key:"completo", label:"Completas", teste:function(r){ return !ctTemPendencia(r) && !ctAguardando(r); } }
+    { key:"anteriores", label:"Anteriores ao sistema", teste:ctAnterior },
+    { key:"completo", label:"Completas", teste:function(r){ return !ctPendente(r) && !ctAguardando(r); } }
   ];
   function ctRowsFiltradas(){
     var termo = (filtrosCt.busca||"").trim().toLowerCase();
     var sit = CT_SITUACOES.find(function(s){ return s.key===filtrosCt.situacao; }) || CT_SITUACOES[0];
     return ctRowsArray().filter(function(row){
-      if(filtrosCt.somentePendentes && !ctTemPendencia(row)) return false;
+      if(filtrosCt.somentePendentes && !ctPendente(row)) return false;
       if(!sit.teste(row)) return false;
       if(filtrosCt.de && (row.dataConcretagem||"") < filtrosCt.de) return false;
       if(filtrosCt.ate && (row.dataConcretagem||"") > filtrosCt.ate) return false;
@@ -2380,14 +2442,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (primeira ? ' · a primeira rastreabilidade do app é de '+fmtDateBR(primeira) : '')+'</small></div>'
       + '<div class="ct-vinc-acoes">'
         + (antigas.length ? '<button type="button" class="btn small" data-ct-vinc-antigas>Marcar '+antigas.length+' nota(s) de antes de '+fmtDateBR(primeira)+' como “anterior ao sistema”</button>' : '')
-        + (unicas.length ? '<button type="button" class="btn small primary" data-ct-vinc-unicas>Vincular '+unicas.length+' nota(s) à concretagem do mesmo dia</button>' : '')
+
       + '</div>'
       + (mostrar.length ? '<div class="ct-vinc-lista">'+mostrar.map(function(x){
           var r = x.r;
           return '<div class="ct-vinc-li"><div class="tx"><b>NF '+escapeHtml(r.notaRemessa)+'</b><small>'+escapeHtml(fmtDateBR(r.dataConcretagem))+' · '+escapeHtml(r.local||"sem local")+'</small></div>'
-            + '<div class="bt">'+x.sug.map(function(rid){
-                return '<button type="button" class="btn small" data-ct-vinc="'+escapeHtml(r._id)+'|'+escapeHtml(rid)+'" title="Ligar esta NF a esta rastreabilidade">Vincular: '+escapeHtml(rastRotulo(rastMap.get(rid)))+'</button>';
-              }).join("")+'<button type="button" class="btn small" data-ct-ant="'+escapeHtml(r._id)+'">Anterior ao sistema</button></div></div>';
+            // v1.18: a NF precisa ficar igual à da BT — o vínculo é feito na ficha da nota, escolhendo a betonada
+            + '<div class="bt"><button type="button" class="btn small" data-ct-vinc="'+escapeHtml(r._id)+'" title="Escolher a BT desta nota (a NF da BT fica igual)">Escolher a BT ('+x.sug.length+' concretagem(ns) no dia)</button><button type="button" class="btn small" data-ct-ant="'+escapeHtml(r._id)+'">Anterior ao sistema</button></div></div>';
         }).join("")+(comSug.length>mostrar.length ? '<div class="hint">… e mais '+(comSug.length-mostrar.length)+'. Use o botão acima ou filtre por período.</div>' : '')+'</div>' : '')
       + (resto>0 ? '<div class="hint">'+resto+' nota(s) não têm concretagem registrada no mesmo dia: toque na nota abaixo para vincular manualmente ou marcar como anterior ao sistema.</div>' : '')
     + '</div>';
@@ -2399,17 +2460,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!confirm("Marcar "+l.length+" nota(s) concretadas antes de "+fmtDateBR(ctVincAcoes.primeira)+" como “anterior ao sistema”?\n\nNada é apagado: só acrescenta a marcação, que pode ser desfeita na ficha de cada nota.")) return;
       ctGravarLote(l.map(function(r){ return { id:r._id, dados:{ anteriorAoSistema:true } }; }), b1);
     });
-    var b2 = el.querySelector("[data-ct-vinc-unicas]");
-    if(b2) b2.addEventListener("click", function(){
-      var l = ctVincAcoes.unicas;
-      if(!confirm("Ligar "+l.length+" nota(s) à única concretagem registrada no mesmo dia de cada uma?\n\nConfira depois na ficha da nota; o vínculo pode ser trocado lá.")) return;
-      ctGravarLote(l.map(function(x){ return { id:x.r._id, dados:{ rastreabilidadeId:x.sug[0] } }; }), b2);
-    });
     el.querySelectorAll("[data-ct-vinc]").forEach(function(b){
-      b.addEventListener("click", function(){
-        var p = b.getAttribute("data-ct-vinc").split("|");
-        ctGravarLote([{ id:p[0], dados:{ rastreabilidadeId:p[1] } }], b);
-      });
+      b.addEventListener("click", function(){ abrirFichaNf(b.getAttribute("data-ct-vinc")); });
     });
     el.querySelectorAll("[data-ct-ant]").forEach(function(b){
       b.addEventListener("click", function(){ ctGravarLote([{ id:b.getAttribute("data-ct-ant"), dados:{ anteriorAoSistema:true } }], b); });
@@ -2521,14 +2573,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var container = document.getElementById("view-ct");
     var rows = ctRowsArray();
     // v1.5: o atalho "resultados atrasados" do Início chega aqui como filtro de situação
-    if(filtrosCt.somentePendentes){ filtrosCt.somentePendentes = false; filtrosCt.situacao = "atrasado"; }
+    if(filtrosCt.somentePendentes){ filtrosCt.somentePendentes = false; filtrosCt.situacao = "pendentes"; }
     var cont = {}; CT_SITUACOES.forEach(function(s){ cont[s.key] = rows.filter(s.teste).length; });
     var unicos = function(campo){ return Array.from(new Set(rows.map(function(r){ return r[campo]||""; }).filter(Boolean))).sort(); };
 
     var kpis = '<div class="dash-kpis">'
       + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="atrasado"><div class="n">'+cont.atrasado+'</div><div class="l">Resultados atrasados</div><div class="d">data de rompimento já passou</div></button>'
       + '<button type="button" class="dash-kpi-card tone-pendente" data-ct-sit="semana"><div class="n">'+cont.semana+'</div><div class="l">Romper nos próximos 7 dias</div><div class="d">programe o laboratório</div></button>'
-      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="abaixo"><div class="n">'+cont.abaixo+'</div><div class="l">Abaixo do fck</div><div class="d">aos 28d e sem recuperar aos 63d · '+cont.recuperou+' atingiram só aos 63d</div></button>'
+      + '<button type="button" class="dash-kpi-card tone-nc" data-ct-sit="abaixo"><div class="n">'+cont.abaixo+'</div><div class="l">Abaixo do fck</div><div class="d">em aberto · '+cont.decidir+' para você decidir</div></button>'
       + '<button type="button" class="dash-kpi-card tone-ok" data-ct-sit="completo"><div class="n">'+cont.completo+'</div><div class="l">Completas</div><div class="d">de '+rows.length+' nota(s)</div></button>'
     + '</div>';
 
@@ -2601,7 +2653,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var alvo = ctNormalizaNota(nota), achado = null;
     if(!alvo) return null;
     ctMap.forEach(function(r, id){ if(!achado && id!=="_meta" && r && ctNormalizaNota(r.notaRemessa)===alvo) achado = Object.assign({ _id:id }, r); });
-    return achado;
+    return ctComAnterior(achado);
   }
   function ctSecaoRastHtml(d, rastId){
     var linhas = (d.linhas||[]);
@@ -2611,7 +2663,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var c = ctPorNota(l.notaFiscal);
       if(!c && rastId){ ctMap.forEach(function(r, id){ if(!c && r && r.rastreabilidadeId===rastId && ctNormalizaNota(r.notaRemessa)===ctNormalizaNota(l.notaFiscal)) c = Object.assign({ _id:id }, r); }); }
       var cab = '<b>BT '+escapeHtml(l.seq)+'</b> · NF '+escapeHtml(l.notaFiscal);
-      if(!c) return '<div class="ct-bt"><div class="ct-bt-id">'+cab+'<small>sem resultado no controle tecnológico</small></div>'
+      if(!c) return '<div class="ct-bt"><div class="ct-bt-id">'+cab+'<small>NF não encontrada no controle tecnológico — confira se está igual à nota de remessa da planilha</small></div>'
         + '<button type="button" class="btn small" data-ct-lancar="'+idx+'">Lançar no controle tecnológico</button></div>';
       return '<div class="ct-bt" data-ct-nf="'+escapeHtml(c._id)+'" title="Abrir a ficha desta NF"><div class="ct-bt-id">'+cab
         + (ctAbaixoFck(c) ? (ctJustificada(c) ? ' <span class="ct-selo atraso">abaixo do fck · justificado</span>' : ' <span class="ct-selo abaixo">abaixo do fck · sem justificativa</span>') : (ctTemPendencia(c) ? ' <span class="ct-selo atraso">resultado atrasado</span>' : ''))
@@ -2630,7 +2682,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       : (row[idade.dataCampo] ? fmtDateBR(row[idade.dataCampo]).slice(0,5) : "—");
     var tom = st==="concluido" ? "ok" : (st==="pendente" ? "atraso" : (st==="aguardando" ? "espera" : "nada"));
     // v1.16: vermelho na idade (28 ou 63) que ficou abaixo do fck; amarelo se já justificada
-    if(ctAbaixoEm(row).indexOf(idade.key)!==-1) tom = ctJustificada(row) ? "recuperou" : "abaixo";
+    var sitC = ctSituacao(row);
+    if(sitC!=="anterior" && ctAbaixoEm(row).indexOf(idade.key)!==-1) tom = sitC==="abaixo" ? "abaixo" : "recuperou";
     return '<span class="ct-idade '+tom+'" title="'+idade.key+' dias: '+escapeHtml(st)+'"><i>'+idade.key+'d</i><b>'+escapeHtml(txt)+'</b></span>';
   }
   function renderCtGrupos(el, visiveis){
@@ -2655,15 +2708,21 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
             var lig = ctLigacoes(r);
             var selo = lig.confirmadas.length ? '<span class="ct-selo ok" title="NF encontrada numa rastreabilidade">NF ✓</span>'
               : (lig.mesmoDia.length ? '<span class="ct-selo meio" title="Há rastreabilidade no mesmo dia, mas sem esta NF">NF ?</span>' : '<span class="ct-selo nada" title="Nenhuma rastreabilidade com esta NF">sem vínculo</span>');
-            var feita = ctConcluidaRegra(r);
+            var feita = ctConcluidaRegra(r), sit = ctSituacao(r);
             return '<div class="ct-linha'+(feita?" concluida":"")+'" data-ct-abrir="'+escapeHtml(r._id)+'">'
               + '<div class="ct-linha-id"><b>NF '+escapeHtml(r.notaRemessa)+'</b> '+selo+(feita ? ' <span class="ct-selo ok">concluída</span>' : '')+'<small>'+escapeHtml(r.local||"(sem local)")+'</small>'
                 + '<small class="ct-linha-meta">fck '+escapeHtml(r.fck==null?"—":r.fck)+' · slump '+escapeHtml(r.slump==null?"—":r.slump)+(r.volume!=null? ' · '+escapeHtml(r.volume)+' m³' : '')+(r.origem==="site"?' · lançada no site':'')+(ctAnterior(r)?' · anterior ao sistema':'')+'</small>'
                 + (r.observacao ? '<small class="ct-linha-obs">Obs.: '+escapeHtml(r.observacao)+'</small>' : '')+'</div>'
               + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(r, i); }).join("")+'</div>'
               // concluída pela planilha ("Concluído") ou anterior ao sistema: sem botão (vem dos dados)
-              + (ctAnterior(r) || /CONCLU/i.test(r.observacao||"") ? '<span class="ct-selo ok">'+(ctAnterior(r) ? "anterior ao sistema" : "concluída na planilha")+'</span>'
-                : '<button type="button" class="btn small ct-concluir" data-ct-concluir="'+escapeHtml(r._id)+'" title="'+(feita?"Reabrir esta nota":"Marcar esta nota como concluída (não cobra mais resultados)")+'">'+(feita?"Reabrir":"✓ Concluir")+'</button>')
+              // v1.18: anterior / concluída na planilha / bateu aos 28 vêm dos dados (sem botão);
+              // "você decide" e "abaixo do fck" ficam com o botão para o dono concluir
+              + (sit==="anterior" ? '<span class="ct-selo ok">anterior ao sistema</span>'
+                : (sit==="concluida" && r.concluida!==true) ? '<span class="ct-selo ok">'+(/CONCLU/i.test(r.observacao||"") ? "concluída na planilha" : "28 e 63 dias ok")+'</span>'
+                : sit==="ok28" ? '<span class="ct-selo ok" title="Bateu o fck aos 28 dias — conta como concluída; falta o resultado de 63 dias">ok aos 28 · aguarda 63</span>'
+                : (sit==="decidir" ? '<span class="ct-selo atraso" title="Tem justificativa: conclua ou deixe em aberto">você decide</span> '
+                  : sit==="abaixo" ? '<span class="ct-selo abaixo" title="Abaixo do fck: informe a causa e a resolução na ficha">abaixo do fck</span> ' : '')
+                  + '<button type="button" class="btn small ct-concluir" data-ct-concluir="'+escapeHtml(r._id)+'" title="'+(feita?"Reabrir esta nota":"Marcar esta nota como concluída (as próximas planilhas não alteram mais esta nota)")+'">'+(feita?"Reabrir":"✓ Concluir")+'</button>')
             + '</div>';
           }).join("")
       + '</div>';
@@ -2675,10 +2734,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     el.querySelectorAll("[data-ct-concluir]").forEach(function(b){
       b.addEventListener("click", function(e){
         e.stopPropagation();
-        var id = b.getAttribute("data-ct-concluir"), r = ctMap.get(id) || {};
+        var id = b.getAttribute("data-ct-concluir"), r = ctComAnterior(ctMap.get(id) || {});
         if(r.concluida!==true){
           var imp = ctImpedimentosConcluir(r);
           if(imp.length){ alert("A NF "+(r.notaRemessa||"")+" ainda não pode ser concluída: "+imp.join("; ")+"."); return; }
+          if(!confirm("Concluir a NF "+(r.notaRemessa||"")+"?\n\nDepois de concluída, as próximas planilhas importadas não alteram mais esta nota.")) return;
         }
         ctGravarLote([{ id:id, dados:{ concluida: r.concluida!==true } }], b);
       });
@@ -2698,7 +2758,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // padrao: dados para pré-preencher uma nota NOVA (ex.: vindos da betonada)
   function abrirFichaNf(id, padrao){
     var atual = id ? ctMap.get(id) : null;
-    var d = Object.assign({}, atual || Object.assign({ dataConcretagem: todayISO() }, padrao||{}));
+    var d = Object.assign({}, atual ? ctComAnterior(atual) : Object.assign({ dataConcretagem: todayISO() }, padrao||{}));
     var novo = !atual;
     var ov = document.createElement("div");
     ov.className = "overlay ct-ficha-ov";
@@ -2710,9 +2770,24 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         return '<button type="button" class="ct-rast-link" data-ct-rast="'+escapeHtml(rid)+'"><svg class="ti-i" data-i="truck"></svg>'+escapeHtml(rastRotulo(r))+'</button>';
       }).join("")+'</div>';
     };
-    var opcoesVinculo = [];
-    rastMap.forEach(function(r, rid){ opcoesVinculo.push({ id:rid, r:r }); });
-    opcoesVinculo.sort(function(a,b){ return (b.r.data||"").localeCompare(a.r.data||""); });
+    // v1.18: a nota de remessa tem que ser IGUAL à NF da betonada. O vínculo
+    // manual agora é com uma BT: ao salvar, a NF daquela BT passa a ser a desta
+    // nota. Aparecem só as BTs com NF em branco ou que não batem com nenhuma
+    // nota do controle tecnológico (as da mesma data primeiro).
+    var notasCt = {};
+    ctMap.forEach(function(r, cid){ if(cid!=="_meta" && r && r.notaRemessa) notasCt[ctNormalizaNota(r.notaRemessa)] = 1; });
+    var opcoesBt = [];
+    rastMap.forEach(function(r, rid){
+      (r.linhas||[]).forEach(function(l, idx){
+        var nfL = ctNormalizaNota(l.notaFiscal);
+        if(nfL && notasCt[nfL]) return;
+        opcoesBt.push({ v:rid+"|"+idx, data:r.data||"", mesmoDia: !!(d.dataConcretagem && r.data===d.dataConcretagem),
+          t:rastRotulo(r)+" · BT "+(l.seq||idx+1)+" · NF digitada: "+(String(l.notaFiscal||"").trim() || "em branco") });
+      });
+    });
+    opcoesBt.sort(function(a,b){ return (b.mesmoDia-a.mesmoDia) || b.data.localeCompare(a.data); });
+    opcoesBt = opcoesBt.slice(0, 120);
+    var vincAntigo = d.rastreabilidadeId && rastMap.has(d.rastreabilidadeId) && lig.porNota.indexOf(d.rastreabilidadeId)===-1;
     var campo = function(c){
       var v = d[c[0]]; var ro = (c[0]==="notaRemessa" && !novo);
       return '<div class="field"><label>'+c[1]+'</label><input data-ctf="'+c[0]+'" type="'+(c[2]==="date"?"date":"text")+'"'+(c[2]==="num"?' inputmode="decimal"':'')
@@ -2724,11 +2799,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (novo ? '' : '<fieldset><legend>Rastreabilidade ligada</legend>'
             + (listaRast(lig.confirmadas, "Esta NF está em:") || '<div class="hint">Esta NF ainda não aparece em nenhuma rastreabilidade.</div>')
             + listaRast(lig.mesmoDia, "Concretagens do mesmo dia:")
-            + '<div class="field" style="margin-top:10px"><label>Vincular manualmente (quando a NF foi digitada diferente)</label><select data-ctf="rastreabilidadeId"><option value="">— sem vínculo manual —</option>'
-              + opcoesVinculo.map(function(x){ return '<option value="'+escapeHtml(x.id)+'"'+(d.rastreabilidadeId===x.id?" selected":"")+'>'+escapeHtml(rastRotulo(x.r))+'</option>'; }).join("")
-            + '</select></div>'
+            + (vincAntigo ? '<div class="hint">Vínculo manual antigo com '+escapeHtml(rastRotulo(rastMap.get(d.rastreabilidadeId)))+', mas a NF não está igual em nenhuma BT. Escolha a BT abaixo para igualar.</div>' : '')
+            + (lig.porNota.length ? '' : '<div class="field" style="margin-top:10px"><label>Qual BT é esta nota? (a NF da BT passa a ser '+escapeHtml(d.notaRemessa)+')</label><select data-ctf="vinculoBt"><option value="">— escolher a betonada —</option>'
+              + opcoesBt.map(function(x){ return '<option value="'+escapeHtml(x.v)+'">'+(x.mesmoDia?"★ ":"")+escapeHtml(x.t)+'</option>'; }).join("")
+            + '</select><small class="hint">★ = concretagem do mesmo dia da nota.</small></div>')
             + '<label class="ct-anterior"><input type="checkbox" data-ctf-chk="anteriorAoSistema"'+(d.anteriorAoSistema===true?" checked":"")+'> Concretagem anterior ao sistema — não há rastreabilidade no app para ligar</label></fieldset>')
-        + (novo ? '' : '<label class="ct-concluida-chk"><input type="checkbox" data-ctf-chk="concluida"'+(d.concluida===true?" checked":"")+'> <b>Ficha concluída</b> — para de cobrar 7 e 14 dias (28 e 63 dias são obrigatórios)'
+        + (novo ? '' : '<label class="ct-concluida-chk"><input type="checkbox" data-ctf-chk="concluida"'+(d.concluida===true?" checked":"")+'> <b>Nota concluída</b> — você decide; depois de concluída, as próximas planilhas importadas não alteram mais esta nota'
             + (d.concluida!==true && /CONCLU/i.test(d.observacao||"") ? ' <small>(a observação já diz “concluído”)</small>' : '')+'</label>')
         + '<fieldset><legend>Dados da nota</legend><div class="grid3">'+CT_CAMPOS_FICHA.map(campo).join("")+'</div></fieldset>'
         + '<fieldset><legend>Datas de rompimento</legend><div class="grid3">'
@@ -2805,7 +2881,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     CT_CAMPOS_RESULT.forEach(function(c){ var v = ler(c[0]); var n = ctNumero(v); dados[c[0]] = v==="" ? null : (n!=null ? n : v); });
     dados.cpsConforme = ctNumero(ler("cpsConforme"));
     dados.observacao = ler("observacao") || "";
-    if(!novo) dados.rastreabilidadeId = ler("rastreabilidadeId") || null;
+    var vincBt = novo ? "" : (ler("vinculoBt") || "");
     var chkAnt = ov.querySelector('[data-ctf-chk="anteriorAoSistema"]');
     if(chkAnt) dados.anteriorAoSistema = chkAnt.checked;
     // v1.16: justificativa (causa + resolução) do resultado abaixo do fck
@@ -2823,6 +2899,19 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(imp.length){ alert("Ainda não dá para marcar a nota como concluída: "+imp.join("; ")+"."); return; }
     }
     dados.notaRemessa = novo ? nota : d.notaRemessa;
+    // v1.18: vínculo com uma BT → a NF da betonada passa a ser igual à desta nota
+    if(vincBt){
+      var pv = vincBt.split("|"), rRast = rastMap.get(pv[0]), iBt = Number(pv[1]);
+      if(rRast && rRast.linhas && rRast.linhas[iBt]){
+        var linhasR = JSON.parse(JSON.stringify(rRast.linhas)), antigaNf = String(linhasR[iBt].notaFiscal||"").trim();
+        if(antigaNf && !confirm("A BT "+(linhasR[iBt].seq||iBt+1)+" está com a NF "+antigaNf+". Trocar para "+dados.notaRemessa+"?")) return;
+        if(antigaNf) linhasR[iBt].nfAnterior = antigaNf;
+        linhasR[iBt].notaFiscal = String(dados.notaRemessa);
+        try{ rastCol.doc(pv[0]).set({ linhas:linhasR, updatedAt:nowISO(), updatedByEmail:currentUserEmail||"" }, { merge:true }); }
+        catch(exR){ console.error(exR); alert("Não foi possível corrigir a NF na rastreabilidade: "+(exR && exR.message ? exR.message : "erro")); return; }
+        dados.rastreabilidadeId = pv[0];
+      }
+    }
     dados.atualizadoEm = nowISO(); dados.atualizadoPor = currentUserEmail||""; dados.editadoNoSite = true;
     if(novo){ dados.criadoEm = nowISO(); dados.origem = "site"; }
     botao.disabled = true; botao.textContent = "Salvando…";
@@ -3445,7 +3534,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
     unsubRast = rastCol.onSnapshot(function(snap){
-      rastMap = new Map();
+      rastMap = new Map(); ctInicioCache = null;
       snap.docs.forEach(function(d){ rastMap.set(d.id, d.data()); });
       render();
     }, function(err){ setSync("off","erro de sincronização"); console.error(err); });
@@ -3972,6 +4061,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       });
     });
     wireModalEvents();
+    // v1.18: assinaturas também na rastreabilidade (engenharia e estagiário/técnico)
+    if(draft.type==="rast"){
+      var bAr = m.querySelector("[data-assinar-rast]"); if(bAr) bAr.addEventListener("click", assinarRast);
+      var bCr = m.querySelector("[data-cad-assin]"); if(bCr) bCr.addEventListener("click", abrirMinhaAssinatura);
+    }
     // v1.15: assinatura / ficha travada
     if(draft.type==="fvs"){
       var bA = m.querySelector("[data-assinar]"); if(bA) bA.addEventListener("click", assinarFvs);
@@ -4086,6 +4180,39 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     } else if((papel==="tecnico" || papel==="estagiario") && !d.inspecionadoPor){ d.inspecionadoPor = minhaAssinatura.nome||""; }
     var ok = await saveDraft(true);
     if(!ok && draft && draft.type==="fvs"){ draft.data = JSON.parse(antes); renderModal(); }
+  }
+  /* v1.18: assinatura na rastreabilidade. A engenheira e o(a) estagiário(a) /
+     técnico(a) assinam; no Excel a imagem vai para o campo de assinatura do
+     modelo (responsável pela coleta e engenheiro responsável). Não trava a
+     ficha: betonadas podem ser completadas depois. */
+  function rastAssinaturasFieldHtml(d, id){
+    var acoes = "";
+    if(!id) acoes = '<div class="hint">Salve a ficha para poder assinar.</div>';
+    else if(!minhaAssinatura) acoes = '<button type="button" class="btn" data-cad-assin>Cadastrar minha assinatura</button>';
+    else {
+      var papel = minhaAssinatura.papel || "engenheiro";
+      var ja = (d.assinaturas||[]).some(function(s){ return s.email===currentUserEmail && s.papel===papel; });
+      acoes = ja ? '<div class="hint">Você já assinou esta ficha.</div>'
+        : '<button type="button" class="btn primary" data-assinar-rast>Assinar como '+escapeHtml(PAPEIS_ASSIN[papel]||papel)+'</button>';
+    }
+    var falta = [];
+    if(!assinaturaDoPapel(d, "engenheiro")) falta.push("engenharia");
+    if(!assinaturaDoPapel(d, "tecnico")) falta.push("estagiário(a) ou técnico(a)");
+    return '<fieldset class="fvs-assin-bloco"><legend>Assinaturas</legend>'+assinaturasHtml(d.assinaturas, fmtDateTimeBR)
+      + (falta.length ? '<div class="hint">Falta assinar: '+falta.join(" e ")+'. A assinatura sai no Excel, no lugar de assinatura do modelo.</div>' : '')
+      + '<div class="assin-acoes-ficha">'+acoes+'</div></fieldset>';
+  }
+  async function assinarRast(){
+    if(!draft || draft.type!=="rast" || !draft.id || !minhaAssinatura) return;
+    var d = draft.data, papel = minhaAssinatura.papel || "engenheiro";
+    if(!confirm("Assinar a rastreabilidade de "+fmtDateBR(d.data)+(d.blocoPav ? " ("+d.blocoPav+")" : "")+" como "+(PAPEIS_ASSIN[papel]||papel)+"?")) return;
+    var antes = JSON.stringify(d);
+    d.assinaturas = (d.assinaturas||[]).concat([{ papel:papel, nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"",
+      email:currentUserEmail, uid:(auth.currentUser||{}).uid||"", em:nowISO(), imagem:minhaAssinatura.imagem||"" }]);
+    if(papel==="engenheiro" && !d.engenheiro) d.engenheiro = minhaAssinatura.nome||"";
+    if((papel==="tecnico" || papel==="estagiario") && !d.responsavelColeta) d.responsavelColeta = minhaAssinatura.nome||"";
+    var ok = await saveDraft(true);
+    if(!ok && draft && draft.type==="rast"){ draft.data = JSON.parse(antes); renderModal(); }
   }
   async function novaRevisaoFvs(){
     if(!draft || draft.type!=="fvs" || !draft.id || !draft.data.travada) return;
@@ -4342,6 +4469,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</div>'+field("Observações / ações corretivas","acoesCorretivas",d.acoesCorretivas,"textarea")
         + field("Data de fechamento","dataFechamento",d.dataFechamento,"date")
         + '</fieldset>'
+      + rastAssinaturasFieldHtml(d, id)
       + '<fieldset><legend>Ficha FVS vinculada</legend>'+linkHtml+'</fieldset>'
       + lastUpdatedHtml(d)
       + '</div>'
@@ -5443,12 +5571,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           sheetXml = xmlSetRowHeight(sheetXml, 23, alturaL23);
         }
         if(d.dataFechamento) sheetXml = xmlSetCellText(sheetXml, "B25", fmtDateBR(d.dataFechamento));
-        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+(d.responsavelColeta||""));
-        sheetXml = xmlSetCellText(sheetXml, "S25", "  "+(d.engenheiro||""));
-        var baseStyleE25 = xmlGetCellStyleId(sheetXml, "E25");
-        var newStyleE25 = ensureWrapStyle(state, baseStyleE25);
-        sheetXml = xmlSetCellStyleId(sheetXml, "E25", newStyleE25);
-        sheetXml = xmlSetRowHeight(sheetXml, 25, 34); // linha 25
+        // v1.18: com assinatura, o campo ganha a linha "____" e "assinado eletronicamente em …"
+        // e a imagem da assinatura entra por cima (adicionarAssinaturasXlsx, abaixo)
+        var assinT = assinaturaDoPapel(d, "tecnico"), assinE = assinaturaDoPapel(d, "engenheiro");
+        sheetXml = xmlSetCellText(sheetXml, "E25", "RESPONSÁVEL PELA COLETA DOS DADOS (LETRA DE FORMA): "+textoAssinado(d, "tecnico", d.responsavelColeta)
+          +(assinT ? "\n\n\n_______________________________"+rodapeAssinado(d, "tecnico") : ""));
+        sheetXml = xmlSetCellText(sheetXml, "S25", "  "+textoAssinado(d, "engenheiro", d.engenheiro)
+          +(assinE ? "\n\n\n_______________________"+rodapeAssinado(d, "engenheiro") : ""));
+        ["E25","S25"].forEach(function(addr){
+          sheetXml = xmlSetCellStyleId(sheetXml, addr, ensureWrapStyle(state, xmlGetCellStyleId(sheetXml, addr)));
+        });
+        sheetXml = xmlSetRowHeight(sheetXml, 25, (assinT || assinE) ? 72 : 34); // linha 25
 
         sheetXml = xmlAddPageSetupLandscape(sheetXml);
 
@@ -5456,7 +5589,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         zip.file("xl/worksheets/sheet1.xml", sheetXml);
         zip.file("xl/styles.xml", stylesXml);
 
-        return zip.generateAsync({type:"blob"});
+        // v1.18: imagem das assinaturas — coleta (E25:J25) e engenheiro (S25:Y25)
+        return adicionarAssinaturasXlsx(zip, "xl/worksheets/sheet1.xml", assinaturasParaXlsx(d, [5,10], [19,25], 25))
+          .then(function(){ return zip.generateAsync({type:"blob"}); });
       });
     }).then(function(blob){
       triggerDownload(blob, "Rastreabilidade_"+(d.data||"sem_data")+"_"+safeName(d.blocoPav||"").slice(0,30)+".xlsx");
@@ -6477,7 +6612,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
-    initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
+    initAco({ col:acoCol, lista:acoListaComConcretagem, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
       nowISO:nowISO, usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return acoErroAcesso; }, lajes:acoLajes });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
