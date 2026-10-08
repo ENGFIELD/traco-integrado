@@ -1737,14 +1737,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // pendente ali, então ele tem prioridade sobre a comparação de datas: só
   // vira "pendente" (cobrança de resultado) quando a data já passou, o
   // resultado não saiu E a observação não foi marcada como concluída.
+  // v1.11: além da observação, a nota pode ser marcada como concluída no app
+  // (campo concluida:true) — encerra a cobrança de todas as idades sem resultado.
   function ctRowConcluidaPorObservacao(row){
-    return /CONCLU/i.test(row.observacao||"");
+    return row.concluida===true || /CONCLU/i.test(row.observacao||"");
   }
   function ctStatusIdade(row, idade){
     var dataPrev = row[idade.dataCampo];
     if(!dataPrev) return "sem-data";
     var saiu = idade.campos.some(function(c){ return ctValorPreenchido(row[c]); });
     if(saiu) return "concluido";
+    if(row.concluida===true) return "dispensado";
     if(dataPrev > todayISO()) return "aguardando";
     return ctRowConcluidaPorObservacao(row) ? "dispensado" : "pendente";
   }
@@ -2176,7 +2179,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           + ctCelulaResultado(row, "r14", CT_IDADES[1]) + ctCelulaResultado(row, "r14b", CT_IDADES[1])
           + ctCelulaResultado(row, "r28", CT_IDADES[2]) + ctCelulaResultado(row, "r28b", CT_IDADES[2])
           + ctCelulaResultado(row, "r63", CT_IDADES[3]) + ctCelulaResultado(row, "r63b", CT_IDADES[3])
-          + ctCelulaTexto(row.observacao, "left")
+          + ctCelulaTexto(row.concluida===true ? "✓ concluída"+(row.observacao ? " · "+row.observacao : "") : row.observacao, "left")
           + ctCelulaRastreabilidade(row)
         + '</tr>';
       }).join("") : '<tr><td colspan="25" style="text-align:center;color:var(--text-muted);padding:20px;">Nenhum traço encontrado com os filtros atuais.</td></tr>')
@@ -2487,10 +2490,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
             var lig = ctLigacoes(r);
             var selo = lig.confirmadas.length ? '<span class="ct-selo ok" title="NF encontrada numa rastreabilidade">NF ✓</span>'
               : (lig.mesmoDia.length ? '<span class="ct-selo meio" title="Há rastreabilidade no mesmo dia, mas sem esta NF">NF ?</span>' : '<span class="ct-selo nada" title="Nenhuma rastreabilidade com esta NF">sem vínculo</span>');
-            return '<div class="ct-linha" data-ct-abrir="'+escapeHtml(r._id)+'">'
-              + '<div class="ct-linha-id"><b>NF '+escapeHtml(r.notaRemessa)+'</b> '+selo+'<small>'+escapeHtml(r.local||"(sem local)")+'</small>'
+            var feita = r.concluida===true;
+            return '<div class="ct-linha'+(feita?" concluida":"")+'" data-ct-abrir="'+escapeHtml(r._id)+'">'
+              + '<div class="ct-linha-id"><b>NF '+escapeHtml(r.notaRemessa)+'</b> '+selo+(feita ? ' <span class="ct-selo ok">concluída</span>' : '')+'<small>'+escapeHtml(r.local||"(sem local)")+'</small>'
                 + '<small class="ct-linha-meta">fck '+escapeHtml(r.fck==null?"—":r.fck)+' · slump '+escapeHtml(r.slump==null?"—":r.slump)+(r.volume!=null? ' · '+escapeHtml(r.volume)+' m³' : '')+(r.origem==="site"?' · lançada no site':'')+'</small></div>'
               + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(r, i); }).join("")+'</div>'
+              + '<button type="button" class="btn small ct-concluir" data-ct-concluir="'+escapeHtml(r._id)+'" title="'+(feita?"Reabrir esta nota":"Marcar esta nota como concluída (não cobra mais resultados)")+'">'+(feita?"Reabrir":"✓ Concluir")+'</button>'
             + '</div>';
           }).join("")
       + '</div>';
@@ -2498,6 +2503,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     pintarIcones(el);
     el.querySelectorAll("[data-open-rast]").forEach(function(btn){
       btn.addEventListener("click", function(e){ e.stopPropagation(); openModal("rast", btn.getAttribute("data-open-rast")); });
+    });
+    el.querySelectorAll("[data-ct-concluir]").forEach(function(b){
+      b.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = b.getAttribute("data-ct-concluir"), r = ctMap.get(id) || {};
+        ctGravarLote([{ id:id, dados:{ concluida: r.concluida!==true } }], b);
+      });
     });
     el.querySelectorAll("[data-ct-abrir]").forEach(function(div){
       div.addEventListener("click", function(){ abrirFichaNf(div.getAttribute("data-ct-abrir")); });
@@ -2544,6 +2556,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               + opcoesVinculo.map(function(x){ return '<option value="'+escapeHtml(x.id)+'"'+(d.rastreabilidadeId===x.id?" selected":"")+'>'+escapeHtml(rastRotulo(x.r))+'</option>'; }).join("")
             + '</select></div>'
             + '<label class="ct-anterior"><input type="checkbox" data-ctf-chk="anteriorAoSistema"'+(d.anteriorAoSistema===true?" checked":"")+'> Concretagem anterior ao sistema — não há rastreabilidade no app para ligar</label></fieldset>')
+        + (novo ? '' : '<label class="ct-concluida-chk"><input type="checkbox" data-ctf-chk="concluida"'+(d.concluida===true?" checked":"")+'> <b>Ficha concluída</b> — não cobra mais resultados desta nota'
+            + (d.concluida!==true && /CONCLU/i.test(d.observacao||"") ? ' <small>(a observação já diz “concluído”)</small>' : '')+'</label>')
         + '<fieldset><legend>Dados da nota</legend><div class="grid3">'+CT_CAMPOS_FICHA.map(campo).join("")+'</div></fieldset>'
         + '<fieldset><legend>Datas de rompimento</legend><div class="grid3">'
           + CT_IDADES.map(function(i){ return '<div class="field"><label>'+i.key+' dias</label><input type="date" data-ctf="'+i.dataCampo+'" value="'+escapeHtml(d[i.dataCampo]||"")+'"></div>'; }).join("")
@@ -2607,6 +2621,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(!novo) dados.rastreabilidadeId = ler("rastreabilidadeId") || null;
     var chkAnt = ov.querySelector('[data-ctf-chk="anteriorAoSistema"]');
     if(chkAnt) dados.anteriorAoSistema = chkAnt.checked;
+    var chkConc = ov.querySelector('[data-ctf-chk="concluida"]');
+    if(chkConc) dados.concluida = chkConc.checked;
     dados.notaRemessa = novo ? nota : d.notaRemessa;
     dados.atualizadoEm = nowISO(); dados.atualizadoPor = currentUserEmail||""; dados.editadoNoSite = true;
     if(novo){ dados.criadoEm = nowISO(); dados.origem = "site"; }
@@ -3309,14 +3325,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     currentUserEmail = user.email || "";
     somenteLeitura = ehSomenteLeitura(currentUserEmail);
     document.body.classList.toggle("somente-leitura", somenteLeitura);
-    var faixa = document.getElementById("faixa-somente-leitura");
-    if(somenteLeitura && !faixa){
-      faixa = document.createElement("div");
-      faixa.id = "faixa-somente-leitura"; faixa.className = "faixa-somente-leitura";
-      faixa.textContent = "Acesso somente para visualização — você pode consultar e exportar, mas não alterar dados.";
-      var raiz = document.getElementById("app-root");
-      raiz.insertBefore(faixa, raiz.firstChild);
-    } else if(!somenteLeitura && faixa) faixa.remove();
+    // v1.11: sem faixa de aviso (quebrava o layout); a conta só de visualização
+    // vê tudo igual aos outros, só sem os botões de criar/alterar/apagar.
     definirUsuario(currentUserEmail);
     atualizarIndicadorConexao();
     conferirPendentesAnteriores();

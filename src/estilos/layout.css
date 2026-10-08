@@ -471,7 +471,6 @@ legend { font-size: 16px; }
 .metas-avanco .cr-barra { flex: 0 0 140px; }
 
 /* v1.9: conta só de visualização — some com tudo que cria, altera ou apaga */
-.faixa-somente-leitura { background: #fff4d6; color: #6b4e00; border-bottom: 1px solid #f0d58a; padding: 7px 16px; font-size: 13px; text-align: center; }
 body.somente-leitura .ti-fab, body.somente-leitura [data-abrir-novo],
 body.somente-leitura #btn-save, body.somente-leitura #btn-delete, body.somente-leitura #add-line, body.somente-leitura #add-nc,
 body.somente-leitura #add-pavimento, body.somente-leitura #add-unidade, body.somente-leitura [data-rm-nc],
@@ -556,3 +555,10 @@ body.somente-leitura .cr-prog-edit .cr-lapis { display: none; }
   body.com-relatorio { background: #fff !important; }
 }
 body.somente-leitura .ct-vinc, body.somente-leitura .ct-anterior { display: none !important; }
+
+/* v1.11: nota do CT marcada como concluída */
+.ct-concluida-chk { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); cursor: pointer; font-size: 13.5px; }
+.ct-concluida-chk small { color: var(--text-muted); }
+.ct-linha .ct-concluir { flex: none; align-self: center; }
+.ct-linha.concluida { opacity: .75; }
+body.somente-leitura .ct-concluir, body.somente-leitura .ct-concluida-chk { display: none !important; }

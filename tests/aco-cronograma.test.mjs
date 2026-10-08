@@ -21,7 +21,7 @@ ok(chavesDaEntrega({ destino: "Laje do 2º Emb." }).has("emb:2"), "abreviação 
 
 const arq = "C:/Users/Pichau/Desktop/Cópia de Cronograma Belavista Setembro 2026.xlsx";
 let linhas;
-if (fs.existsSync(arq)) {
+if (fs.existsSync(arq) && !process.env.CI) {
   const wb = XLSX.read(fs.readFileSync(arq));
   linhas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
   console.log("(cronograma real)");

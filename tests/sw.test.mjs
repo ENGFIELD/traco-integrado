@@ -27,7 +27,7 @@ ok(await pedir("http://x/assets/nunca-baixado.js") === "ERRO", "sem sinal e sem 
 ok(await pedir("https://firestore.googleapis.com/x") === "IGNORADO", "Firestore não passa pelo service worker");
 ok(await pedir("http://x/api", { method: "POST" }) === "IGNORADO", "POST não passa pelo service worker");
 ok(await pedir("http://x/__/firebase/init.json") === "IGNORADO", "/__/ do Hosting ignorado");
-lojas.set("traco-v1.9-assets", new Map()); lojas.set("traco-v1.1-assets", new Map());
+lojas.set("traco-v1.10-assets", new Map()); lojas.set("traco-v1.1-assets", new Map());
 await new Promise((r) => ouvintes.activate({ waitUntil: (p) => p.then(r) }));
-ok(!lojas.has("traco-v1.9-assets") && !lojas.has("traco-v1.1-assets") && lojas.has("traco-v1.10-assets"), "caches de versões antigas são limpos");
+ok(!lojas.has("traco-v1.10-assets") && !lojas.has("traco-v1.1-assets") && lojas.has("traco-v1.11-assets"), "caches de versões antigas são limpos");
 console.log(falhas ? falhas + " falha(s)" : "Tudo certo."); process.exit(falhas ? 1 : 0);

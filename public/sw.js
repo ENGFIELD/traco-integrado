@@ -1,4 +1,4 @@
-// Service worker do Traço Integrado (v1.10).
+// Service worker do Traço Integrado (v1.11).
 //
 // Antes (v1.0–v1.8) ele só repassava tudo para a rede: o app não abria sem
 // sinal na obra e baixava tudo de novo a cada visita. Agora:
@@ -8,7 +8,7 @@
 //  - Modelos .xlsx, ícones, manifest: rede primeiro, cache como reserva.
 //  - Firestore, Auth, Cloudinary e qualquer outro domínio, e tudo que não for
 //    GET: não passa pelo service worker (o Firestore tem o próprio cache).
-const VERSAO = "traco-v1.10";
+const VERSAO = "traco-v1.11";
 const CACHE_ASSETS = VERSAO + "-assets";
 const CACHE_PAGINAS = VERSAO + "-paginas";
 

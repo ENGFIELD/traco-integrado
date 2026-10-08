@@ -1,0 +1,73 @@
+# Publicar em produção — só roda quando alguém aperta "Run workflow" em
+# Actions e digita PUBLICAR. Antes de publicar: testes, build e BACKUP do
+# banco (guardado como anexo privado do workflow por 30 dias). Depois marca a
+# versão com uma tag producao-AAAA-MM-DD-HHMM para dar para voltar.
+name: Publicar em produção
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmacao:
+        description: 'Digite PUBLICAR para confirmar'
+        required: true
+      regras:
+        description: 'Publicar também as regras do banco (firestore.rules)?'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: producao
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    if: github.event.inputs.confirmacao == 'PUBLICAR'
+    runs-on: ubuntu-latest
+    env:
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Testes
+        run: npm test
+      - name: Build
+        run: npm run build
+
+      - name: Chave do Firebase (só durante este workflow)
+        env:
+          CHAVE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$CHAVE" > "$RUNNER_TEMP/chave.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/chave.json" >> "$GITHUB_ENV"
+
+      - name: Backup do banco antes de publicar
+        run: |
+          cd scripts && npm ci --omit=dev && cd ..
+          node scripts/backup-firestore.js --key "$GOOGLE_APPLICATION_CREDENTIALS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-firestore
+          path: backups/firestore_*.json
+          retention-days: 30
+
+      - name: Publicar site
+        run: npx --yes firebase-tools@13 deploy --only hosting --project traco-integrado-sig --non-interactive
+      - name: Publicar regras do banco
+        if: github.event.inputs.regras == 'true'
+        run: npx --yes firebase-tools@13 deploy --only firestore:rules --project traco-integrado-sig --non-interactive
+
+      - name: Marcar a versão publicada
+        run: |
+          TAG="producao-$(TZ=America/Sao_Paulo date +%Y-%m-%d-%H%M)"
+          git tag "$TAG" && git push origin "$TAG"
+
+      - name: Apagar a chave
+        if: always()
+        run: rm -f "$RUNNER_TEMP/chave.json"
