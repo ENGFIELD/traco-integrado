@@ -43,7 +43,7 @@ if (emulador) {
 }
 
 const fmt = (s) => (s ? new Date(s).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—");
-const PAPEIS = ["admin", "engenheiro", "tecnico", "encarregado", "visualizador"];
+const PAPEIS = ["admin", "engenheiro", "tecnico", "estagiario", "encarregado", "visualizador"];
 
 async function listar() {
   const todos = [];

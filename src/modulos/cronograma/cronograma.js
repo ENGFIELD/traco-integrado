@@ -13,6 +13,8 @@
 import { lerCronograma, calcularFolgas, atividadesNoPeriodo, pctPrevisto, idxUtil, isoDeUtil } from "./cpm.js";
 import { pintarIcones } from "../../ui/icones.js";
 import { ETAPAS, ETAPA_POR_KEY, NIVEIS, classificar, resumoEtapas, chaveAtividade } from "./etapas.js";
+import { normalizarTabela, separadorCsv, lerProjectXml, tabelaDeItensPdf } from "./formatos.js";
+import { garantirPdf } from "../../libs.js";
 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const COLS = ["a", "b", "c", "d", "e", "f"];
@@ -154,7 +156,7 @@ export function renderViewCronograma(container) {
   if (ctx.erroAcesso()) corpo = `<div class="banner">Esta área ainda não foi liberada no banco de dados (regras de segurança). Ela passa a funcionar quando a versão for publicada.</div>`;
   if (!cr) {
     container.innerHTML = cabecalho() + (corpo || "") + `<div class="empty-state"><div class="big">Nenhum cronograma enviado</div>
-      <p>Envie a exportação do MS Project em Excel (colunas: Atividade, % concluída, Predecessoras, Início, Duração, Término).</p></div>`;
+      <p>Envie o cronograma do MS Project em Excel, CSV, XML ou PDF (colunas: nome da tarefa, % concluída, predecessoras, início, duração, término).</p></div>`;
     ligarCabecalho(container); return;
   }
   const geral = cr.tarefas.find((t) => t.nivel === 0) || cr.tarefas[0];
@@ -202,7 +204,7 @@ function cabecalho() {
   return `<div class="pav-header"><h2>Cronograma</h2></div>
     <p class="view-desc">Cronograma da obra (MS Project). Toque no % de uma atividade para atualizar o avanço pelo app — o Início e as metas usam esse valor. Enviar um cronograma novo recomeça do % que vier no arquivo.</p>
     <div class="ct-acoes"><button class="btn primary" type="button" data-cr-enviar><svg class="ti-i" data-i="file"></svg>${doc ? "Enviar cronograma atualizado…" : "Enviar cronograma…"}</button>
-      <input type="file" data-cr-arquivo accept=".xlsx,.xls" hidden>
+      <input type="file" data-cr-arquivo accept=".xlsx,.xls,.xlsm,.ods,.csv,.xml,.pdf,.mpp" hidden>
       <div class="ct-acoes-info"><span>${info}</span><div class="ct-import-msg" data-cr-msg></div></div></div>`;
 }
 function ligarCabecalho(container) {
@@ -319,16 +321,51 @@ function ligarEtapas(container) {
 }
 
 // ---------- importação ----------
+// v1.17: Excel/ODS/CSV, XML do MS Project e PDF → tabela do lerCronograma (formatos.js)
+async function lerArquivoCronograma(arquivo) {
+  const ext = (String(arquivo.name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "";
+  if (ext === "mpp") throw new Error("o arquivo .mpp é um formato fechado do MS Project. No Project, use Arquivo → Salvar como → Excel, XML ou PDF e envie esse arquivo");
+  if (ext === "pdf") {
+    await garantirPdf();
+    const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await arquivo.arrayBuffer()) }).promise;
+    const itens = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const pg = await pdf.getPage(p);
+      const tc = await pg.getTextContent();
+      tc.items.forEach((i) => { if (i.str && i.str.trim()) itens.push({ str: i.str, x: i.transform[4], y: i.transform[5], w: i.width, pagina: p }); });
+    }
+    const t = tabelaDeItensPdf(itens);
+    if (!t) throw new Error("não achei a tabela do cronograma no PDF (precisa ter as colunas nome da tarefa, início e término). Se o PDF for uma imagem escaneada, envie em Excel ou XML");
+    return t;
+  }
+  await ctx.garantirLibs();
+  let wb;
+  if (ext === "xml") {
+    const texto = await arquivo.text();
+    const t = lerProjectXml(texto);
+    if (t) return t;
+    wb = window.XLSX.read(texto, { type: "string" }); // XML de planilha (Excel 2003)
+  } else if (ext === "csv") {
+    const texto = await arquivo.text();
+    wb = window.XLSX.read(texto, { type: "string", FS: separadorCsv(texto) });
+  } else {
+    wb = window.XLSX.read(await arquivo.arrayBuffer(), { type: "array" });
+  }
+  // a 1ª aba que tiver um cronograma reconhecível
+  for (const nome of wb.SheetNames) {
+    const linhas = window.XLSX.utils.sheet_to_json(wb.Sheets[nome], { header: 1, raw: false, blankrows: true });
+    const t = normalizarTabela(linhas);
+    if (t) return t;
+  }
+  return window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, blankrows: true });
+}
 async function importar(arquivo, container) {
   const msg = container.querySelector("[data-cr-msg]");
   msg.className = "ct-import-msg"; msg.textContent = "Lendo " + arquivo.name + "…";
   try {
-    await ctx.garantirLibs();
-    const wb = window.XLSX.read(await arquivo.arrayBuffer(), { type: "array" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const linhasPlan = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, blankrows: true });
+    const linhasPlan = await lerArquivoCronograma(arquivo);
     const teste = lerCronograma(linhasPlan);
-    if (teste.tarefas.length < 5 || !teste.tarefas.some((t) => t.ini && t.fim)) throw new Error("não reconheci as colunas (Atividade, % concluída, Predecessoras, Início, Duração, Término)");
+    if (teste.tarefas.length < 5 || !teste.tarefas.some((t) => t.ini && t.fim)) throw new Error("não reconheci as colunas (nome da tarefa, % concluída, predecessoras, início, duração, término)");
     calcularFolgas(teste);
     const dados = {
       arquivo: arquivo.name, importadoEm: ctx.nowISO(), importadoPor: ctx.usuario(),

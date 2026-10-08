@@ -16,6 +16,7 @@
 export const PAPEIS = {
   engenheiro: "Engenheiro(a) responsável",
   tecnico: "Técnico(a) — inspeção",
+  estagiario: "Estagiário(a) — inspeção",
   encarregado: "Encarregado(a)",
 };
 const TINTA = "#1a2a4a"; // azul-escuro de caneta: aparece bem no papel e na tela clara e escura (fundo branco da caixa)

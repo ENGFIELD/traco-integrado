@@ -33,11 +33,30 @@ export function abaixoEm(row) {
   if (fck == null) return [];
   return IDADES_OBRIGATORIAS.filter((i) => { const r = melhor(row, i); return r != null && r < fck; });
 }
-export function precisaJustificativa(row) { return abaixoEm(row).length > 0; }
-/** Justificativa completa: causa E resolução preenchidas */
+/* v1.17: concretagem ANTERIOR AO SISTEMA (antes da 1ª rastreabilidade do app)
+ * fica fora dos indicadores e conta como concluída. */
+export function anterior(row) { return !!row && row.anteriorAoSistema === true; }
+/* v1.17: a coluna Observação da planilha traz "Concluído" ou a justificativa
+ * de cada ensaio. "Concluído" = nota concluída; o texto que não for só
+ * "concluído/ok" vale como justificativa. */
+export function obsConcluida(row) { return /CONCLU/i.test(String((row && row.observacao) || "")); }
+export function obsJustificativa(row) {
+  const t = String((row && row.observacao) || "")
+    .replace(/conclu[ií]d[oa]s?/gi, "").replace(/^[\s.,;:|\-–—]+|[\s.,;:|\-–—]+$/g, "").trim();
+  return t.length >= 5 && !/^(ok|finalizad[oa])$/i.test(t) ? t : "";
+}
+/** Nota concluída: anterior ao sistema, "Concluído" na observação ou marcada no app */
+export function concluida(row) { return anterior(row) || obsConcluida(row) || (!!row && row.concluida === true); }
+export function precisaJustificativa(row) { return !anterior(row) && abaixoEm(row).length > 0; }
+/** Justificativa: causa E resolução no app, ou o texto da Observação da planilha */
 export function justificada(row) {
   const j = row && row.justificativaFck;
-  return !!(j && String(j.causa || "").trim() && String(j.resolucao || "").trim());
+  return !!(j && String(j.causa || "").trim() && String(j.resolucao || "").trim()) || !!obsJustificativa(row);
+}
+/** Ids das notas concretadas antes do início do sistema que ainda não foram marcadas (campo ausente) */
+export function anterioresAoSistema(rows, inicioISO) {
+  if (!inicioISO) return [];
+  return rows.filter((r) => r.dataConcretagem && r.dataConcretagem < inicioISO && r.anteriorAoSistema == null).map((r) => r._id);
 }
 export function justificativaPendente(row) { return precisaJustificativa(row) && !justificada(row); }
 /** O que impede marcar a nota como concluída (lista de motivos em texto; vazia = pode concluir) */
@@ -50,8 +69,8 @@ export function impedimentosConcluir(row) {
 /** Texto para a coluna Observação da planilha exportada */
 export function observacaoComJustificativa(row) {
   const obs = String(row.observacao || "").trim();
-  if (!justificada(row)) return obs;
   const j = row.justificativaFck;
+  if (!(j && String(j.causa || "").trim() && String(j.resolucao || "").trim())) return obs; // só a da planilha: já está na observação
   const txt = `Abaixo do fck aos ${abaixoEm(row).join(" e ")} dias. Causa: ${String(j.causa).trim()}. Resolução: ${String(j.resolucao).trim()}.`;
   return obs ? obs + " | " + txt : txt;
 }

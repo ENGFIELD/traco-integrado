@@ -1,5 +1,5 @@
 // Regras de aceitação do Controle Tecnológico: node tests/regras-ct.test.mjs
-import { abaixoEm, precisaJustificativa, justificada, justificativaPendente, impedimentosConcluir, observacaoComJustificativa } from "../src/modulos/ct/regras-ct.js";
+import { anterior, obsConcluida, obsJustificativa, concluida, anterioresAoSistema, abaixoEm, precisaJustificativa, justificada, justificativaPendente, impedimentosConcluir, observacaoComJustificativa } from "../src/modulos/ct/regras-ct.js";
 
 let falhas = 0;
 const ok = (c, m) => { console.log((c ? "ok   " : "FALHA") + " " + m); if (!c) falhas++; };
@@ -19,6 +19,15 @@ ok(impedimentosConcluir({ fck: 35, r28: 32, r63: 36 }).length === 1, "abaixo aos
 ok(impedimentosConcluir({ fck: 35, r28: 32, r63: 36, justificativaFck: J }).length === 0, "com 28, 63 e justificativa pode concluir");
 ok(observacaoComJustificativa({ fck: 35, r28: 32, r63: 36, observacao: "CONCLUÍDO", justificativaFck: J }) === "CONCLUÍDO | Abaixo do fck aos 28 dias. Causa: cura deficiente. Resolução: extração de testemunhos; laudo ok.", "observação da planilha leva a justificativa");
 ok(observacaoComJustificativa({ observacao: "ok" }) === "ok", "sem justificativa: observação igual");
+
+// v1.17: anteriores ao sistema e coluna Observação da planilha
+ok(!precisaJustificativa({ fck: 35, r28: 30, anteriorAoSistema: true }) && concluida({ anteriorAoSistema: true }), "anterior ao sistema: fora dos indicadores e concluída");
+ok(obsConcluida({ observacao: "CONCLUÍDO" }) && concluida({ observacao: "Concluído" }), "“Concluído” na observação = concluída");
+ok(obsJustificativa({ observacao: "CONCLUÍDO" }) === "", "“Concluído” sozinho não é justificativa");
+ok(obsJustificativa({ observacao: "Concluído - CP rompido com defeito, extraído testemunho OK" }) === "CP rompido com defeito, extraído testemunho OK", "texto da observação vale como justificativa");
+ok(!justificativaPendente({ fck: 35, r28: 32, observacao: "Rompimento fora da prensa calibrada; refeito" }), "justificativa vinda da planilha libera a cobrança");
+ok(justificativaPendente({ fck: 35, r28: 32, observacao: "CONCLUÍDO" }), "abaixo do fck só com “Concluído” ainda pede a justificativa");
+ok(anterioresAoSistema([{ _id: "a", dataConcretagem: "2025-10-01" }, { _id: "b", dataConcretagem: "2025-12-01" }, { _id: "c", dataConcretagem: "2025-09-01", anteriorAoSistema: false }], "2025-11-22").join() === "a", "marca só as anteriores ainda não marcadas (respeita quem desmarcou)");
 
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);

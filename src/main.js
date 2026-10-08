@@ -11,7 +11,7 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
-import { IDADES_OBRIGATORIAS as CT_OBRIGATORIAS, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
+import { anterior as ctAnterior, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
@@ -1259,6 +1259,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
 
   /* ---------------- painel geral (tela inicial) ---------------- */
+  // v1.17: "12 de 40 notas concluídas · 230 anteriores ao sistema" (cartão do Início)
+  function ctResumoConclusao(){
+    var rows = ctRowsArray(), ant = 0, conc = 0, tot = 0;
+    rows.forEach(function(r){ if(ctAnterior(r)){ ant++; return; } tot++; if(ctConcluidaRegra(r)) conc++; });
+    return conc+" de "+tot+" nota(s) concluída(s)"+(ant ? " · "+ant+" anterior(es) ao sistema" : "");
+  }
   function renderViewDashboard(){
     var container = document.getElementById("view-dashboard");
     if(!container) return;
@@ -1277,7 +1283,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var kpiCards = [
       { n:fvsAbertas, l:"FVS em aberto", t:"info", d:totalFvs+" fichas no total", ir:"board", sit:"aberto" },
       { n:ncAbertas, l:"NCs em aberto", t:"nc", d:todasNc.length+" registradas", ir:"nc" },
-      { n:ctPendentes, l:"Resultados de CP pendentes", t:"pendente", d:"data de rompimento já passou", ir:"ct", pend:true },
+      { n:ctPendentes, l:"Resultados de CP pendentes", t:"pendente", d:ctResumoConclusao(), ir:"ct", pend:true },
       { n:rastPendentes, l:"Concretagens com pendência", t:rastPendentes?"pendente":"ok", d:"acima de 2h30 sem ação corretiva", ir:"board", sit:"pendente" }
     ];
     var kpisHtml = '<div class="dash-kpis">' + kpiCards.map(function(c){
@@ -1306,7 +1312,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var ctLista = ctRowsArray().filter(ctTemPendencia).slice(0,5).map(function(r){
       var idades = ctIdadesPendentes(r).map(function(x){ return x.key+"d"; }).join(", ");
       return li('data-goto-view="ct" data-ct-pend="1"', "flask", "warn", (r.local||"(sem local)"),
-        "NF "+r.notaRemessa+" · "+(r.concreteira||"")+" · concretado "+fmtDateBR(r.dataConcretagem), "falta "+idades, "bad");
+        "NF "+r.notaRemessa+" · "+(r.concreteira||"")+" · concretado "+fmtDateBR(r.dataConcretagem)+(r.observacao ? " · Obs.: "+r.observacao : ""), "falta "+idades, "bad");
     }).join("");
     // FVS em aberto mais recentes
     var fvsLista = [];
@@ -1901,10 +1907,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(!dataPrev) return "sem-data";
     var saiu = idade.campos.some(function(c){ return ctValorPreenchido(row[c]); });
     if(saiu) return "concluido";
+    // v1.17: anterior ao sistema e "Concluído" na observação da planilha contam
+    // como concluída (fora dos indicadores). Concluir pelo app exige 28 e 63 dias.
+    if(ctAnterior(row) || ctRowConcluidaPorObservacao(row)) return "dispensado";
     if(dataPrev > todayISO()) return "aguardando";
-    // v1.16: 28 e 63 dias são obrigatórios — "concluída"/"CONCLUÍDO" só dispensa 7 e 14
-    if(CT_OBRIGATORIAS.indexOf(idade.key)!==-1) return "pendente";
-    return ctRowConcluidaPorObservacao(row) ? "dispensado" : "pendente";
+    return "pendente";
   }
   function ctIdadesPendentes(row){
     return CT_IDADES.filter(function(idade){ return ctStatusIdade(row, idade)==="pendente"; });
@@ -2011,7 +2018,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       }
       if(!linhas.length) throw new Error("nenhuma linha com Nota de Remessa foi encontrada na planilha");
 
-      var novos=0, atualizados=0, preservados=0;
+      var novos=0, atualizados=0, preservados=0, anteriores=0;
+      // v1.17: início do sistema = data da 1ª rastreabilidade lançada no app
+      var inicioSistema = "";
+      rastMap.forEach(function(r){ if(r.data && (!inicioSistema || r.data < inicioSistema)) inicioSistema = r.data; });
       var ops = linhas.map(function(row){
         var id = "nf_"+safeName(row.notaRemessa);
         var existente = ctMap.get(id);
@@ -2030,6 +2040,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           atualizadoEm: nowISO(),
           atualizadoPor: currentUserEmail||""
         });
+        // v1.17: concretada antes do sistema → fora dos indicadores e concluída
+        // (só se ninguém marcou/desmarcou à mão: campo ainda ausente)
+        if(ctAnterioresAoSistema([Object.assign({ _id:id }, data)], inicioSistema).length){ data.anteriorAoSistema = true; anteriores++; }
         return { id:id, data:data };
       });
       ctSetStatus("Gravando "+ops.length+" linha(s)…");
@@ -2049,7 +2062,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var modeloOk = true;
       try{ await ctSalvarModelo(file, buf); }catch(exM){ modeloOk = false; console.warn("modelo da planilha:", exM); }
       ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s)"
-        +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")+"."
+        +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")
+        +(anteriores ? "; "+anteriores+" nota(s) anterior(es) ao sistema (antes de "+fmtDateBR(inicioSistema)+") marcadas como concluídas, fora dos indicadores" : "")+"."
         +(modeloOk ? "" : " (Não consegui guardar a planilha como modelo de exportação.)"), "ok");
     } catch(ex){
       console.error(ex);
@@ -2167,7 +2181,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
   // v1.16 (regra do dono): abaixo do fck aos 28 OU aos 63 dias — mesmo que
   // recupere aos 63, o resultado de 28 abaixo exige justificativa (regras-ct.js).
-  function ctAbaixoFck(row){ return ctAbaixoEm(row).length > 0; }
+  function ctAbaixoFck(row){ return ctPrecisaJust(row); } // v1.17: anteriores ao sistema ficam de fora
   // Ficou abaixo aos 28 dias, mas atingiu o fck aos 63
   function ctRecuperou63(row){
     var fck = ctNumero(row.fck), r = ctMelhor28(row), r63 = ctMelhor63(row);
@@ -2641,12 +2655,15 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
             var lig = ctLigacoes(r);
             var selo = lig.confirmadas.length ? '<span class="ct-selo ok" title="NF encontrada numa rastreabilidade">NF ✓</span>'
               : (lig.mesmoDia.length ? '<span class="ct-selo meio" title="Há rastreabilidade no mesmo dia, mas sem esta NF">NF ?</span>' : '<span class="ct-selo nada" title="Nenhuma rastreabilidade com esta NF">sem vínculo</span>');
-            var feita = r.concluida===true;
+            var feita = ctConcluidaRegra(r);
             return '<div class="ct-linha'+(feita?" concluida":"")+'" data-ct-abrir="'+escapeHtml(r._id)+'">'
               + '<div class="ct-linha-id"><b>NF '+escapeHtml(r.notaRemessa)+'</b> '+selo+(feita ? ' <span class="ct-selo ok">concluída</span>' : '')+'<small>'+escapeHtml(r.local||"(sem local)")+'</small>'
-                + '<small class="ct-linha-meta">fck '+escapeHtml(r.fck==null?"—":r.fck)+' · slump '+escapeHtml(r.slump==null?"—":r.slump)+(r.volume!=null? ' · '+escapeHtml(r.volume)+' m³' : '')+(r.origem==="site"?' · lançada no site':'')+'</small></div>'
+                + '<small class="ct-linha-meta">fck '+escapeHtml(r.fck==null?"—":r.fck)+' · slump '+escapeHtml(r.slump==null?"—":r.slump)+(r.volume!=null? ' · '+escapeHtml(r.volume)+' m³' : '')+(r.origem==="site"?' · lançada no site':'')+(ctAnterior(r)?' · anterior ao sistema':'')+'</small>'
+                + (r.observacao ? '<small class="ct-linha-obs">Obs.: '+escapeHtml(r.observacao)+'</small>' : '')+'</div>'
               + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(r, i); }).join("")+'</div>'
-              + '<button type="button" class="btn small ct-concluir" data-ct-concluir="'+escapeHtml(r._id)+'" title="'+(feita?"Reabrir esta nota":"Marcar esta nota como concluída (não cobra mais resultados)")+'">'+(feita?"Reabrir":"✓ Concluir")+'</button>'
+              // concluída pela planilha ("Concluído") ou anterior ao sistema: sem botão (vem dos dados)
+              + (ctAnterior(r) || /CONCLU/i.test(r.observacao||"") ? '<span class="ct-selo ok">'+(ctAnterior(r) ? "anterior ao sistema" : "concluída na planilha")+'</span>'
+                : '<button type="button" class="btn small ct-concluir" data-ct-concluir="'+escapeHtml(r._id)+'" title="'+(feita?"Reabrir esta nota":"Marcar esta nota como concluída (não cobra mais resultados)")+'">'+(feita?"Reabrir":"✓ Concluir")+'</button>')
             + '</div>';
           }).join("")
       + '</div>';
@@ -2741,8 +2758,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var av = ov.querySelector("[data-ct-aviso]");
       tmp.r63 = ler("r63"); tmp.r63b = ler("r63b");
       var ab = ctAbaixoEm(tmp);
+      tmp.observacao = ler("observacao");
       ov.querySelector("[data-ct-just]").hidden = !ab.length;
-      if(ab.length){
+      if(ab.length && ctObsJustificativa(tmp)){
+        // v1.17: a justificativa já veio na coluna Observação da planilha
+        av.hidden = false; av.className = "ct-aviso-fck leve";
+        av.textContent = "Abaixo do fck aos "+ab.join(" e ")+" dias — justificado na observação: “"+ctObsJustificativa(tmp)+"”.";
+      } else if(ab.length){
         av.hidden = false; av.className = "ct-aviso-fck";
         av.textContent = "⚠ Abaixo do fck ("+tmp.fck+" MPa) aos "+ab.map(function(i){ return i+" dias ("+String(i==="28" ? ctMelhor28(tmp) : ctMelhor63(tmp)).replace(".", ",")+" MPa)"; }).join(" e ")
           +". Informe abaixo a causa e a resolução tomada"+(ab[0]==="28" && ab.length===1 ? " — mesmo atingindo aos 63 dias" : "")+".";
@@ -4061,7 +4083,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!d.engenheiro) d.engenheiro = minhaAssinatura.nome||"";
       if(!d.fechado){ d.fechado = true; if(!d.dataFechamento) d.dataFechamento = todayISO(); }
       d.travada = true; d.travadaEm = nowISO(); d.travadaPor = currentUserEmail;
-    } else if(papel==="tecnico" && !d.inspecionadoPor){ d.inspecionadoPor = minhaAssinatura.nome||""; }
+    } else if((papel==="tecnico" || papel==="estagiario") && !d.inspecionadoPor){ d.inspecionadoPor = minhaAssinatura.nome||""; }
     var ok = await saveDraft(true);
     if(!ok && draft && draft.type==="fvs"){ draft.data = JSON.parse(antes); renderModal(); }
   }
@@ -5020,7 +5042,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
   // v1.15: última assinatura de cada papel (a da revisão atual) e o texto "assinado em …"
   function assinaturaDoPapel(d, papel){
-    return (d.assinaturas||[]).filter(function(s){ return s.papel===papel; }).slice(-1)[0] || null;
+    // v1.17: o campo "Inspecionado por" recebe técnico(a) OU estagiário(a)
+    var papeis = papel==="tecnico" ? ["tecnico","estagiario"] : [papel];
+    return (d.assinaturas||[]).filter(function(s){ return papeis.indexOf(s.papel)!==-1; }).slice(-1)[0] || null;
   }
   function textoAssinado(d, papel, nome){
     var a = assinaturaDoPapel(d, papel);

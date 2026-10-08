@@ -7,7 +7,7 @@ rules_version = '2';
 //
 // Contrato (docs/PLANO_V2.md, seções 3 e 4):
 //  - Papel por obra em usuarios/{uid}.obras[obraId]:
-//      admin | engenheiro | tecnico | encarregado | visualizador
+//      admin | engenheiro | tecnico | estagiario | encarregado | visualizador  (v1.17: estagiário tem as mesmas permissões do técnico)
 //  - Ninguém apaga dados: "excluir" = marcar excluidoEm (lixeira, 30 dias).
 //  - Toda gravação de dados leva junto (mesmo lote) um registro em
 //    obras/{obraId}/auditoria/{id}; sem ele, a gravação é recusada.
@@ -30,9 +30,9 @@ service cloud.firestore {
 
     // papel na obra (ou null)
     function papel(o) { return ativo() ? perfil().get('obras', {}).get(o, null) : null; }
-    function membro(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico', 'encarregado', 'visualizador']; }
+    function membro(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico', 'estagiario', 'encarregado', 'visualizador']; }
     function gestor(o) { return papel(o) in ['admin', 'engenheiro']; }           // fecha, reabre, restaura
-    function editorTecnico(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico']; } // FVS, rastr., CT, plantas
+    function editorTecnico(o) { return papel(o) in ['admin', 'engenheiro', 'tecnico', 'estagiario']; } // FVS, rastr., CT, plantas
     function adminObra(o) { return papel(o) == 'admin'; }
 
     // ---------------- metadados obrigatórios em toda gravação ----------------
@@ -78,7 +78,7 @@ service cloud.firestore {
     function lixeiraOk(o) {
       return !mudou('excluidoEm')
         || (excluindo() && novo().excluidoEm == request.time && novo().excluidoPor.uid == uid()
-            && (gestor(o) || (papel(o) == 'tecnico' && antigo().criadoPor.uid == uid() && antigo().get('fechado', false) == false)))
+            && (gestor(o) || (papel(o) in ['tecnico', 'estagiario'] && antigo().criadoPor.uid == uid() && antigo().get('fechado', false) == false)))
         || (restaurando() && gestor(o));
     }
     // Item na lixeira só pode ser restaurado (nada mais muda junto).
