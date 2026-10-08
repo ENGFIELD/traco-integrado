@@ -36,7 +36,7 @@ admin.initializeApp({ credential: admin.credential.applicationDefault(), project
   } catch (e) {
     console.log("(não foi possível ler o conjunto atual — segue assim mesmo)");
   }
-  const novo = await sr.createRuleset(sr.rulesFileFrom("firestore.rules", fonte));
+  const novo = await sr.createRuleset(sr.createRulesFileFromSource("firestore.rules", fonte));
   console.log("Conjunto novo criado (sintaxe conferida):", novo.name);
   await sr.releaseFirestoreRuleset(novo);
   console.log("Pronto: o banco agora usa", novo.name);
