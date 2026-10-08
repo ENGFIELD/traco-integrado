@@ -11,7 +11,8 @@
     "emuladores": "firebase emulators:start --only auth,firestore,hosting --project traco-integrado-sig",
     "test:regras-v1": "firebase emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras-v1 \"node --test tests/regras/regras-v1.test.mjs\"",
     "test:regras": "firebase emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras \"node --test tests/regras/regras.test.mjs\"",
-    "test": "node tests/planilha-ct.test.mjs && node tests/aco-cronograma.test.mjs && node tests/etapas.test.mjs && node tests/regras-ct.test.mjs && node tests/rotulo-mapa.test.mjs && node tests/pecas.test.mjs && node tests/cronograma-formatos.test.mjs && node tests/xlsx-assinatura.test.mjs && node tests/pendencias.test.mjs && node tests/sw.test.mjs"
+    "test": "node tests/planilha-ct.test.mjs && node tests/aco-cronograma.test.mjs && node tests/etapas.test.mjs && node tests/regras-ct.test.mjs && node tests/rotulo-mapa.test.mjs && node tests/pecas.test.mjs && node tests/cronograma-formatos.test.mjs && node tests/xlsx-assinatura.test.mjs && node tests/pendencias.test.mjs && node tests/porteiro.test.mjs && node tests/sw.test.mjs",
+    "test:e2e": "firebase emulators:exec --config firebase.e2e.json --only auth,firestore,hosting --project traco-integrado-sig \"node tests/e2e/roteiro.mjs\""
   },
   "dependencies": {
     "firebase": "10.13.0",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4",
+    "playwright": "^1.56.1",
     "vite": "^6.0.0"
   }
 }

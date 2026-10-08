@@ -53,6 +53,7 @@ const numerico = (s) => /^\d{1,5}$/.test(String(s || "").trim());
   const porCodigo = new Map();
   snap.docs.forEach((d) => {
     const f = d.data();
+    if (f.excluido === true) return; // v1.28: ficha na lixeira não entra na numeração
     const cod = f.codigo || "(sem código)";
     if (!porCodigo.has(cod)) porCodigo.set(cod, []);
     porCodigo.get(cod).push({ id: d.id, ref: d.ref, f });
