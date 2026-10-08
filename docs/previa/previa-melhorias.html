@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prévia de melhorias</title>
+<style>
+  :root{
+    --bg:#F2F0EA; --surface:#FFFFFF; --surface-2:#EAE7DD; --border:#D9D4C6; --text:#1E1E1C; --muted:#6B675E;
+    --accent:#1E1E1C; --good:#2E7D46; --good-soft:#DDEFE1; --warn:#9C6B0B; --warn-soft:#F3E7C9; --bad:#AD3A2C; --bad-soft:#F5DEDA;
+    --info:#2457A6; --info-soft:#DCE6F5; --raio:14px;
+  }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --bg:#14181A; --surface:#1B2124; --surface-2:#222A2D; --border:#343D41; --text:#ECEAE4; --muted:#A3A39B;
+    --accent:#ECEAE4; --good:#78CE93; --good-soft:#1E3327; --warn:#E3BE5C; --warn-soft:#3B331A; --bad:#E58A7C; --bad-soft:#3B2420; --info:#8DB4F0; --info-soft:#1D2A3D; } }
+  :root[data-theme="dark"]{
+    --bg:#14181A; --surface:#1B2124; --surface-2:#222A2D; --border:#343D41; --text:#ECEAE4; --muted:#A3A39B;
+    --accent:#ECEAE4; --good:#78CE93; --good-soft:#1E3327; --warn:#E3BE5C; --warn-soft:#3B331A; --bad:#E58A7C; --bad-soft:#3B2420; --info:#8DB4F0; --info-soft:#1D2A3D; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap{ max-width:1080px; margin:0 auto; padding:28px 16px 64px; }
+  header{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; justify-content:space-between; margin-bottom:22px; }
+  h1{ font-size:28px; line-height:1.15; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub{ color:var(--muted); margin:0; }
+  .selo{ display:inline-block; font-size:12px; font-weight:700; padding:4px 10px; border-radius:99px; background:var(--warn-soft); color:var(--warn); }
+  h2{ font-size:19px; margin:34px 0 12px; }
+  .feito{ background:var(--surface); border:1px solid var(--border); border-radius:var(--raio); padding:14px 18px; }
+  .feito ul{ margin:6px 0 0; padding-left:18px; } .feito li{ margin:3px 0; }
+  .grade{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,480px),1fr)); gap:16px; }
+  .ideia{ background:var(--surface); border:1px solid var(--border); border-radius:var(--raio); padding:18px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .ideia h3{ margin:0; font-size:17px; display:flex; gap:10px; align-items:baseline; }
+  .ideia h3 .n{ flex:0 0 auto; width:26px; height:26px; border-radius:50%; background:var(--accent); color:var(--bg); font-size:13px; display:inline-grid; place-items:center; }
+  .ideia p{ margin:0; color:var(--muted); }
+  .tags{ display:flex; flex-wrap:wrap; gap:6px; }
+  .tag{ font-size:12px; font-weight:600; padding:2px 9px; border-radius:99px; background:var(--surface-2); color:var(--muted); }
+  .tag.alto{ background:var(--good-soft); color:var(--good); } .tag.zero{ background:var(--info-soft); color:var(--info); }
+  .mock{ background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px; font-size:13.5px; overflow:hidden; }
+  .mock .lin{ display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:6px; flex-wrap:wrap; }
+  .mock .lin:last-child{ margin-bottom:0; }
+  .mock b{ font-weight:650; } .mock small{ color:var(--muted); }
+  .grow{ flex:1 1 160px; min-width:0; }
+  .btn{ display:inline-block; font:inherit; font-size:12.5px; font-weight:600; padding:5px 11px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text); }
+  .btn.p{ background:var(--accent); color:var(--bg); border-color:var(--accent); }
+  .pill{ font-size:11.5px; font-weight:700; padding:2px 8px; border-radius:99px; }
+  .pill.bad{ background:var(--bad-soft); color:var(--bad);} .pill.warn{ background:var(--warn-soft); color:var(--warn);} .pill.ok{ background:var(--good-soft); color:var(--good);}
+  .zap{ background:#DCF8C6; color:#1b1b1b; border-radius:10px 10px 10px 2px; padding:10px 12px; white-space:pre-line; font-size:13px; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .zap{ background:#1f3a2c; color:#e8f5ec; } }
+  :root[data-theme="dark"] .zap{ background:#1f3a2c; color:#e8f5ec; }
+  svg text{ fill:var(--muted); font-size:11px; }
+  .predio{ display:grid; grid-template-columns:42px 1fr; gap:3px 8px; align-items:center; }
+  .predio i{ display:block; height:14px; border-radius:3px; }
+  .leg{ display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin-top:8px; } .leg span::before{ content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; background:var(--c); vertical-align:-1px; }
+  .tec{ background:var(--surface); border:1px solid var(--border); border-radius:var(--raio); overflow:hidden; }
+  .tec div{ display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,2fr) auto; gap:12px; padding:12px 16px; border-top:1px solid var(--border); align-items:center; }
+  .tec div:first-child{ border-top:0; }
+  @media (max-width:640px){ .tec div{ grid-template-columns:1fr; gap:4px; } h1{ font-size:23px; } }
+  .rodape{ margin-top:30px; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Traço Integrado: prévia de melhorias</h1>
+      <p class="sub">Ideias a partir da revisão de 08/10/2026 e dos dados reais da obra. Nada aqui está no ar: escolha o que quer e eu implemento.</p>
+    </div>
+    <span class="selo">PRÉVIA · NÃO PUBLICADA</span>
+  </header>
+
+  <div class="feito">
+    <b>Já corrigido e publicado na v1.9 (resultado da revisão)</b>
+    <ul>
+      <li>A Jéssica só visualiza. O banco recusa qualquer gravação da conta dela, e no app os botões de editar somem e aparece uma faixa avisando.</li>
+      <li>Mapeamento: aparece "NF: número" abaixo do "BT n" no editor, na ficha e na imagem exportada.</li>
+      <li><b>O app abre sem sinal na obra</b> e não baixa tudo de novo a cada visita. O service worker antigo só repassava os pedidos para a rede.</li>
+      <li>Celular: os campos de data do quadro e do Controle Tecnológico empurravam a tela para o lado. Corrigido.</li>
+      <li>Espaço: o banco usa cerca de 0,7 MB dos 1.024 MB grátis e cerca de 100 leituras por abertura. Nada para economizar ali. O maior gasto é o tamanho do app (ver "Técnicas" no fim).</li>
+    </ul>
+  </div>
+
+  <h2>Ideias com maior retorno</h2>
+  <div class="grade">
+
+    <section class="ideia">
+      <h3><span class="n">1</span>Acertar os vínculos do CT em lote</h3>
+      <p>Hoje 242 das 428 NFs aparecem "sem vínculo". Na análise, só 12 têm rastreabilidade no mesmo dia. As outras 230 são, na maioria, concretagens anteriores a 22/11/2025, quando a rastreabilidade começou no app. A ideia é sugerir o vínculo e permitir marcar as antigas como "anterior ao sistema", para que o filtro mostre só o que falta acertar.</p>
+      <div class="mock">
+        <div class="lin"><div class="grow"><b>NF 204254</b> · 09/07/2026 · Laje E2<br><small>Sugestão: Rastr. 09/07 (mesma data, volume 8 m³)</small></div><span class="btn p">Vincular</span><span class="btn">Outra…</span></div>
+        <div class="lin"><div class="grow"><b>NF 118230</b> · 16/07/2025 · Estacas<br><small>Sem rastreabilidade nessa data</small></div><span class="btn">Anterior ao sistema</span></div>
+        <div class="lin"><div class="grow"><small>230 notas de antes de 22/11/2025</small></div><span class="btn p">Marcar todas como anteriores</span></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">2</span>Cobrar o laboratório pelo WhatsApp</h3>
+      <p>Há 98 notas com resultado de rompimento atrasado. Um botão monta a mensagem já agrupada por concretagem e abre o WhatsApp para enviar ao laboratório. Não usa servidor e não tem custo.</p>
+      <div class="mock">
+        <div class="zap">Bom dia! Pendências de resultado — Belavista Ipanema:
+• Concretagem 09/07 (Laje E2): 28 dias — NFs 204254, 204295
+• Concretagem 22/08 (Pilares 3º): 7 dias — NF 209811
+Pode nos enviar? Obrigado.</div>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><span class="btn p">Enviar no WhatsApp</span><span class="btn">Copiar texto</span></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: meio dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">3</span>Curva S da obra (previsto × real)</h3>
+      <p>Agora que o % é atualizado no app, o sistema guarda uma "foto" do avanço toda semana e desenha a curva. Isso mostra se a obra está recuperando ou acumulando atraso, e serve para reunião com a diretoria.</p>
+      <div class="mock">
+        <svg viewBox="0 0 460 170" width="100%" role="img" aria-label="Curva S">
+          <line x1="34" y1="140" x2="450" y2="140" stroke="currentColor" opacity=".25"/>
+          <line x1="34" y1="10" x2="34" y2="140" stroke="currentColor" opacity=".25"/>
+          <path d="M34,138 C120,135 170,120 230,92 S340,30 450,14" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="5 4"/>
+          <path d="M34,138 C110,136 160,126 205,110 S250,98 262,96" fill="none" stroke="var(--good)" stroke-width="3"/>
+          <circle cx="262" cy="96" r="4.5" fill="var(--good)"/>
+          <text x="270" y="100">hoje: real 6% · previsto 7%</text>
+          <text x="380" y="30">previsto</text>
+          <text x="4" y="144">0%</text><text x="0" y="16">100%</text>
+          <text x="34" y="160">jul/25</text><text x="410" y="160">jan/28</text>
+        </svg>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">4</span>Aço × cronograma: aviso antecipado</h3>
+      <p>O sistema cruza as entregas de aço com o cronograma. Se a armação de um pavimento começa em poucos dias e não há pedido programado ou entregue, o aviso entra em "Hoje você precisa…".</p>
+      <div class="mock">
+        <div class="lin"><span class="pill bad">Aço</span><div class="grow"><b>Armação do 4º Pavimento começa em 9 dias</b><br><small>Nenhum pedido programado para o 4º pav · último pedido: 1º pav (9.614 kg)</small></div><span class="btn">Programar</span></div>
+        <div class="lin"><span class="pill warn">Aço</span><div class="grow"><b>Pedido 34 previsto para 15/10</b><br><small>Armação começa 17/10 — margem de 2 dias</small></div></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1 dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">5</span>Relatório semanal de 1 página (PDF)</h3>
+      <p>Um toque gera uma folha A4 com:</p>
+      <ul>
+        <li>avanço e curva S;</li>
+        <li>metas da semana;</li>
+        <li>CT (atrasados e abaixo do fck);</li>
+        <li>NCs abertas;</li>
+        <li>aço recebido e próximo.</li>
+      </ul>
+      <p>Serve para mandar por e-mail ou imprimir para a reunião de segunda.</p>
+      <div class="mock" style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:0 0 120px;height:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:5px">
+          <i style="height:8px;width:70%;background:var(--accent);border-radius:2px"></i>
+          <i style="height:34px;background:var(--surface-2);border-radius:3px"></i>
+          <i style="height:5px;width:90%;background:var(--surface-2)"></i><i style="height:5px;width:80%;background:var(--surface-2)"></i>
+          <i style="height:24px;background:var(--good-soft);border-radius:3px"></i>
+          <i style="height:5px;width:85%;background:var(--surface-2)"></i><i style="height:20px;background:var(--bad-soft);border-radius:3px"></i>
+        </div>
+        <div class="grow"><b>Semana 06–12/10</b><br><small>Obra 6% (prev. 7%) · 8 metas, 1 crítica · 98 resultados de CP atrasados · 0 NC nova · aço: pedido 33 entregue</small><div style="margin-top:8px"><span class="btn p">Gerar PDF</span></div></div>
+      </div>
+      <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">6</span>Corte do prédio colorido pela resistência</h3>
+      <p>No corte do prédio do Início, cada pavimento ganha uma cor pelo resultado do concreto (fck atingido aos 28 dias, só aos 63 ou abaixo). Usa o vínculo NF ↔ rastreabilidade. Ajuda a decidir a desforma e a mostrar a qualidade numa visita.</p>
+      <div class="mock">
+        <div class="predio">
+          <small>3º E</small><i style="background:var(--surface-2)"></i>
+          <small>2º E</small><i style="background:var(--warn)"></i>
+          <small>1º E</small><i style="background:var(--good)"></i>
+          <small>Subsolo</small><i style="background:var(--good)"></i>
+          <small>Fund.</small><i style="background:var(--bad)"></i>
+        </div>
+        <div class="leg"><span style="--c:var(--good)">fck aos 28d</span><span style="--c:var(--warn)">só aos 63d</span><span style="--c:var(--bad)">abaixo do fck</span><span style="--c:var(--surface-2)">sem resultado</span></div>
+      </div>
+      <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: meio dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">7</span>"Aguardando sinal": fila visível</h3>
+      <p>Agora o app abre sem internet. Falta mostrar o que foi salvo no celular e ainda não subiu. Assim ninguém fecha o app achando que já enviou.</p>
+      <div class="mock">
+        <div class="lin"><span class="pill warn">Sem sinal</span><div class="grow"><b>3 alterações aguardando envio</b><br><small>FVS 04-033 · Rastr. 08/10 · resultado NF 209811</small></div><small>enviam sozinhas quando o sinal voltar</small></div>
+      </div>
+      <div class="tags"><span class="tag">Impacto médio</span><span class="tag">Esforço: meio dia</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+
+    <section class="ideia">
+      <h3><span class="n">8</span>Ler a NF da concreteira pelo PDF</h3>
+      <p>A ideia é a mesma da leitura do pedido de aço: você anexa o PDF da nota e o app preenche NF, volume, fck, slump e horário na betonada da rastreabilidade e no CT, já vinculados. Preciso de uma NF de exemplo de cada concreteira.</p>
+      <div class="mock">
+        <div class="lin"><span class="pill ok">Lido</span><div class="grow"><b>NF 209811 · 8,0 m³ · fck 40 · slump 12±2</b><br><small>Saída 07:42 → vira BT 3 da rastreabilidade de 08/10 e entra no CT</small></div><span class="btn p">Conferir</span></div>
+      </div>
+      <div class="tags"><span class="tag alto">Impacto alto</span><span class="tag">Esforço: 1–2 dias</span><span class="tag zero">Custo R$ 0</span></div>
+    </section>
+  </div>
+
+  <h2>Técnicas (melhoram o sistema sem mudar o uso)</h2>
+  <div class="tec">
+    <div><b>App mais leve</b><span>Trocar o Firebase "compat" pelo modular. O app cai de cerca de 944 KB para algo como 550 KB, e o primeiro carregamento fica mais rápido no 4G da obra.</span><span class="tag">2 dias</span></div>
+    <div><b>Papéis completos (etapa 2.3–2.6)</b><span>Já testado no emulador (40/40 testes): técnico, engenheiro, encarregado e visualizador, com histórico de quem mudou o quê e lixeira de 30 dias. Substitui a lista simples da Jéssica.</span><span class="tag">3–4 dias</span></div>
+    <div><b>Backup automático</b><span>Tarefa agendada do Windows roda o backup do banco toda noite e guarda os 30 últimos (hoje são 22 manuais, 21 MB).</span><span class="tag">1 hora</span></div>
+    <div><b>Histórico de versões do site</b><span>No console do Firebase: Hosting → manter as 10 últimas versões, para não acumular espaço. Ação sua, 1 minuto.</span><span class="tag">você</span></div>
+  </div>
+
+  <p class="rodape">Pendentes de decisão (já conversados): o assistente com IA (proposta em docs/ASSISTENTE.md) e as fotos (Blaze/Storage). Para seguir, me diga os números das ideias que quer, por exemplo "faz 1, 2 e 4".</p>
+</div>
+</body>
+</html>
