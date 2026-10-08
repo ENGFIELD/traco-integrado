@@ -1,0 +1,41 @@
+# Diagnóstico (só leitura): mostra QUAL conta de serviço o segredo
+# FIREBASE_SERVICE_ACCOUNT usa e quais permissões ela tem no projeto.
+# Não publica nada e não altera nada. Roda só na branch diagnostico-permissao.
+name: Diagnóstico de permissão (regras do banco)
+
+on:
+  push:
+    branches: [diagnostico-permissao]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conta de serviço e permissões
+        env:
+          CHAVE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$CHAVE" > "$RUNNER_TEMP/chave.json"
+          EMAIL=$(python3 -c "import json;print(json.load(open('$RUNNER_TEMP/chave.json'))['client_email'])")
+          gcloud auth activate-service-account --key-file="$RUNNER_TEMP/chave.json" --quiet >/dev/null 2>&1
+          TOKEN=$(gcloud auth print-access-token)
+          RESP=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            "https://cloudresourcemanager.googleapis.com/v1/projects/traco-integrado-sig:testIamPermissions" \
+            -d '{"permissions":["firebasehosting.sites.update","firebaserules.rulesets.test","firebaserules.rulesets.create","firebaserules.releases.update","firebaserules.releases.create"]}')
+          {
+            echo "## Conta usada pelo GitHub"
+            echo ""
+            echo "\`$EMAIL\`"
+            echo ""
+            echo "## Permissões que ela TEM no projeto"
+            echo '```'
+            echo "$RESP"
+            echo '```'
+            echo "Para publicar regras precisa ter as 4 permissões firebaserules.* acima (papel: Administrador de regras do Firebase)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "CONTA: $EMAIL"
+          echo "PERMISSOES: $RESP"
+          rm -f "$RUNNER_TEMP/chave.json"
