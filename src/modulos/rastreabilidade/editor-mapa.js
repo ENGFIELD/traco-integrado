@@ -8,6 +8,8 @@
  *  - 1 dedo arrastando ......... move a planta
  *  - 2 dedos (pinça) ........... zoom em volta dos dedos (até 12×)
  *  - toque rápido .............. marca um ponto (só no modo "Nova área")
+ *  - segurar o dedo ............ abre a LUPA ao lado (v1.15): arraste para
+ *                                 ajustar na mira e solte para marcar o ponto
  *  - PC: roda do mouse = zoom no cursor; arrastar = mover; clique = ponto
  *
  * Cada área confirmada é SALVA na hora (opts.salvar), sem precisar lembrar de
@@ -18,10 +20,14 @@
  */
 import "../../estilos/editor-mapa.css";
 import { garantirPdf } from "../../libs.js";
+import { rotuloArea, rotuloSvg } from "./rotulo-mapa.js";
 
 const ZOOM_MAX = 12;          // em relação ao "caber na tela"
 const TOQUE_MAX_MOV = 10;     // px — acima disso é arrasto, não toque
 const TOQUE_MAX_MS = 450;
+const LUPA_MS = 280;          // segurar o dedo parado por esse tempo abre a lupa (modo "Nova área")
+const LUPA_TAM = 150;         // px (tela)
+const LUPA_ZOOM = 3;          // aumento da lupa em relação ao que está na tela
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -61,6 +67,7 @@ export async function abrirEditorMapa(opts) {
       <button type="button" class="edmapa-btn redondo" data-acao="ajustar" aria-label="Ajustar à tela">⤢</button>
     </div>
     <div class="edmapa-base" data-base></div>
+    <canvas class="edmapa-lupa" data-lupa hidden aria-hidden="true"></canvas>
   `;
   document.body.appendChild(raiz);
   document.documentElement.classList.add("edmapa-aberto");
@@ -71,6 +78,7 @@ export async function abrirEditorMapa(opts) {
   const svg = raiz.querySelector("[data-svg]");
   const base = raiz.querySelector("[data-base]");
   const salvoEl = raiz.querySelector("[data-salvo]");
+  const lupa = raiz.querySelector("[data-lupa]");
 
   // ---------- estado ----------
   let W = 1, H = 1;                    // tamanho da planta em px
@@ -168,6 +176,7 @@ export async function abrirEditorMapa(opts) {
     for (const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
   }
+  const cacheRotulo = new WeakMap();
   function desenhar() {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     const px = 1 / s; // 1 pixel de tela em unidades da planta
@@ -176,22 +185,16 @@ export async function abrirEditorMapa(opts) {
     mp.areas.forEach((a) => {
       if (!a.pontos || a.pontos.length < 3) return;
       svg.appendChild(el("polygon", { points: a.pontos.map(pt).join(" "), fill: a.cor, "fill-opacity": 0.32, stroke: a.cor, "stroke-width": 2.5 * px }));
-      const cx = a.pontos.reduce((t, p) => t + p[0], 0) / a.pontos.length * W;
-      const cy = a.pontos.reduce((t, p) => t + p[1], 0) / a.pontos.length * H;
-      // rótulo: "BT 1" e, embaixo, a nota fiscal da betonada ("NF: 12345")
+      // rótulo: "BT 1" e, embaixo, a nota fiscal da betonada ("NF: 12345").
+      // v1.15: no centro visual da área e com tamanho em unidades da planta —
+      // igual ao do PNG exportado (ver rotulo-mapa.js).
       const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
-      const nf = lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "";
-      const fs = 15 * px, fs2 = 12 * px, rotulo = "BT " + a.linhaSeq;
-      const rw = Math.max(rotulo.length * fs * 0.62, nf.length * fs2 * 0.6) + fs, rh = nf ? fs * 2.75 : fs * 1.6;
-      svg.appendChild(el("rect", { x: cx - rw / 2, y: cy - rh / 2, width: rw, height: rh, rx: 4 * px, fill: "#fff", "fill-opacity": 0.9 }));
-      const t = el("text", { x: cx, y: nf ? cy - fs * 0.55 : cy, "text-anchor": "middle", "dominant-baseline": "central", "font-size": fs, "font-weight": 700, fill: a.cor });
-      t.textContent = rotulo;
-      svg.appendChild(t);
-      if (nf) {
-        const t2 = el("text", { x: cx, y: cy + fs * 0.7, "text-anchor": "middle", "dominant-baseline": "central", "font-size": fs2, "font-weight": 600, fill: "#1a1a1a" });
-        t2.textContent = nf;
-        svg.appendChild(t2);
-      }
+      const textos = { bt: "BT " + a.linhaSeq, nf: lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "" };
+      // o cálculo do centro só é refeito quando a área ou o texto mudam (desenhar() roda a cada quadro do arrasto)
+      const chave = textos.bt + "|" + textos.nf + "|" + a.pontos.join(";");
+      let r = cacheRotulo.get(a);
+      if (!r || r.chave !== chave) { r = { chave, v: rotuloArea(a.pontos, W, H, textos) }; cacheRotulo.set(a, r); }
+      rotuloSvg(svg, r.v, textos, a.cor);
     });
     if (pontos.length) {
       if (pontos.length > 1) {
@@ -210,7 +213,7 @@ export async function abrirEditorMapa(opts) {
   function renderBase() {
     if (modo === "desenhar") {
       base.innerHTML = `
-        <div class="edmapa-dica">Toque nos <b>cantos</b> da área concretada. Arraste para mover, use dois dedos para zoom.</div>
+        <div class="edmapa-dica">Toque nos <b>cantos</b> da área concretada. <b>Segure o dedo</b> para abrir a lupa e acertar a linha. Arraste para mover, dois dedos para zoom.</div>
         <div class="edmapa-linha">
           <span class="edmapa-cont">${pontos.length} ponto(s)</span>
           <button type="button" class="edmapa-btn" data-acao="desfazer" ${pontos.length ? "" : "disabled"}>↶ Desfazer</button>
@@ -291,6 +294,57 @@ export async function abrirEditorMapa(opts) {
     }
   });
 
+  // ---------- lupa (v1.15) ----------
+  // Mostra, ao lado do dedo, a planta ampliada em volta do ponto que vai ser
+  // marcado, com uma mira no centro — o dedo não esconde mais a linha do projeto.
+  function mostrarLupa(clientX, clientY) {
+    const dpr = window.devicePixelRatio || 1;
+    const tamPx = Math.round(LUPA_TAM * dpr);
+    if (lupa.width !== tamPx || lupa.height !== tamPx) { lupa.width = tamPx; lupa.height = tamPx; }
+    lupa.hidden = false;
+    const r = palco.getBoundingClientRect();
+    const wx = (clientX - r.left - tx) / s, wy = (clientY - r.top - ty) / s; // ponto na planta (px)
+    const lado = LUPA_TAM / (s * LUPA_ZOOM);                                   // pedaço da planta mostrado
+    const k = lupa.width / lado;                                               // planta → lupa
+    const ox = wx - lado / 2, oy = wy - lado / 2;
+    const c = lupa.getContext("2d");
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = "#fff"; c.fillRect(0, 0, lupa.width, lupa.height);
+    try { c.imageSmoothingEnabled = true; c.drawImage(canvas, ox, oy, lado, lado, 0, 0, lupa.width, lupa.height); } catch (ex) { /* planta ainda não carregou */ }
+    const P = (p) => [(p[0] * W - ox) * k, (p[1] * H - oy) * k];
+    c.lineWidth = 2 * dpr;
+    mp.areas.forEach((a) => {
+      if (!a.pontos || a.pontos.length < 3) return;
+      c.beginPath(); a.pontos.forEach((p, i) => { const q = P(p); i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); }); c.closePath();
+      c.globalAlpha = 0.25; c.fillStyle = a.cor; c.fill(); c.globalAlpha = 1; c.strokeStyle = a.cor; c.stroke();
+    });
+    if (pontos.length) {
+      c.strokeStyle = "#c0392b"; c.setLineDash([6 * dpr, 4 * dpr]);
+      c.beginPath(); pontos.forEach((p, i) => { const q = P(p); i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); });
+      const fim = P([wx / W, wy / H]); c.lineTo(fim[0], fim[1]); c.stroke(); c.setLineDash([]);
+      pontos.forEach((p) => { const q = P(p); c.beginPath(); c.arc(q[0], q[1], 4 * dpr, 0, 7); c.fillStyle = "#fff"; c.fill(); c.stroke(); });
+    }
+    // mira
+    const m = lupa.width / 2, g = 6 * dpr, b = 22 * dpr;
+    // contorno branco por baixo: a mira aparece também em cima de linhas e áreas vermelhas
+    const mira = () => { c.beginPath(); c.moveTo(m - b, m); c.lineTo(m - g, m); c.moveTo(m + g, m); c.lineTo(m + b, m);
+      c.moveTo(m, m - b); c.lineTo(m, m - g); c.moveTo(m, m + g); c.lineTo(m, m + b); c.stroke(); };
+    c.lineCap = "round";
+    c.strokeStyle = "rgba(255,255,255,.95)"; c.lineWidth = 5 * dpr; mira();
+    c.strokeStyle = "#111"; c.lineWidth = 2 * dpr; mira();
+    c.beginPath(); c.arc(m, m, 3 * dpr, 0, 7); c.fillStyle = "#fff"; c.fill();
+    c.beginPath(); c.arc(m, m, 1.8 * dpr, 0, 7); c.fillStyle = "#e11d48"; c.fill();
+    // posição: ao lado do dedo (à esquerda; à direita se o dedo estiver perto da borda esquerda), um pouco acima
+    const vw = window.innerWidth, vh = window.innerHeight, dist = LUPA_TAM * 0.75;
+    let left = clientX - dist - LUPA_TAM / 2;
+    if (left < 8) left = clientX + dist - LUPA_TAM / 2;
+    let top = clientY - LUPA_TAM * 0.9;
+    left = Math.max(8, Math.min(vw - LUPA_TAM - 8, left));
+    top = Math.max(8, Math.min(vh - LUPA_TAM - 8, top));
+    lupa.style.left = left + "px"; lupa.style.top = top + "px";
+  }
+  function esconderLupa() { lupa.hidden = true; }
+
   // ---------- gestos (pointer events, com limpeza garantida dos dedos) ----------
   const dedos = new Map(); // pointerId → {x,y}
   let gesto = null;        // {tipo:"toque"|"arrasto"|"pinca", ...}
@@ -301,8 +355,17 @@ export async function abrirEditorMapa(opts) {
     try { palco.setPointerCapture(e.pointerId); } catch (ex) { /* segue sem captura */ }
     const r = palco.getBoundingClientRect();
     if (dedos.size === 1) {
-      gesto = { tipo: "toque", x0: e.clientX, y0: e.clientY, t0: Date.now(), tx0: tx, ty0: ty };
+      gesto = { tipo: "toque", x0: e.clientX, y0: e.clientY, t0: Date.now(), tx0: tx, ty0: ty, x: e.clientX, y: e.clientY };
+      // segurar parado no modo "Nova área" (dedo ou caneta) → lupa
+      if (modo === "desenhar" && e.pointerType !== "mouse") {
+        const g = gesto;
+        g.timer = setTimeout(() => {
+          if (gesto === g && g.tipo === "toque" && dedos.size === 1) { g.tipo = "lupa"; mostrarLupa(g.x, g.y); }
+        }, LUPA_MS);
+      }
     } else if (dedos.size === 2) {
+      if (gesto && gesto.timer) clearTimeout(gesto.timer);
+      esconderLupa();
       const [a, b] = [...dedos.values()];
       gesto = { tipo: "pinca", d0: Math.hypot(b.x - a.x, b.y - a.y) || 1, s0: s,
         mx0: (a.x + b.x) / 2 - r.left, my0: (a.y + b.y) / 2 - r.top, tx0: tx, ty0: ty };
@@ -321,15 +384,30 @@ export async function abrirEditorMapa(opts) {
       const wx = (gesto.mx0 - gesto.tx0) / gesto.s0, wy = (gesto.my0 - gesto.ty0) / gesto.s0;
       s = novoS; tx = mx - wx * s; ty = my - wy * s;
       aplicar();
+    } else if (dedos.size === 1 && gesto.tipo === "lupa") {
+      gesto.x = e.clientX; gesto.y = e.clientY;
+      mostrarLupa(e.clientX, e.clientY);
     } else if (dedos.size === 1 && (gesto.tipo === "toque" || gesto.tipo === "arrasto")) {
+      gesto.x = e.clientX; gesto.y = e.clientY;
       const dx = e.clientX - gesto.x0, dy = e.clientY - gesto.y0;
-      if (gesto.tipo === "toque" && Math.hypot(dx, dy) > TOQUE_MAX_MOV) gesto.tipo = "arrasto";
+      if (gesto.tipo === "toque" && Math.hypot(dx, dy) > TOQUE_MAX_MOV) { gesto.tipo = "arrasto"; clearTimeout(gesto.timer); }
       if (gesto.tipo === "arrasto") { tx = gesto.tx0 + dx; ty = gesto.ty0 + dy; aplicar(); }
     }
   });
   function soltar(e) {
     if (!dedos.has(e.pointerId)) return;
     dedos.delete(e.pointerId);
+    if (gesto && gesto.timer) clearTimeout(gesto.timer);
+    if (gesto && gesto.tipo === "lupa") {
+      esconderLupa();
+      // solta o dedo: marca o ponto na mira (pointercancel não marca)
+      if (e.type === "pointerup" && dedos.size === 0 && modo === "desenhar") {
+        pontos.push(telaParaNorm(gesto.x, gesto.y));
+        renderBase(); desenhar();
+      }
+      if (dedos.size === 0) gesto = null;
+      return;
+    }
     if (gesto && gesto.tipo === "toque" && dedos.size === 0 && e.type === "pointerup"
         && Date.now() - gesto.t0 < TOQUE_MAX_MS && modo === "desenhar") {
       pontos.push(telaParaNorm(e.clientX, e.clientY));
