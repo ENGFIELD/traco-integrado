@@ -562,3 +562,7 @@ body.somente-leitura .ct-vinc, body.somente-leitura .ct-anterior { display: none
 .ct-linha .ct-concluir { flex: none; align-self: center; }
 .ct-linha.concluida { opacity: .75; }
 body.somente-leitura .ct-concluir, body.somente-leitura .ct-concluida-chk { display: none !important; }
+
+/* v1.12: excluir pedido de aço */
+.btn.danger { color: var(--bad); border-color: var(--bad); }
+body.somente-leitura [data-aco-excluir] { display: none !important; }

@@ -3302,7 +3302,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     unsubAco = acoCol.onSnapshot(function(snap){
       acoErroAcesso = false;
       acoMap = new Map();
-      snap.docs.forEach(function(d){ acoMap.set(d.id, Object.assign({ id:d.id }, d.data())); });
+      // v1.12: pedidos na lixeira (excluido:true) ficam no banco, mas fora do app
+      snap.docs.forEach(function(d){ var x = d.data(); if(x.excluido!==true) acoMap.set(d.id, Object.assign({ id:d.id }, x)); });
       render();
     }, function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); });
     if(unsubCron) unsubCron();

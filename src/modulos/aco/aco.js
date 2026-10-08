@@ -237,7 +237,7 @@ function abrirFicha(id, container, prefill, meta) {
         <fieldset><legend>Observações</legend><div class="field"><textarea data-f="observacoes">${esc(e.observacoes || "")}</textarea></div></fieldset>
         ${atual && atual.atualizadoEm ? `<div class="last-updated">Última atualização: ${esc(atual.atualizadoPor || "")} · ${esc(String(atual.atualizadoEm).slice(0, 16).replace("T", " "))}</div>` : ""}
       </div>
-      <div class="modal-foot"><div>${(atual || meta) && e.status !== "entregue" ? `<button class="btn" data-receber>✓ Marcar como entregue hoje</button>` : ""}</div>
+      <div class="modal-foot"><div style="display:flex;gap:10px;flex-wrap:wrap">${atual ? `<button class="btn danger" data-aco-excluir>Excluir pedido</button>` : ""}${(atual || meta) && e.status !== "entregue" ? `<button class="btn" data-receber>✓ Marcar como entregue hoje</button>` : ""}</div>
         <div style="display:flex;gap:10px"><button class="btn" data-fechar>Cancelar</button><button class="btn primary" data-salvar>Salvar</button></div></div></div>`;
   };
   const lerTela = () => {
@@ -275,6 +275,24 @@ function abrirFicha(id, container, prefill, meta) {
     if (ev.target.closest("[data-receber]")) {
       lerTela(); e.status = "entregue"; if (!e.dataEntrega) e.dataEntrega = ctx.todayISO(); desenhar(); sujo = true;
       ov.querySelector('[data-f="notaFiscal"]').focus(); return;
+    }
+    // v1.12: excluir = mandar para a lixeira (excluido:true). O pedido some das
+    // telas, mas continua guardado no banco (regra: nunca apagar dados).
+    const xb = ev.target.closest("[data-aco-excluir]");
+    if (xb && atual) {
+      if (!confirm("Excluir o pedido " + (atual.pedido || "s/ nº") + (atual.fornecedor ? " · " + atual.fornecedor : "") + "?\n\nEle sai da lista (fica guardado na lixeira do banco).")) return;
+      xb.disabled = true; xb.textContent = "Excluindo…";
+      try {
+        const envio = ctx.col.doc(atual.id).set({ excluido: true, excluidoEm: ctx.nowISO(), excluidoPor: ctx.usuario(), atualizadoEm: ctx.nowISO(), atualizadoPor: ctx.usuario() }, { merge: true });
+        const r = await Promise.race([envio.then(() => "ok"), new Promise((res) => setTimeout(() => res("pendente"), 10000))]);
+        if (r === "pendente") alert("Sem conexão no momento — a exclusão será enviada quando o sinal voltar. Mantenha o app aberto.");
+        sujo = false; fechar();
+      } catch (ex) {
+        console.error(ex);
+        alert("Não foi possível excluir: " + (ex && ex.message ? ex.message : "erro desconhecido"));
+        xb.disabled = false; xb.textContent = "Excluir pedido";
+      }
+      return;
     }
     const sb = ev.target.closest("[data-salvar]");
     if (sb) {
