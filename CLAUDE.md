@@ -10,9 +10,17 @@ comente o código em **português do Brasil**, em linguagem simples.
    (campos novos com valor padrão). Migração = script idempotente que roda
    primeiro com `--dry-run`.
 2. **Nunca publicar em produção sem o dono pedir** ("publica" / "pode publicar").
-   - Na nuvem: abra um pull request; o GitHub gera sozinho um **link de teste**
-     (canal de prévia do Firebase). Produção é só pelo workflow
-     **"Publicar em produção"** (Actions → Run workflow), que faz backup antes.
+   **Entrar na branch `main` = publicar**: o workflow "Publicar em produção"
+   roda sozinho a cada push na main (testes → build → backup → deploy → tag).
+   - Na nuvem, ao receber um pedido de mudança: trabalhe numa branch, rode
+     `npm test` e `npm run build`, faça push e abra um pull request para a
+     main. O GitHub gera um **link de teste** no pull request — passe o link
+     ao dono.
+   - Quando o dono disser "publica"/"pode publicar": faça o merge do pull
+     request (ou merge da branch na main + push). Isso publica. Depois
+     acompanhe o workflow em Actions e avise se terminou bem ou deu erro.
+   - **Nunca** faça push/merge na main sem essa ordem do dono, nem por conta
+     própria para "testar".
    - No computador: teste nos emuladores (`npm run emuladores`, app em
      http://localhost:5000), depois backup
      (`node scripts/backup-firestore.js --key "chaves-firebase/traco-integrado-sig.json.json"`),

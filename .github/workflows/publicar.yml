@@ -1,10 +1,16 @@
-# Publicar em produção — só roda quando alguém aperta "Run workflow" em
-# Actions e digita PUBLICAR. Antes de publicar: testes, build e BACKUP do
+# Publicar em produção. Roda em dois casos:
+#  1) automático: quando uma mudança entra na branch main (o Claude só faz
+#     isso quando o dono diz "publica" / "pode publicar" — ver CLAUDE.md);
+#  2) manual: Actions → Run workflow, digitando PUBLICAR.
+# Antes de publicar: testes, build e BACKUP do
 # banco (guardado como anexo privado do workflow por 30 dias). Depois marca a
 # versão com uma tag producao-AAAA-MM-DD-HHMM para dar para voltar.
 name: Publicar em produção
 
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
     inputs:
       confirmacao:
@@ -24,7 +30,7 @@ concurrency:
 
 jobs:
   publicar:
-    if: github.event.inputs.confirmacao == 'PUBLICAR'
+    if: github.event_name == 'push' || github.event.inputs.confirmacao == 'PUBLICAR'
     runs-on: ubuntu-latest
     env:
       CI: "1"
