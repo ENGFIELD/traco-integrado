@@ -656,3 +656,4 @@
   }
   #ios-install-hint b{ display:block; margin-bottom:4px; }
   #ios-install-hint button{ margin-top:8px; }
+  td.ct-cell.tone-resultado{ background:var(--surface-2); }
