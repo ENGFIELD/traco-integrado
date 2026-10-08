@@ -23,6 +23,12 @@ export function corteHtml(av) {
       <title>${esc(String(n.rank).padStart(2, "0") + " — " + n.nome)}: ${esc(rotulo(n.status))}${n.rast ? " · " + n.rast + " concretagem(ns)" : ""}${n.fvs ? " · " + n.fvsFechadas + "/" + n.fvs + " FVS fechadas" : ""}</title></rect>`;
   }).join("");
   let marcador = "";
+  // nível em que o cronograma diz que a estrutura deveria estar hoje (tracejado)
+  let prevMarca = "";
+  if (av.previsto != null) {
+    const yp = topo + (N - 1 - av.previsto) * (H + G) - G / 2;
+    prevMarca = `<line x1="2" x2="${xEmb + wEmb + 4}" y1="${yp}" y2="${yp}" class="cp-prev"><title>Previsto pelo cronograma para hoje</title></line>`;
+  }
   if (av.topo != null) {
     const y = topo + (N - 1 - av.topo) * (H + G) + H / 2;
     marcador = `<line x1="${xEmb + wEmb + 4}" x2="${xEmb + wEmb + 22}" y1="${y}" y2="${y}" class="cp-seta"/>
@@ -30,13 +36,14 @@ export function corteHtml(av) {
   }
   const svg = `<svg class="cp-svg" viewBox="0 0 ${xEmb + wEmb + 26} ${base + 6}" role="img" aria-label="Corte do prédio: ${av.pct}% da estrutura concretada">
       <line x1="0" x2="${xEmb + wEmb + 26}" y1="${solo}" y2="${solo}" class="cp-solo"/>
-      ${rects}${marcador}</svg>`;
+      ${rects}${prevMarca}${marcador}</svg>`;
   const topoNome = av.topo != null ? av.niveis[av.topo].nome : null;
   return `<div class="cp">
     <div class="cp-desenho">${svg}</div>
     <div class="cp-info">
       <div class="cp-pct"><b>${av.pct}<small>%</small></b><span>da estrutura concretada</span></div>
       <div class="cp-ate">${topoNome ? `Executado até o piso do <b>${esc(topoNome)}</b>` : "Nenhuma concretagem registrada ainda"}</div>
+      ${av.previsto != null ? compara(av) : ""}
       <div class="cp-barra"><i style="width:${av.pct}%"></i></div>
       <ul class="cp-leg">
         <li><i class="cp-liberado"></i>Liberado <b>${av.cont.liberado}</b><small>concretado + FVS fechadas</small></li>
@@ -47,6 +54,13 @@ export function corteHtml(av) {
       <div class="cp-dica">Toque num pavimento do corte para ver as fichas dele.</div>
     </div>
   </div>`;
+}
+
+function compara(av) {
+  const dif = (av.topo == null ? -1 : av.topo) - av.previsto;
+  const prevNome = av.niveis[av.previsto] ? av.niveis[av.previsto].nome : "";
+  const txt = dif === 0 ? "em dia com o cronograma" : (dif > 0 ? `${dif} pavimento(s) adiantado` : `${-dif} pavimento(s) atrasado`);
+  return `<div class="cp-prevtxt ${dif < 0 ? "atraso" : "ok"}">Cronograma previa até o piso do <b>${esc(prevNome)}</b> hoje — <b>${txt}</b></div>`;
 }
 
 export function rotulo(st) {

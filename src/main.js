@@ -16,6 +16,7 @@ import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml } from "./modulos/obra/corte-predio.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
+import { initCronograma, definirDocumento as definirCronograma, renderViewCronograma, metasDaSemana, estruturaPrevista } from "./modulos/cronograma/cronograma.js";
 
 // Mantido no escopo global para depuração e testes automatizados.
 window.firebase = firebase;
@@ -507,6 +508,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // v1.5: programação/recebimento de aço (ver src/modulos/aco/aco.js)
   var acoCol = dbf.collection("entregasAco");
   var acoMap = new Map(), acoErroAcesso = false, unsubAco = null;
+  // v1.5: cronograma (ver src/modulos/cronograma/) — só o documento "atual" é escutado
+  var cronCol = dbf.collection("cronogramas");
+  var cronErroAcesso = false, unsubCron = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
@@ -884,6 +888,8 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
     var viewAco = document.getElementById("view-aco");
     if(viewAco && !viewAco.hidden && !document.querySelector(".ct-ficha-ov")) renderViewAco(viewAco);
+    var viewCron = document.getElementById("view-cronograma");
+    if(viewCron && !viewCron.hidden && !(document.activeElement && document.activeElement.matches("[data-cr-busca]"))) renderViewCronograma(viewCron);
     // Bolinhas vermelhas do menu (v1.3)
     definirContador("nc", todasNaoConformidades().filter(function(i){ return !i.concluida; }).length);
     definirContador("ct", ctRowsArray().filter(ctTemPendencia).length);
@@ -896,7 +902,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // alcançáveis passando por dentro de outra (ex.: Não Conformidades antes
   // só abria de dentro de "FVS por Pavimento") — agora qualquer tela pode
   // ser aberta a partir de qualquer outra, inclusive pelo menu do topo.
-  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco" };
+  var VIEW_IDS = { dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -912,6 +918,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     else if(nome==="ct") renderViewCt();
     else if(nome==="plantas") renderViewPlantas();
     else if(nome==="aco") renderViewAco(document.getElementById("view-aco"));
+    else if(nome==="cronograma") renderViewCronograma(document.getElementById("view-cronograma"));
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -955,7 +962,10 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       if(n.rast) topo = n.rank;
     });
     var pct = Math.round((cont.liberado + cont.concretado) / niveis.length * 100);
-    return { niveis:niveis, cont:cont, topo:topo, pct:pct };
+    // Previsto pelo cronograma (se enviado): até qual piso a estrutura já deveria estar
+    var prev = estruturaPrevista(todayISO());
+    var previsto = prev && prev.previsto!=null && prev.previsto>=0 ? prev.previsto : null;
+    return { niveis:niveis, cont:cont, topo:topo, pct:pct, previsto:previsto };
   }
 
   /* ---------------- painel geral (tela inicial) ---------------- */
@@ -1038,6 +1048,26 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
         (e.destino||"sem destino")+(p? " · "+Math.round(p).toLocaleString("pt-BR")+" kg":""),
         st==="atrasada" ? "atrasada" : fmtDateBR(e.dataPrevista), st==="atrasada"?"bad":"");
     }).join("");
+    // Metas da semana a partir do cronograma (caminho crítico primeiro)
+    var metas = metasDaSemana(todayISO(), 8);
+    var metasHtml = "";
+    if(metas){
+      metasHtml = '<div class="dash-card dash-card-metas"><div class="dash-card-h"><h3>Metas da semana · cronograma</h3>'
+        + '<button type="button" class="mais" data-goto-view="cronograma">Cronograma →</button></div>'
+        + '<div class="metas-resumo">Semana de '+fmtDateBR(metas.semana.ini).slice(0,5)+' a '+fmtDateBR(metas.semana.fim).slice(0,5)
+          + ' · <b>'+metas.total+'</b> atividade(s) · <b class="'+(metas.criticas?"txt-bad":"")+'">'+metas.criticas+'</b> no caminho crítico'
+          + (metas.atrasadas ? ' · <b class="txt-bad">'+metas.atrasadas+'</b> atrasada(s) no total' : '')+'</div>'
+        + (metas.itens.length ? metas.itens.map(function(x){
+            var t = x.t;
+            // "E5", "3º", "COB": nome curto é o pavimento — mostra o serviço junto
+            var servico = t.caminho.slice(-1)[0]||"";
+            var titulo = t.nome.length<=6 && servico ? servico.charAt(0)+servico.slice(1).toLowerCase()+" — "+t.nome : t.nome;
+            return li('data-goto-view="cronograma"', x.crit ? "alert" : "clock", x.crit ? "bad" : (x.terminaNaSemana ? "warn" : "info"),
+              titulo, (t.caminho.slice(-2)[0]||"")+(x.terminaNaSemana ? " · termina "+fmtDateBR(t.fim).slice(0,5) : " · até "+fmtDateBR(t.fim).slice(0,5)),
+              (x.crit ? "crítica · " : "")+t.pct+"%", x.crit ? "bad" : "");
+          }).join("") : '<div class="dash-vazio">Nenhuma atividade prevista para esta semana.</div>')
+        + '</div>';
+    }
     var agora = new Date();
     var dataTxt = agora.toLocaleDateString("pt-BR", { weekday:"long", day:"2-digit", month:"long" });
     var h = agora.getHours(), saud = h<12 ? "Bom dia" : (h<18 ? "Boa tarde" : "Boa noite");
@@ -1054,6 +1084,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       + '<div class="dash-card dash-card-avanco"><div class="dash-card-h"><h3>Avanço da estrutura</h3>'
         + '<button type="button" class="mais" data-goto-view="pavimento">FVS por pavimento →</button></div>'
         + corteHtml(avancoEstrutura()) + '</div>'
+      + metasHtml
       + '<div class="dash-grid">'
         + cartao("Não conformidades abertas há mais tempo", "nc", "Todas", ncLista, "Nenhuma NC em aberto. 👍")
         + cartao("Corpos de prova com resultado atrasado", "ct", "Controle tecnológico", ctLista, "Nenhum resultado atrasado.")
@@ -2660,6 +2691,12 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       snap.docs.forEach(function(d){ acoMap.set(d.id, Object.assign({ id:d.id }, d.data())); });
       render();
     }, function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); });
+    if(unsubCron) unsubCron();
+    unsubCron = cronCol.doc("atual").onSnapshot(function(snap){
+      cronErroAcesso = false;
+      definirCronograma(snap.exists ? snap.data() : null);
+      render();
+    }, function(err){ cronErroAcesso = true; console.warn("cronogramas:", err && err.code); render(); });
   }
   function showApp(user){
     document.getElementById("auth-screen").hidden = true;
@@ -2680,6 +2717,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     if(unsubRast){ unsubRast(); unsubRast=null; }
     if(unsubCt){ unsubCt(); unsubCt=null; }
     if(unsubAco){ unsubAco(); unsubAco=null; }
+    if(unsubCron){ unsubCron(); unsubCron=null; }
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -2857,6 +2895,53 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
   // pavimento (ex.: verificação abrangendo dois andares), sem mexer no campo
   // "Local / elemento" ou "Bloco / Pavimento" já existente (que continua
   // funcionando normalmente para fichas antigas, ver fallback em buildRows()).
+  /* ---- v1.5: lista oficial de pavimentos (sem digitação) ----
+     Mesma numeração 00–27 do corte do prédio e do cronograma; o texto gravado
+     continua no formato que já existia ("Piso do 3º Pavimento Tipo"), então
+     filtros, relatórios e fichas antigas seguem funcionando. */
+  function pisoNome(rank){
+    if(rank===0) return "Fundação";
+    if(rank===NIVEIS_OBRA.length-1) return "Telhado";
+    var n = NIVEIS_OBRA[rank];
+    return (/^(Cobertura|Dependência)/.test(n) ? "Piso da " : "Piso do ")+n;
+  }
+  var TRECHOS_OBRA = ["Trecho Maria Quitéria", "Trecho Prudente de Morais", "Trecho Volt"];
+  function grupoDoNivel(rank){ return rank<=1 ? "Fundação e subsolo" : (rank<=6 ? "Embasamento" : (rank<=23 ? "Pavimentos tipo" : "Cobertura e topo")); }
+  function separarPavimento(valor){
+    var v = String(valor||"").trim(), trecho = "";
+    // abreviações usadas nas fichas antigas
+    v = v.replace(/\(?\s*trecho\s+p\.?\s*(de\s+)?morais\s*\)?/i, "— Trecho Prudente de Morais")
+         .replace(/\(?\s*trecho\s+m\.?\s*quit[ée]ria\s*\)?/i, "— Trecho Maria Quitéria");
+    TRECHOS_OBRA.forEach(function(t){ if(v.toLowerCase().indexOf(t.toLowerCase())!==-1){ trecho = t; v = v.replace(new RegExp("\\s*[—-]?\\s*\\(?"+t+"\\)?", "i"), "").trim(); } });
+    // "3⁰", "3°", "3o" e "3º" valem como o mesmo pavimento
+    var norm = function(x){ return String(x).toLowerCase().replace(/(\d)\s*[º°⁰ªo](?![a-z])/g, "$1º").replace(/\s+/g, " ").trim(); };
+    var base = "";
+    for(var r=0;r<NIVEIS_OBRA.length;r++){ if(norm(pisoNome(r))===norm(v)){ base = pisoNome(r); break; } }
+    return { base:base, trecho:trecho, antigo: base ? "" : String(valor||"").trim() };
+  }
+  function juntarPavimento(base, trecho){ return base ? base+(trecho ? " — "+trecho : "") : ""; }
+  // <select> de pavimento (+ trecho). attrs: atributos extras (ex.: data-pav-campo="blocoPav")
+  function pavSelectsHtml(valor, attrs, rotuloVazio){
+    var sp = separarPavimento(valor), grupo = null, html = '<select '+attrs+' data-pav-base aria-label="Pavimento"><option value="">'+(rotuloVazio||"Selecione o pavimento…")+'</option>';
+    if(sp.antigo) html += '<option value="__antigo" selected>'+escapeHtml(sp.antigo)+' (digitado antes)</option>';
+    for(var r=0;r<NIVEIS_OBRA.length;r++){
+      var g = grupoDoNivel(r);
+      if(g!==grupo){ html += (grupo ? '</optgroup>' : '')+'<optgroup label="'+g+'">'; grupo = g; }
+      var nome = pisoNome(r);
+      html += '<option value="'+escapeHtml(nome)+'"'+(sp.base===nome?" selected":"")+'>'+(r<10?"0":"")+r+' — '+escapeHtml(nome)+'</option>';
+    }
+    html += '</optgroup></select>';
+    html += '<select '+attrs+' data-pav-trecho aria-label="Trecho (opcional)"><option value="">Trecho: obra toda</option>'
+      + TRECHOS_OBRA.map(function(t){ return '<option'+(sp.trecho===t?" selected":"")+'>'+t+'</option>'; }).join("")+'</select>';
+    return '<div class="pav-sel">'+html+'</div>';
+  }
+  function lerPavSelects(caixa, valorAntigo){
+    var b = caixa.querySelector("[data-pav-base]"), t = caixa.querySelector("[data-pav-trecho]");
+    if(!b) return "";
+    if(b.value==="__antigo") return valorAntigo||"";
+    return juntarPavimento(b.value, t ? t.value : "");
+  }
+
   function pavimentosFieldHtml(d){
     var pavs = d.pavimentos || [];
     return '<div class="unidades-row">'
@@ -2864,7 +2949,8 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
           return '<span class="unidade-chip">'+escapeHtml(p)+'<button type="button" data-rm-pavimento="'+pi+'" title="Remover">✕</button></span>';
         }).join("")
       + '</div>'
-      + '<div class="unidade-add"><input type="text" id="nova-pavimento" placeholder="ex.: 5º Pavimento Tipo"><button type="button" class="btn" id="add-pavimento">+ Adicionar pavimento</button></div>'
+      + '<div class="unidade-add" id="nova-pavimento-caixa">'+pavSelectsHtml("", 'id="nova-pavimento"', "Escolha um pavimento…")
+        + '<button type="button" class="btn" id="add-pavimento">+ Adicionar pavimento</button></div>'
       + '<div class="hint" style="margin-top:6px;">Opcional: adicione um pavimento para cada andar que esta ficha também cobre. Todos aparecem no filtro de pavimentos do painel.</div>';
   }
 
@@ -3289,7 +3375,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       + '<fieldset><legend>Identificação</legend><div class="grid2">'
         // v1.4: sem "Nº do controle" — a ficha é identificada por data + pavimento
         + field("Data da concretagem","data",d.data,"date")
-        + field("Bloco / Pavimento","blocoPav",d.blocoPav,"text")
+        + '<div class="field"><label>Bloco / Pavimento</label><div id="bloco-pav-caixa">'+pavSelectsHtml(d.blocoPav, "", "Selecione o pavimento…")+'</div></div>'
         + '</div><div class="grid3">'
         + field("Obra","obra",d.obra,"text")
         + field("Projeto de referência","projetoReferencia",d.projetoReferencia,"text")
@@ -4446,17 +4532,17 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     (function(){
       var addPav=m.querySelector("#add-pavimento");
       if(addPav) addPav.addEventListener("click", function(){
-        var inputEl=m.querySelector("#nova-pavimento");
-        var nome=(inputEl.value||"").trim();
-        if(!nome) return;
+        var nome=lerPavSelects(m.querySelector("#nova-pavimento-caixa"), "");
+        if(!nome){ alert("Escolha o pavimento na lista."); return; }
         if(!draft.data.pavimentos) draft.data.pavimentos=[];
         if(draft.data.pavimentos.indexOf(nome)!==-1){ alert("Esse pavimento já foi adicionado."); return; }
         draft.data.pavimentos.push(nome);
         renderModal();
       });
-      var novaPavInput=m.querySelector("#nova-pavimento");
-      if(novaPavInput) novaPavInput.addEventListener("keydown", function(e){
-        if(e.key==="Enter"){ e.preventDefault(); m.querySelector("#add-pavimento").click(); }
+      // "Bloco / Pavimento" da rastreabilidade: listas em vez de texto livre
+      var caixaBloco = m.querySelector("#bloco-pav-caixa");
+      if(caixaBloco) caixaBloco.addEventListener("change", function(){
+        draft.data.blocoPav = lerPavSelects(caixaBloco, draft.data.blocoPav);
       });
       m.querySelectorAll("[data-rm-pavimento]").forEach(function(btn){
         btn.addEventListener("click", function(){
@@ -5350,6 +5436,9 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
     document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
     document.getElementById("btn-view-aco").addEventListener("click", function(){ switchView("aco"); });
+    document.getElementById("btn-view-cronograma").addEventListener("click", function(){ switchView("cronograma"); });
+    initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
+      usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
     initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO,
       nowISO:nowISO, usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return acoErroAcesso; } });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
@@ -5420,6 +5509,7 @@ if(location.hostname==="localhost" || location.hostname==="127.0.0.1"){
       tela("Controle tecnológico do concreto", "ct", "flask");
       tela("Plantas", "plantas", "map");
       tela("Entregas de aço", "aco", "truck");
+      tela("Cronograma da obra", "cronograma", "clock");
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
       var fichas = [];
