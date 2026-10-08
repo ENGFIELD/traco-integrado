@@ -11,9 +11,12 @@
  * ajustada ao modelo de pedido real enviado pela obra).
  */
 import { pintarIcones } from "../../ui/icones.js";
+import { lerPedidoPdf } from "./pedido-pdf.js";
 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const BITOLAS = ["5,0", "6,3", "8,0", "10,0", "12,5", "16,0", "20,0", "25,0", "32,0"];
+const ELEMENTOS = ["Laje", "Viga", "Pilar", "Parede", "Escada", "Bloco", "Rampa", "Auxiliar", "Outro"];
+const normTxt = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 const kg = (n) => (n == null || isNaN(n) ? "—" : Math.round(n).toLocaleString("pt-BR") + " kg");
 // "1.250,5" → 1250.5 ; "1250.5" → 1250.5 ; "1250" → 1250
 const num = (v) => {
@@ -104,8 +107,7 @@ export function renderViewAco(container) {
   container.querySelector("[data-aco-importar]").addEventListener("click", () => arq.click());
   arq.addEventListener("change", () => {
     const f = arq.files && arq.files[0]; arq.value = "";
-    if (f) container.querySelector("[data-aco-msg]").textContent =
-      `Recebi "${f.name}". A leitura automática do pedido será ativada assim que o modelo do fornecedor for configurado — por enquanto, cadastre em "Programar entrega".`;
+    if (f) importarPedido(f, container);
   });
   container.querySelectorAll("[data-aco-abrir]").forEach((c) => c.addEventListener("click", () => abrirFicha(c.dataset.acoAbrir, container)));
 }
@@ -115,7 +117,8 @@ function cartao(e, hoje) {
   const pill = { programada: "pendente", atrasada: "has-nc", entregue: "concluido", cancelado: "vinculo" }[st];
   const rot = { programada: "Programada", atrasada: "Atrasada", entregue: "Entregue", cancelado: "Cancelada" }[st];
   const quando = st === "entregue" ? "entregue em " + ctx.fmtDateBR(e.dataEntrega) : "prevista " + ctx.fmtDateBR(e.dataPrevista);
-  const bitolas = (e.itens || []).filter((i) => i.bitola).map((i) => "Ø" + i.bitola).join(" · ");
+  const bitolas = (e.itens || []).filter((i) => i.bitola).map((i) => "Ø" + i.bitola).join(" · ")
+    || [...new Set((e.itens || []).map((i) => i.elemento).filter((x) => x && x !== "Auxiliar"))].join(" · ");
   return `<div class="aco-card ${st}" data-aco-abrir="${esc(e.id)}">
     <div class="aco-data"><b>${esc((st === "entregue" ? e.dataEntrega : e.dataPrevista) ? ctx.fmtDateBR(st === "entregue" ? e.dataEntrega : e.dataPrevista).slice(0, 5) : "—")}</b><small>${esc(st === "entregue" ? "entregue" : "prevista")}</small></div>
     <div class="aco-corpo"><b>Pedido ${esc(e.pedido || "s/ nº")} · ${esc(e.fornecedor || "fornecedor?")}</b>
@@ -125,21 +128,68 @@ function cartao(e, hoje) {
   </div>`;
 }
 
-function abrirFicha(id, container) {
+// ---------- importação do PDF do pedido (Belgo Pronto / credenciado) ----------
+async function importarPedido(arquivo, container) {
+  const msg = container.querySelector("[data-aco-msg]");
+  msg.textContent = "Lendo " + arquivo.name + "…";
+  try {
+    if (!/\.pdf$/i.test(arquivo.name)) throw new Error("por enquanto a leitura automática é do PDF \"Relatório do pedido\" do portal");
+    await ctx.garantirPdf();
+    const ped = await lerPedidoPdf(window.pdfjsLib, new Uint8Array(await arquivo.arrayBuffer()));
+    if (!ped.itens.length && !ped.pedido) throw new Error("não reconheci o formato do pedido");
+    // Destino com as palavras do próprio pedido (sem adivinhar o nome do piso)
+    const pavs = [...new Set(ped.itens.map((i) => i.pavimento).filter(Boolean))];
+    const elems = [...new Set(ped.itens.map((i) => i.elemento).filter(Boolean))];
+    const destino = (pavs.length ? pavs.map((n) => (/^\d+$/.test(n) ? n + "º Pavimento" : n)).join(", ") : "") + (elems.length ? " — " + elems.join(" e ") : "");
+    const dados = {
+      pedido: ped.pedido, fornecedor: ped.fornecedor + (ped.portal ? " (" + ped.portal + ")" : ""), destino,
+      dataPrevista: ped.dataPrevista, status: "programado",
+      registroPortal: ped.registroPortal, ordemCompra: ped.ordemCompra, servico: ped.servico,
+      dataEnvio: ped.dataEnvio, dataDesejada: ped.dataDesejada, veiculo: ped.veiculo,
+      pesoProjetoKg: ped.pesos.projeto, arquivoOrigem: arquivo.name,
+      itens: ped.itens.map((i) => ({ bitola: "", elemento: i.elemento, prancha: i.prancha, revisao: i.revisao,
+        descricao: i.prancha + (i.descricao ? " — " + i.descricao : ""), pesoKg: i.pesoKg }))
+        .concat(ped.materialAuxiliar.map((m) => ({ bitola: "", elemento: "Auxiliar", descricao: m.material + (m.qtde != null ? " (qtde " + String(m.qtde).replace(".", ",") + ")" : ""), pesoKg: m.pesoKg }))),
+    };
+    // Já existe? (mesmo registro do portal, ou mesmo nº + fornecedor) → atualiza em vez de duplicar
+    const existente = ctx.lista().find((x) => (dados.registroPortal && x.registroPortal === dados.registroPortal)
+      || (x.pedido && x.pedido === dados.pedido && normTxt(x.fornecedor).startsWith(normTxt(ped.fornecedor))));
+    const avisos = ped.avisos.slice();
+    if (existente) {
+      if (!confirm(`O pedido ${dados.pedido} já está cadastrado. Abrir o existente e atualizar com os dados deste PDF?\n\n(Situação, data de entrega e NF já lançadas são mantidas.)`)) { msg.textContent = "Importação cancelada."; return; }
+      const manter = { status: existente.status, dataEntrega: existente.dataEntrega, notaFiscal: existente.notaFiscal, observacoes: existente.observacoes };
+      abrirFicha(existente.id, container, Object.assign({}, dados, manter), { arquivo: arquivo.name, avisos, conferencia: ped });
+    } else {
+      abrirFicha(null, container, dados, { arquivo: arquivo.name, avisos, conferencia: ped });
+    }
+    msg.textContent = "";
+  } catch (ex) {
+    console.error(ex);
+    msg.textContent = "Não foi possível ler o pedido: " + (ex && ex.message ? ex.message : "erro desconhecido") + ".";
+  }
+}
+
+// prefill/meta: usados pela importação (dados lidos do PDF para conferir antes de salvar)
+function abrirFicha(id, container, prefill, meta) {
   const atual = id ? ctx.lista().find((e) => e.id === id) : null;
   const e = JSON.parse(JSON.stringify(atual || { status: "programado", dataPrevista: ctx.todayISO(), itens: [{ bitola: "", pesoKg: "" }] }));
+  if (prefill) Object.assign(e, JSON.parse(JSON.stringify(prefill)));
   if (!e.itens || !e.itens.length) e.itens = [{ bitola: "", pesoKg: "" }];
   const ov = document.createElement("div");
   ov.className = "overlay ct-ficha-ov";
   const linhaItem = (it, i) => `<div class="aco-item" data-i="${i}">
       <div class="field"><label>Bitola (mm)</label><select data-it="bitola"><option value="">—</option>${BITOLAS.map((b) => `<option${it.bitola === b ? " selected" : ""}>${b}</option>`).join("")}</select></div>
-      <div class="field"><label>Descrição</label><input data-it="descricao" value="${esc(it.descricao || "")}" placeholder="ex.: CA-50 barra 12 m / cortado e dobrado"></div>
+      <div class="field"><label>Elemento</label><select data-it="elemento"><option value="">—</option>${ELEMENTOS.concat(it.elemento && !ELEMENTOS.includes(it.elemento) ? [it.elemento] : []).map((x) => `<option${it.elemento === x ? " selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+      <div class="field"><label>Descrição / prancha</label><input data-it="descricao" value="${esc(it.descricao || "")}" placeholder="ex.: CA-50 barra 12 m / cortado e dobrado"></div>
       <div class="field"><label>Peso (kg)</label><input data-it="pesoKg" inputmode="decimal" value="${esc(numTela(it.pesoKg))}"></div>
       <button type="button" class="rm-line" data-rm-item="${i}" aria-label="Remover item">✕</button></div>`;
   const desenhar = () => {
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
-      <div class="modal-head"><h2>${atual ? "Pedido " + esc(e.pedido || "") : "Programar entrega de aço"}</h2><button class="close-x" data-fechar aria-label="Fechar">✕</button></div>
+      <div class="modal-head"><h2>${atual ? "Pedido " + esc(e.pedido || "") : (meta ? "Pedido importado" : "Programar entrega de aço")}</h2><button class="close-x" data-fechar aria-label="Fechar">✕</button></div>
       <div class="modal-body">
+        ${meta ? `<div class="banner info">Lido de <b>${esc(meta.arquivo)}</b>: ${e.itens.length} item(ns), ${kg(somaItens(e.itens))} no total. <b>Confira e toque em Salvar</b> — nada foi gravado ainda.</div>` : ""}
+        ${meta && meta.avisos.length ? `<div class="banner">${meta.avisos.map(esc).join("<br>")}</div>` : ""}
+        ${e.status !== "entregue" && e.dataPrevista && e.dataPrevista < ctx.todayISO() ? `<div class="banner miss">A data prevista (${ctx.fmtDateBR(e.dataPrevista)}) já passou. Se o aço já chegou, toque em "Marcar como entregue".</div>` : ""}
         <fieldset><legend>Pedido</legend><div class="grid3">
           <div class="field"><label>Nº do pedido</label><input data-f="pedido" value="${esc(e.pedido || "")}"></div>
           <div class="field"><label>Fornecedor</label><input data-f="fornecedor" value="${esc(e.fornecedor || "")}" placeholder="ex.: Gerdau, ArcelorMittal"></div>
@@ -150,19 +200,30 @@ function abrirFicha(id, container) {
           <div class="field" data-so-entregue ${e.status === "entregue" ? "" : "hidden"}><label>Data da entrega</label><input type="date" data-f="dataEntrega" value="${esc(e.dataEntrega || "")}"></div>
           <div class="field" data-so-entregue ${e.status === "entregue" ? "" : "hidden"}><label>Nota fiscal</label><input data-f="notaFiscal" value="${esc(e.notaFiscal || "")}"></div>
         </div></fieldset>
+        ${e.registroPortal || e.ordemCompra || e.dataEnvio || e.veiculo ? `<fieldset><legend>Dados do portal</legend><div class="grid3">
+          <div class="field"><label>Registro no portal</label><input data-f="registroPortal" value="${esc(e.registroPortal || "")}"></div>
+          <div class="field"><label>Ordem de compra</label><input data-f="ordemCompra" value="${esc(e.ordemCompra || "")}"></div>
+          <div class="field"><label>Serviço</label><input data-f="servico" value="${esc(e.servico || "")}"></div>
+          <div class="field"><label>Enviado em</label><input type="date" data-f="dataEnvio" value="${esc(e.dataEnvio || "")}"></div>
+          <div class="field"><label>Entrega desejada</label><input type="date" data-f="dataDesejada" value="${esc(e.dataDesejada || "")}"></div>
+          <div class="field"><label>Veículo</label><input data-f="veiculo" value="${esc(e.veiculo || "")}"></div>
+        </div></fieldset>` : ""}
         <fieldset><legend>Itens <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— total <b data-total>${kg(somaItens(e.itens))}</b></span></legend>
           <div class="aco-itens">${e.itens.map(linhaItem).join("")}</div>
-          <button type="button" class="btn ghost" data-add-item style="margin-top:8px">+ Adicionar bitola</button></fieldset>
+          <button type="button" class="btn ghost" data-add-item style="margin-top:8px">+ Adicionar item</button></fieldset>
         <fieldset><legend>Observações</legend><div class="field"><textarea data-f="observacoes">${esc(e.observacoes || "")}</textarea></div></fieldset>
         ${atual && atual.atualizadoEm ? `<div class="last-updated">Última atualização: ${esc(atual.atualizadoPor || "")} · ${esc(String(atual.atualizadoEm).slice(0, 16).replace("T", " "))}</div>` : ""}
       </div>
-      <div class="modal-foot"><div>${atual && e.status !== "entregue" ? `<button class="btn" data-receber>✓ Marcar como entregue hoje</button>` : ""}</div>
+      <div class="modal-foot"><div>${(atual || meta) && e.status !== "entregue" ? `<button class="btn" data-receber>✓ Marcar como entregue hoje</button>` : ""}</div>
         <div style="display:flex;gap:10px"><button class="btn" data-fechar>Cancelar</button><button class="btn primary" data-salvar>Salvar</button></div></div></div>`;
   };
   const lerTela = () => {
     ov.querySelectorAll("[data-f]").forEach((el) => { e[el.dataset.f] = el.value.trim(); });
-    e.itens = [...ov.querySelectorAll(".aco-item")].map((row) => ({
+    const antes = e.itens || [];
+    e.itens = [...ov.querySelectorAll(".aco-item")].map((row, idx) => ({
+      prancha: (antes[idx] || {}).prancha || "", revisao: (antes[idx] || {}).revisao || "",
       bitola: row.querySelector('[data-it="bitola"]').value,
+      elemento: row.querySelector('[data-it="elemento"]').value,
       descricao: row.querySelector('[data-it="descricao"]').value.trim(),
       pesoKg: num(row.querySelector('[data-it="pesoKg"]').value),
     }));
@@ -170,7 +231,7 @@ function abrirFicha(id, container) {
   desenhar();
   document.body.appendChild(ov);
   document.body.style.overflow = "hidden";
-  let sujo = false;
+  let sujo = !!meta; // ficha importada ainda não salva: pede confirmação ao fechar
   const fechar = () => {
     if (sujo && !confirm("Descartar as alterações deste pedido?")) return;
     ov.remove(); document.body.style.overflow = ""; document.removeEventListener("keydown", tecla);
@@ -197,7 +258,7 @@ function abrirFicha(id, container) {
       lerTela();
       if (!e.fornecedor && !e.pedido) { alert("Informe ao menos o nº do pedido ou o fornecedor."); return; }
       if (e.status === "entregue" && !e.dataEntrega) e.dataEntrega = ctx.todayISO();
-      const dados = { ...e, itens: e.itens.filter((i) => i.bitola || i.descricao || i.pesoKg != null), pesoTotalKg: somaItens(e.itens),
+      const dados = { ...e, itens: e.itens.filter((i) => i.bitola || i.elemento || i.descricao || i.pesoKg != null), pesoTotalKg: somaItens(e.itens),
         atualizadoEm: ctx.nowISO(), atualizadoPor: ctx.usuario() };
       delete dados.id;
       if (!atual) { dados.criadoEm = ctx.nowISO(); dados.criadoPor = ctx.usuario(); }

@@ -5588,7 +5588,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-cronograma").addEventListener("click", function(){ switchView("cronograma"); });
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
-    initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO,
+    initAco({ col:acoCol, lista:function(){ return Array.from(acoMap.values()); }, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
       nowISO:nowISO, usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return acoErroAcesso; } });
     document.getElementById("btn-nav-dashboard").addEventListener("click", function(){ switchView("dashboard"); });
     document.getElementById("btn-nav-board").addEventListener("click", function(){ switchView("board"); });
