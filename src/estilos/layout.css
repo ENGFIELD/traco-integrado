@@ -566,3 +566,45 @@ body.somente-leitura .ct-concluir, body.somente-leitura .ct-concluida-chk { disp
 /* v1.12: excluir pedido de aço */
 .btn.danger { color: var(--bad); border-color: var(--bad); }
 body.somente-leitura [data-aco-excluir] { display: none !important; }
+
+/* v1.14: corte do prédio por etapa (abas) e quadro pavimento × etapa */
+.etapa-abas { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 2px; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+.etapa-abas .chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.etapa-abas .chip small { font-family: var(--font-mono); font-size: 11.5px; opacity: .75; }
+.etapa-abas .chip.futura { opacity: .7; }
+.etapa-modo { display: flex; justify-content: flex-end; padding: 8px 16px 0; }
+.cp-semfvs { fill: var(--bad-soft); stroke: var(--bad); }
+.cp-na { fill: none; stroke: var(--border); stroke-dasharray: 2 2; }
+.cp-parcial { fill: var(--warn); opacity: .55; }
+.cp-leg li i.cp-semfvs { background: var(--bad-soft); border-color: var(--bad); }
+.cp-leg li i.cp-na { background: transparent; border: 1px dashed var(--text-muted); }
+.quadro-etapas { overflow-x: auto; padding: 12px 16px 16px; }
+.quadro-etapas table { border-collapse: separate; border-spacing: 3px; font-size: 12.5px; }
+.quadro-etapas th { font-weight: 600; color: var(--text-muted); text-align: left; padding: 2px 6px; white-space: nowrap; }
+.quadro-etapas thead th { text-align: center; font-size: 11.5px; }
+.quadro-etapas td { min-width: 50px; height: 24px; border-radius: 5px; text-align: center; font: 700 11.5px var(--font-mono); cursor: default; }
+.quadro-etapas td.q-liberado { background: var(--accent-strong); color: var(--accent-contrast); }
+.quadro-etapas td.q-concretado { background: var(--good-soft); color: var(--good); }
+.quadro-etapas td.q-semfvs { background: var(--bad-soft); color: var(--bad); }
+.quadro-etapas td.q-execucao { background: var(--warn-soft); color: var(--warn); }
+.quadro-etapas td.q-nada { background: var(--surface-2); color: var(--text-muted); }
+.quadro-etapas td.q-na { background: transparent; }
+.quadro-etapas .q-leg { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+.quadro-etapas .q-leg span { display: inline-flex; align-items: center; gap: 5px; }
+.quadro-etapas .q-leg i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* v1.14: FVS da semana (cronograma → fichas a abrir) */
+.fvs-semana-acao { flex: 0 0 auto; }
+body.somente-leitura .fvs-semana-acao, body.somente-leitura .et-sel { display: none !important; }
+
+/* v1.14: aba Etapas do cronograma */
+.et-resumo { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 8px; margin-bottom: 14px; }
+.et-resumo > div { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.et-resumo b { display: block; font-size: 14px; }
+.et-resumo small { color: var(--text-muted); }
+.et-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin-bottom: 6px; }
+.et-item .cr-nome { min-width: 0; }
+.et-sel { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.et-sel select { max-width: 200px; min-height: 36px; }
+.et-item .et-origem { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+@media (max-width: 640px) { .et-item { grid-template-columns: 1fr; } .et-sel { justify-content: flex-start; } .et-sel select { max-width: 100%; flex: 1 1 140px; } }

@@ -12,6 +12,7 @@
  */
 import { lerCronograma, calcularFolgas, atividadesNoPeriodo, pctPrevisto, idxUtil, isoDeUtil } from "./cpm.js";
 import { pintarIcones } from "../../ui/icones.js";
+import { ETAPAS, ETAPA_POR_KEY, NIVEIS, classificar, resumoEtapas, chaveAtividade } from "./etapas.js";
 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const COLS = ["a", "b", "c", "d", "e", "f"];
@@ -23,6 +24,9 @@ let cr = null;             // cronograma calculado
 let aba = "semana";
 let busca = "";
 let abertos = new Set();   // ids de resumos expandidos na árvore
+let manuais = null;        // cronogramas/etapas → { itens: { chave: { etapa, nivel, em, por } } } (v1.14)
+let etapasCache = null;    // { chaveHoje, classif, resumo } — refeito quando o cronograma, o % ou as escolhas mudam
+let etSoPendentes = true;  // aba Etapas: mostrar só o que não foi reconhecido
 
 export function initCronograma(contexto) { ctx = contexto; }
 export function definirDocumento(d) {
@@ -34,9 +38,21 @@ export function definirDocumento(d) {
     calcularFolgas(cr);
     cr.tarefas.forEach((t) => { t.pctArquivo = t.pct; });
   }
+  etapasCache = null;
   aplicarProgresso();
 }
-export function definirProgresso(p) { prog = p || null; aplicarProgresso(); }
+export function definirProgresso(p) { prog = p || null; aplicarProgresso(); etapasCache = null; }
+// v1.14: etapa e pavimento escolhidos à mão para as atividades não reconhecidas
+export function definirEtapasManuais(d) { manuais = d || null; etapasCache = null; }
+
+/** Etapas da obra pelo cronograma: classificação de cada atividade e resumo por etapa/nível */
+export function etapasDaObra(hoje) {
+  if (!cr) return null;
+  if (etapasCache && etapasCache.hoje === hoje) return etapasCache;
+  const classif = classificar(cr, manuais && manuais.itens);
+  etapasCache = { hoje, classif, resumo: resumoEtapas(cr, classif, hoje), cr };
+  return etapasCache;
+}
 
 // Aplica o % lançado no app sobre o % do arquivo e recalcula os grupos
 // (resumos) afetados pela média ponderada pela duração — mesmo critério do
@@ -155,12 +171,13 @@ export function renderViewCronograma(container) {
     <button type="button" class="dash-kpi-card tone-pendente" data-cr-aba="semana"><div class="n">${semana.length}</div><div class="l">Atividades nesta semana</div><div class="d">${semana.filter(critica).length} no caminho crítico</div></button>
     <button type="button" class="dash-kpi-card tone-nc" data-cr-aba="atrasadas"><div class="n">${atrasadas.length}</div><div class="l">Atividades atrasadas</div><div class="d">término vencido ou ≥25% abaixo do previsto</div></button>
     <button type="button" class="dash-kpi-card tone-ok" data-cr-aba="critico"><div class="n">${ctx.fmtDateBR(fim)}</div><div class="l">Término previsto</div><div class="d">${criticas.length} atividades críticas pendentes</div></button></div>`;
-  const abas = [["semana", `Esta semana (${semana.length})`], ["proximas", `Próximas 3 semanas (${proximas.length})`], ["critico", `Caminho crítico (${criticas.length})`], ["atrasadas", `Atrasadas (${atrasadas.length})`], ["tudo", "Cronograma completo"]];
+  const abas = [["semana", `Esta semana (${semana.length})`], ["proximas", `Próximas 3 semanas (${proximas.length})`], ["critico", `Caminho crítico (${criticas.length})`], ["atrasadas", `Atrasadas (${atrasadas.length})`], ["tudo", "Cronograma completo"], ["etapas", "Etapas"]];
   let lista;
   if (aba === "semana") lista = linhas(semana, hoje, `Semana de ${ctx.fmtDateBR(s0.ini)} a ${ctx.fmtDateBR(s0.fim)}`);
   else if (aba === "proximas") lista = porSemana(proximas, hoje);
   else if (aba === "critico") lista = linhas(criticas.sort((a, b) => a.ini.localeCompare(b.ini)), hoje, "Sequência de atividades sem folga até o Habite-se — qualquer atraso aqui atrasa a obra");
   else if (aba === "atrasadas") lista = linhas(atrasadas.sort((a, b) => a.fim.localeCompare(b.fim)), hoje, "Atividades com término vencido ou bem abaixo do % previsto para hoje");
+  else if (aba === "etapas") lista = telaEtapas(hoje);
   else lista = arvore(hoje);
   container.innerHTML = cabecalho() + (corpo || "") + kpis
     + `<div class="ct-filtros"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -174,6 +191,7 @@ export function renderViewCronograma(container) {
   container.querySelectorAll("[data-cr-pct]").forEach((el) => el.addEventListener("click", (ev) => {
     ev.stopPropagation(); editarPct(+el.dataset.crPct, container);
   }));
+  ligarEtapas(container);
   container.querySelectorAll("[data-cr-abrir]").forEach((el) => el.addEventListener("click", () => {
     const id = +el.dataset.crAbrir; abertos.has(id) ? abertos.delete(id) : abertos.add(id); renderViewCronograma(container);
   }));
@@ -246,6 +264,58 @@ function arvore(hoje) {
         <div class="cr-gantt"><i class="hoje" style="left:${(h - a) / Math.max(1, b - a) * 100}%"></i>
           ${t.ini && t.fim ? `<i class="bar ${t.resumo ? "resumo" : ""}" style="left:${pos(t.ini)}%;width:${Math.max(0.4, pos(t.fim) - pos(t.ini))}%"><i style="width:${t.pct}%"></i></i>` : ""}</div>
       </div>`).join("") + `</div>`;
+}
+
+// ---------- v1.14: aba Etapas (reconhecimento de etapa e pavimento) ----------
+function telaEtapas(hoje) {
+  const { classif, resumo } = etapasDaObra(hoje);
+  const folhas = filtrar(cr.tarefas.filter((t) => !t.resumo));
+  // "não reconhecida" = sem etapa e ninguém escolheu ainda ("não é etapa de obra" escolhido à mão sai da lista)
+  const semEtapa = folhas.filter((t) => { const c = classif.get(t.id) || {}; return !c.etapa && c.origem !== "manual"; });
+  const resumoHtml = `<div class="et-resumo">${resumo.map((e) => `<div><b>${esc(e.nome)} · ${e.pct}%</b><small>${e.n} atividade(s) · ${e.niveis.size} pavimento(s) · ${ctx.fmtDateBR(e.ini).slice(3)} → ${ctx.fmtDateBR(e.fim).slice(3)}</small></div>`).join("")}
+    <div><b>Sem etapa · ${cr.tarefas.filter((t) => !t.resumo && !(classif.get(t.id) || {}).etapa).length}</b><small>serviços gerais, mobilização… (não entram no corte)</small></div></div>`;
+  const lista = etSoPendentes ? semEtapa : folhas;
+  const opcEtapa = (v) => `<option value="">— não é etapa de obra —</option>` + ETAPAS.map((e) => `<option value="${e.key}"${v === e.key ? " selected" : ""}>${esc(e.nome)}</option>`).join("");
+  const opcNivel = (v) => `<option value="-1">— sem pavimento —</option>` + NIVEIS.map((n, i) => `<option value="${i}"${v === i ? " selected" : ""}>${String(i).padStart(2, "0")} — ${esc(n)}</option>`).join("");
+  const itens = lista.slice(0, 300).map((t) => {
+    const c = classif.get(t.id) || {};
+    return `<div class="et-item" data-et-id="${t.id}">
+      <div class="cr-nome"><small>${esc(t.caminho.join(" › "))}</small><b>${esc(t.nome)}</b>
+        <span class="et-origem">${c.origem === "manual" ? "escolhido à mão" : (c.etapa ? "reconhecido" : "não reconhecido")}</span></div>
+      <div class="et-sel"><select data-et-etapa aria-label="Etapa">${opcEtapa(c.etapa || "")}</select>
+        <select data-et-nivel aria-label="Pavimento">${opcNivel(c.nivel == null ? -1 : c.nivel)}</select>
+        <button type="button" class="btn small primary" data-et-salvar>Salvar</button></div></div>`;
+  }).join("");
+  return `<p class="view-desc">O app liga cada atividade a uma etapa (pelo nome dela e dos grupos acima) e a um pavimento. É isso que monta o corte por etapa no Início. Corrija aqui o que ficou errado — a escolha vale também para os próximos cronogramas enviados.</p>
+    ${resumoHtml}
+    <div class="chips" role="group"><button type="button" class="chip" data-et-filtro="1" aria-pressed="${etSoPendentes}">Não reconhecidas (${semEtapa.length})</button>
+      <button type="button" class="chip" data-et-filtro="0" aria-pressed="${!etSoPendentes}">Todas as atividades (${folhas.length})</button></div>
+    <div class="ct-import-msg" data-et-msg></div>
+    ${itens || `<div class="dash-vazio">${etSoPendentes ? "Todas as atividades foram reconhecidas. 👍" : "Nenhuma atividade."}</div>`}
+    ${lista.length > 300 ? `<div class="cr-sub">Mostrando 300 de ${lista.length}. Use a busca acima para achar as outras.</div>` : ""}`;
+}
+function ligarEtapas(container) {
+  container.querySelectorAll("[data-et-filtro]").forEach((b) => b.addEventListener("click", () => { etSoPendentes = b.dataset.etFiltro === "1"; renderViewCronograma(container); }));
+  container.querySelectorAll("[data-et-salvar]").forEach((b) => b.addEventListener("click", async () => {
+    const linha = b.closest("[data-et-id]"), t = cr.porId.get(+linha.dataset.etId);
+    const msg = container.querySelector("[data-et-msg]");
+    if (!t) return;
+    const etapa = linha.querySelector("[data-et-etapa]").value, nivel = Number(linha.querySelector("[data-et-nivel]").value);
+    b.disabled = true;
+    try {
+      const item = { etapa, nivel, nome: t.nome, em: ctx.nowISO(), por: ctx.usuario() };
+      const envio = ctx.col.doc("etapas").set({ itens: { [chaveAtividade(t)]: item } }, { merge: true });
+      const r = await Promise.race([envio.then(() => "ok"), new Promise((res) => setTimeout(() => res("pendente"), 10000))]);
+      msg.className = "ct-import-msg ok";
+      msg.textContent = (r === "pendente" ? "Sem conexão: a escolha será enviada quando o sinal voltar. " : "Salvo: ")
+        + t.nome + " → " + (etapa ? ETAPA_POR_KEY.get(etapa).nome : "não é etapa de obra") + (nivel >= 0 ? " · " + NIVEIS[nivel] : "");
+    } catch (ex) {
+      console.error(ex);
+      msg.className = "ct-import-msg err";
+      msg.textContent = "Não foi possível salvar: " + (ex && ex.message ? ex.message : "erro desconhecido");
+      b.disabled = false;
+    }
+  }));
 }
 
 // ---------- importação ----------
