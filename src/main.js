@@ -3868,26 +3868,33 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // com área demarcada era recusada ao salvar (desde a v1.0). No banco os
   // pontos passam a ser [{x,y},...]; na memória continuam [x,y] para não mexer
   // no código de desenho/exportação.
+  // v1.24: várias plantas na mesma ficha — a planta aberta fica em
+  // data.mapeamento (como sempre) e as outras em data.mapeamentosExtras.
+  function todosMapeamentos(data){
+    return [data && data.mapeamento].concat((data && data.mapeamentosExtras) || []).filter(Boolean);
+  }
   function paraFirestore(data){
-    var mp = data && data.mapeamento;
-    if(mp && Array.isArray(mp.areas)){
-      mp.areas = mp.areas.map(function(a){
-        return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
-          return Array.isArray(p) ? { x:p[0], y:p[1] } : p;
-        }) });
-      });
-    }
+    todosMapeamentos(data).forEach(function(mp){
+      if(mp && Array.isArray(mp.areas)){
+        mp.areas = mp.areas.map(function(a){
+          return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
+            return Array.isArray(p) ? { x:p[0], y:p[1] } : p;
+          }) });
+        });
+      }
+    });
     return data;
   }
   function doFirestore(data){
-    var mp = data && data.mapeamento;
-    if(mp && Array.isArray(mp.areas)){
-      mp.areas = mp.areas.map(function(a){
-        return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
-          return Array.isArray(p) ? p : [p.x, p.y];
-        }) });
-      });
-    }
+    todosMapeamentos(data).forEach(function(mp){
+      if(mp && Array.isArray(mp.areas)){
+        mp.areas = mp.areas.map(function(a){
+          return Object.assign({}, a, { pontos: (a.pontos||[]).map(function(p){
+            return Array.isArray(p) ? p : [p.x, p.y];
+          }) });
+        });
+      }
+    });
     return data;
   }
   function blankMapeamento(){
@@ -4715,7 +4722,23 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // marcar as áreas) — ver wireMapeamentoEvents() para toda a interação.
   // Sem PDF ainda: só o botão de anexar. Com PDF: barra de zoom, área de
   // desenho e a legenda das áreas já demarcadas.
+  // abas das plantas da ficha (v1.24): "Planta 1 · nome · 3 áreas" + "Adicionar outra planta"
+  function mapaAbasHtml(d){
+    var lista = todosMapeamentos(d).slice().sort(function(a,b){ return (a.ordem||0)-(b.ordem||0); });
+    var ativo = d.mapeamento || {};
+    if(lista.length<2 && !ativo.plantaUrl) return "";
+    return '<div class="mapa-abas" role="tablist">' + lista.map(function(mp, i){
+      var eh = mp===ativo, n = (mp.areas||[]).length;
+      return '<button type="button" role="tab" class="mapa-aba" aria-selected="'+eh+'" data-mapa-aba="'+(mp.ordem||0)+'">'
+        + '<b>Planta '+(i+1)+'</b><small>'+escapeHtml(mp.plantaNome ? mp.plantaNome.slice(0,28) : "escolher planta")+(n ? ' · '+n+' área(s)' : '')+'</small></button>';
+    }).join("")
+    + (ativo.plantaUrl ? '<button type="button" class="mapa-aba nova" id="mapa-add-planta" title="Demarcar em mais uma planta nesta mesma ficha">+ Outra planta</button>' : '')
+    + '</div>';
+  }
   function mapeamentoFieldHtml(d){
+    return mapaAbasHtml(d) + mapeamentoUmaPlantaHtml(d);
+  }
+  function mapeamentoUmaPlantaHtml(d){
     var mp = d.mapeamento || blankMapeamento();
     if(!mp.plantaUrl){
       var lista = mapaPlantasOrdenadas(d.pavimentos);
@@ -6193,6 +6216,29 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var mp = draft.data.mapeamento;
     if(!mp) return;
 
+    // v1.24: trocar de planta (aba) e adicionar outra planta na mesma ficha
+    var trocarPara = function(novo){
+      var d = draft.data, limpo = !draftAlterado();
+      d.mapeamentosExtras = (d.mapeamentosExtras || []).filter(function(x){ return x!==novo; });
+      d.mapeamentosExtras.push(d.mapeamento);
+      d.mapeamento = novo;
+      if(limpo) draft.orig = JSON.stringify(d); // só trocar de aba não é alteração
+      mapaEstado = null;
+      renderModal();
+    };
+    m.querySelectorAll("[data-mapa-aba]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var ordem = Number(b.getAttribute("data-mapa-aba"));
+        var alvo = (draft.data.mapeamentosExtras||[]).find(function(x){ return (x.ordem||0)===ordem; });
+        if(alvo) trocarPara(alvo);
+      });
+    });
+    var btnAdd = m.querySelector("#mapa-add-planta");
+    if(btnAdd) btnAdd.addEventListener("click", function(){
+      var maior = todosMapeamentos(draft.data).reduce(function(x, y){ return Math.max(x, y.ordem||0); }, 0);
+      trocarPara(Object.assign(blankMapeamento(), { ordem: maior+1 }));
+    });
+
     var inputPlanta = m.querySelector("#input-planta");
     if(inputPlanta) inputPlanta.addEventListener("change", async function(){
       var file = inputPlanta.files[0];
@@ -6251,7 +6297,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(btnRemoverPlanta) btnRemoverPlanta.addEventListener("click", function(){
       var n = (mp.areas||[]).length;
       if(!confirm("Remover a planta desta rastreabilidade?"+(n ? "\n\nAs "+n+" área(s) demarcadas nela também serão removidas." : "")+"\n\nA alteração só vale depois de Salvar.")) return;
-      draft.data.mapeamento = blankMapeamento();
+      // v1.24: com mais de uma planta, remove só esta aba e abre a próxima
+      var extras = draft.data.mapeamentosExtras || [];
+      if(extras.length){
+        extras.sort(function(a,b){ return (a.ordem||0)-(b.ordem||0); });
+        draft.data.mapeamento = extras.shift();
+      } else draft.data.mapeamento = blankMapeamento();
+      mapaEstado = null;
       renderModal();
     });
 

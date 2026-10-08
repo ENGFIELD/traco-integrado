@@ -697,3 +697,11 @@ input.campo-dup { border-color: var(--bad) !important; background: var(--bad-sof
 
 /* v1.22: resultado lançado, mas abaixo do fck (7 e 14 dias) — sem verde */
 .ct-idade.resultado { background: var(--surface-2); border-color: transparent; } .ct-idade.resultado b { color: var(--text); }
+
+/* v1.24: várias plantas na mesma rastreabilidade */
+.mapa-abas { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; padding-bottom: 2px; }
+.mapa-aba { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; flex: none; max-width: 220px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; }
+.mapa-aba b { font-size: 13px; }
+.mapa-aba small { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 196px; }
+.mapa-aba[aria-selected="true"] { border-color: var(--text); box-shadow: inset 0 -3px 0 var(--text); }
+.mapa-aba.nova { justify-content: center; font-weight: 700; font-size: 13px; border-style: dashed; color: var(--text-muted); }
