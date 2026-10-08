@@ -34,7 +34,11 @@ svg.ti-i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-w
   -webkit-backdrop-filter: saturate(1.4) blur(10px); backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--border);
 }
-.ti-top-logo img { height: 30px; width: auto; display: block; }
+/* v1.16: "display:block" aqui mostrava as DUAS logos (clara e escura) uma em cima
+   da outra no celular — duplicada / empurrada para cima. A troca por tema fica
+   com as regras img.logo-light / img.logo-dark (app.css); aqui só tamanho e centro. */
+.ti-top-logo { display: flex; align-items: center; flex: none; height: 100%; }
+.ti-top-logo img { height: 30px; width: auto; vertical-align: middle; }
 .ti-obra { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.15; padding: 0 4px; }
 .ti-obra .k { font-size: 10.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
 .ti-obra .v { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -635,3 +639,4 @@ body.somente-leitura .fvs-semana-acao, body.somente-leitura .et-sel { display: n
 .ficha-travada #btn-save, .ficha-travada #btn-delete, .ficha-travada #btn-toggle-close { display: none !important; }
 body.somente-leitura [data-assinar], body.somente-leitura [data-cad-assin], body.somente-leitura [data-nova-rev], body.somente-leitura #btn-minha-assinatura { display: none !important; }
 .ficha-travada .modal-body #open-linked-rast { pointer-events: auto; }
+.ct-just { border-color: var(--bad); } .ct-just textarea { width: 100%; }

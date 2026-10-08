@@ -11,6 +11,7 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
+import { IDADES_OBRIGATORIAS as CT_OBRIGATORIAS, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
@@ -1157,9 +1158,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         else if(st==="aguardando" && (d===hoje || d===amanha)) g = grupo("r|"+i.key+"|"+d, { tipo:"romper", idade:i.key, conc:r.dataConcretagem, venc:d, lab:r.laboratorio });
         if(g){ g.nfs.push(r); g.locais[loc] = 1; }
       });
-      if(ctAbaixoFck(r) && !/CONCLU|NC|n[ãa]o conformidade/i.test(r.observacao||"")) out.push({ cat:"ct-fck", prio: 75, icone:"alert", tom:"bad",
-        titulo:"Resultado abaixo do fck — NF "+r.notaRemessa, sub:loc+" · 28d "+String(ctMelhor28(r)).replace(".", ",")+" MPa de "+r.fck+" MPa: avaliar NC",
-        abrir:{ ct:r._id } });
+      // v1.16: abaixo do fck aos 28 ou 63 dias → justificativa (causa + resolução) obrigatória
+      if(ctJustPendente(r)){
+        var idsAb = ctAbaixoEm(r);
+        out.push({ cat:"ct-fck", prio: 75, icone:"alert", tom:"bad",
+          titulo:"Justificar resultado abaixo do fck — NF "+r.notaRemessa,
+          sub:loc+" · "+idsAb.map(function(i){ return i+"d "+String(i==="28" ? ctMelhor28(r) : ctMelhor63(r)).replace(".", ",")+" MPa"; }).join(" · ")+" de "+r.fck+" MPa: informar causa e resolução",
+          abrir:{ ct:r._id } });
+      }
     });
     Object.keys(grupos).forEach(function(k){
       var g = grupos[k], n = g.nfs.length, locais = Object.keys(g.locais).join(", ");
@@ -1894,8 +1900,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(!dataPrev) return "sem-data";
     var saiu = idade.campos.some(function(c){ return ctValorPreenchido(row[c]); });
     if(saiu) return "concluido";
-    if(row.concluida===true) return "dispensado";
     if(dataPrev > todayISO()) return "aguardando";
+    // v1.16: 28 e 63 dias são obrigatórios — "concluída"/"CONCLUÍDO" só dispensa 7 e 14
+    if(CT_OBRIGATORIAS.indexOf(idade.key)!==-1) return "pendente";
     return ctRowConcluidaPorObservacao(row) ? "dispensado" : "pendente";
   }
   function ctIdadesPendentes(row){
@@ -2109,7 +2116,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       }
       ctSetStatus("Preenchendo a planilha…");
       var zip = await JSZip.loadAsync(modelo.dados);
-      var regs = ctRowsArray();
+      // v1.16: a justificativa do resultado abaixo do fck vai junto na coluna Observação
+      var regs = ctRowsArray().map(function(r){ return ctJustificada(r) ? Object.assign({}, r, { observacao: ctObsComJustificativa(r) }) : r; });
       var res = await preencherPlanilhaCt(zip, regs, CT_COLS);
       var blob = await zip.generateAsync({ type:"blob", compression:"DEFLATE", mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       var base = String(modelo.arquivo||"Controle Tecnologico.xlsx").replace(/\.xlsx?$/i, "").replace(/\s*\(app \d{2}-\d{2}-\d{4}\)$/, "");
@@ -2156,15 +2164,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(a==null && b==null) return null;
     return Math.max(a==null ? -Infinity : a, b==null ? -Infinity : b);
   }
-  // Abaixo do fck aos 28 dias E não recuperou aos 63 (ou ainda sem 63 dias).
-  // Indicador por resultado individual — a aceitação formal do lote segue o
-  // fck estimado da NBR 12655 (Fase 4.3).
-  function ctAbaixoFck(row){
-    var fck = ctNumero(row.fck), r = ctMelhor28(row);
-    if(fck==null || r==null || r >= fck) return false;
-    var r63 = ctMelhor63(row);
-    return !(r63!=null && r63 >= fck);
-  }
+  // v1.16 (regra do dono): abaixo do fck aos 28 OU aos 63 dias — mesmo que
+  // recupere aos 63, o resultado de 28 abaixo exige justificativa (regras-ct.js).
+  function ctAbaixoFck(row){ return ctAbaixoEm(row).length > 0; }
   // Ficou abaixo aos 28 dias, mas atingiu o fck aos 63
   function ctRecuperou63(row){
     var fck = ctNumero(row.fck), r = ctMelhor28(row), r63 = ctMelhor63(row);
@@ -2189,6 +2191,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     { key:"atrasado", label:"Resultado atrasado", teste:ctTemPendencia },
     { key:"semana", label:"Romper em 7 dias", teste:ctRomperEmBreve },
     { key:"abaixo", label:"Abaixo do fck", teste:ctAbaixoFck },
+    { key:"semjust", label:"Abaixo do fck sem justificativa", teste:ctJustPendente },
     { key:"recuperou", label:"Atingiu só aos 63d", teste:ctRecuperou63 },
     { key:"aguardando", label:"Aguardando", teste:ctAguardando },
     // v1.8: NF sem rastreabilidade ligada (nem pela NF nas betonadas, nem manual)
@@ -2596,7 +2599,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!c) return '<div class="ct-bt"><div class="ct-bt-id">'+cab+'<small>sem resultado no controle tecnológico</small></div>'
         + '<button type="button" class="btn small" data-ct-lancar="'+idx+'">Lançar no controle tecnológico</button></div>';
       return '<div class="ct-bt" data-ct-nf="'+escapeHtml(c._id)+'" title="Abrir a ficha desta NF"><div class="ct-bt-id">'+cab
-        + (ctAbaixoFck(c) ? ' <span class="ct-selo abaixo">abaixo do fck</span>' : (ctTemPendencia(c) ? ' <span class="ct-selo atraso">resultado atrasado</span>' : ''))
+        + (ctAbaixoFck(c) ? (ctJustificada(c) ? ' <span class="ct-selo atraso">abaixo do fck · justificado</span>' : ' <span class="ct-selo abaixo">abaixo do fck · sem justificativa</span>') : (ctTemPendencia(c) ? ' <span class="ct-selo atraso">resultado atrasado</span>' : ''))
         + '<small>fck '+escapeHtml(c.fck==null?"—":c.fck)+' MPa</small></div>'
         + '<div class="ct-idades">'+CT_IDADES.map(function(i){ return ctChipIdade(c, i); }).join("")+'</div></div>';
     }).join("");
@@ -2611,8 +2614,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var txt = vals.length ? vals.map(function(v){ var n = ctNumero(v); return n!=null ? String(n).replace(".", ",") : String(v); }).join(" / ")
       : (row[idade.dataCampo] ? fmtDateBR(row[idade.dataCampo]).slice(0,5) : "—");
     var tom = st==="concluido" ? "ok" : (st==="pendente" ? "atraso" : (st==="aguardando" ? "espera" : "nada"));
-    if(idade.key==="28" && ctAbaixoFck(row)) tom = "abaixo";
-    if(idade.key==="28" && ctRecuperou63(row)) tom = "recuperou";
+    // v1.16: vermelho na idade (28 ou 63) que ficou abaixo do fck; amarelo se já justificada
+    if(ctAbaixoEm(row).indexOf(idade.key)!==-1) tom = ctJustificada(row) ? "recuperou" : "abaixo";
     return '<span class="ct-idade '+tom+'" title="'+idade.key+' dias: '+escapeHtml(st)+'"><i>'+idade.key+'d</i><b>'+escapeHtml(txt)+'</b></span>';
   }
   function renderCtGrupos(el, visiveis){
@@ -2655,6 +2658,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       b.addEventListener("click", function(e){
         e.stopPropagation();
         var id = b.getAttribute("data-ct-concluir"), r = ctMap.get(id) || {};
+        if(r.concluida!==true){
+          var imp = ctImpedimentosConcluir(r);
+          if(imp.length){ alert("A NF "+(r.notaRemessa||"")+" ainda não pode ser concluída: "+imp.join("; ")+"."); return; }
+        }
         ctGravarLote([{ id:id, dados:{ concluida: r.concluida!==true } }], b);
       });
     });
@@ -2703,7 +2710,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               + opcoesVinculo.map(function(x){ return '<option value="'+escapeHtml(x.id)+'"'+(d.rastreabilidadeId===x.id?" selected":"")+'>'+escapeHtml(rastRotulo(x.r))+'</option>'; }).join("")
             + '</select></div>'
             + '<label class="ct-anterior"><input type="checkbox" data-ctf-chk="anteriorAoSistema"'+(d.anteriorAoSistema===true?" checked":"")+'> Concretagem anterior ao sistema — não há rastreabilidade no app para ligar</label></fieldset>')
-        + (novo ? '' : '<label class="ct-concluida-chk"><input type="checkbox" data-ctf-chk="concluida"'+(d.concluida===true?" checked":"")+'> <b>Ficha concluída</b> — não cobra mais resultados desta nota'
+        + (novo ? '' : '<label class="ct-concluida-chk"><input type="checkbox" data-ctf-chk="concluida"'+(d.concluida===true?" checked":"")+'> <b>Ficha concluída</b> — para de cobrar 7 e 14 dias (28 e 63 dias são obrigatórios)'
             + (d.concluida!==true && /CONCLU/i.test(d.observacao||"") ? ' <small>(a observação já diz “concluído”)</small>' : '')+'</label>')
         + '<fieldset><legend>Dados da nota</legend><div class="grid3">'+CT_CAMPOS_FICHA.map(campo).join("")+'</div></fieldset>'
         + '<fieldset><legend>Datas de rompimento</legend><div class="grid3">'
@@ -2714,6 +2721,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           + '</div><div class="grid2"><div class="field"><label>CPs conformes</label><input data-ctf="cpsConforme" inputmode="numeric" value="'+escapeHtml(d.cpsConforme==null?"":d.cpsConforme)+'"></div>'
           + '<div class="field"><label>Observação</label><input data-ctf="observacao" value="'+escapeHtml(d.observacao||"")+'" placeholder="ex.: CONCLUÍDO"></div></div>'
           + '<div class="ct-aviso-fck" data-ct-aviso hidden></div></fieldset>'
+        // v1.16: resultado abaixo do fck aos 28 ou 63 dias → causa e resolução obrigatórias
+        + '<fieldset class="ct-just" data-ct-just hidden><legend>Justificativa do resultado abaixo do fck (obrigatória)</legend>'
+          + '<div class="field"><label>Causa</label><textarea data-ctf="justCausa" rows="2" placeholder="ex.: cura deficiente nas primeiras 24 h; CP danificado no transporte…">'+escapeHtml((d.justificativaFck||{}).causa||"")+'</textarea></div>'
+          + '<div class="field"><label>Resolução tomada</label><textarea data-ctf="justResolucao" rows="2" placeholder="ex.: extração de testemunhos, laudo do projetista liberando a peça…">'+escapeHtml((d.justificativaFck||{}).resolucao||"")+'</textarea></div>'
+          + ((d.justificativaFck||{}).em ? '<div class="hint">Registrada por '+escapeHtml(d.justificativaFck.por||"")+' em '+escapeHtml(fmtDateTimeBR(d.justificativaFck.em))+'.</div>' : '')
+        + '</fieldset>'
         + (atual && atual.atualizadoEm ? '<div class="last-updated">Última atualização: '+escapeHtml(atual.atualizadoPor||"")+' às '+fmtDateTimeBR(atual.atualizadoEm)+'</div>' : '')
       + '</div>'
       + '<div class="modal-foot"><div></div><div style="display:flex;gap:10px;"><button class="btn" data-ct-fechar>Cancelar</button><button class="btn primary" data-ct-salvar>Salvar</button></div></div>'
@@ -2726,9 +2739,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var tmp = { fck: ler("fck"), r28: ler("r28"), r28b: ler("r28b") };
       var av = ov.querySelector("[data-ct-aviso]");
       tmp.r63 = ler("r63"); tmp.r63b = ler("r63b");
-      if(ctAbaixoFck(tmp)){ av.hidden = false; av.className = "ct-aviso-fck"; av.textContent = "⚠ Resultado de 28 dias ("+String(ctMelhor28(tmp)).replace(".", ",")+" MPa) abaixo do fck ("+tmp.fck+" MPa). Registre uma não conformidade e avise o engenheiro."; }
-      else if(ctRecuperou63(tmp)){ av.hidden = false; av.className = "ct-aviso-fck leve"; av.textContent = "Abaixo do fck aos 28 dias, mas atingiu aos 63 dias ("+String(ctMelhor63(tmp)).replace(".", ",")+" MPa)."; }
-      else av.hidden = true;
+      var ab = ctAbaixoEm(tmp);
+      ov.querySelector("[data-ct-just]").hidden = !ab.length;
+      if(ab.length){
+        av.hidden = false; av.className = "ct-aviso-fck";
+        av.textContent = "⚠ Abaixo do fck ("+tmp.fck+" MPa) aos "+ab.map(function(i){ return i+" dias ("+String(i==="28" ? ctMelhor28(tmp) : ctMelhor63(tmp)).replace(".", ",")+" MPa)"; }).join(" e ")
+          +". Informe abaixo a causa e a resolução tomada"+(ab[0]==="28" && ab.length===1 ? " — mesmo atingindo aos 63 dias" : "")+".";
+      } else av.hidden = true;
     };
     ov.addEventListener("input", atualizarAviso); atualizarAviso();
     var sujo = false; ov.addEventListener("input", function(){ sujo = true; });
@@ -2768,8 +2785,20 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(!novo) dados.rastreabilidadeId = ler("rastreabilidadeId") || null;
     var chkAnt = ov.querySelector('[data-ctf-chk="anteriorAoSistema"]');
     if(chkAnt) dados.anteriorAoSistema = chkAnt.checked;
+    // v1.16: justificativa (causa + resolução) do resultado abaixo do fck
+    var jc = ler("justCausa")||"", jr = ler("justResolucao")||"", jAnt = d.justificativaFck || {};
+    if(jc || jr || jAnt.causa || jAnt.resolucao){
+      dados.justificativaFck = { causa:jc, resolucao:jr,
+        em: (jc===(jAnt.causa||"") && jr===(jAnt.resolucao||"") && jAnt.em) ? jAnt.em : nowISO(),
+        por: (jc===(jAnt.causa||"") && jr===(jAnt.resolucao||"") && jAnt.por) ? jAnt.por : (currentUserEmail||"") };
+    }
     var chkConc = ov.querySelector('[data-ctf-chk="concluida"]');
     if(chkConc) dados.concluida = chkConc.checked;
+    // v1.16: só conclui com 28 e 63 dias lançados e, se abaixo do fck, com a justificativa
+    if(dados.concluida===true && d.concluida!==true){
+      var imp = ctImpedimentosConcluir(Object.assign({}, d, dados));
+      if(imp.length){ alert("Ainda não dá para marcar a nota como concluída: "+imp.join("; ")+"."); return; }
+    }
     dados.notaRemessa = novo ? nota : d.notaRemessa;
     dados.atualizadoEm = nowISO(); dados.atualizadoPor = currentUserEmail||""; dados.editadoNoSite = true;
     if(novo){ dados.criadoEm = nowISO(); dados.origem = "site"; }
