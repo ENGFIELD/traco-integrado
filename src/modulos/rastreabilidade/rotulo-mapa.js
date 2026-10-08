@@ -103,17 +103,21 @@ export function rotuloArea(pontos, W, H, textos) {
   // a caixa cabe no espaço livre em volta do centro visual (no mínimo, no círculo livre)
   const f = folgas(c.x, c.y, pol);
   const cabe = Math.max((2 * c.d) / Math.hypot(larg, alt), Math.min((2 * f.meiaLarg) / larg, (2 * f.meiaAlt) / alt) * 0.9);
-  const min = W * 0.009, max = W * 0.022;
-  const fs = Math.max(min, Math.min(max, cabe * 0.95));
+  // v1.17: menor e discreto — no máximo ~40% do espaço livre e 1,1% da largura
+  // da planta (antes 2,2%), para não cobrir o nome das vigas e as cotas.
+  const min = W * 0.0055, max = W * 0.011;
+  const fs = Math.max(min, Math.min(max, cabe * 0.4));
   return { x: c.x, y: c.y, fs, fs2: fs * 0.8, w: larg * fs, h: alt * fs };
 }
 
+// fundo do rótulo translúcido: a planta continua aparecendo por baixo
+export const OPAC_FUNDO = 0.72;
 const SVGNS = "http://www.w3.org/2000/svg";
 /** Desenha o rótulo no SVG (coordenadas da planta). r = rotuloArea(...) */
 export function rotuloSvg(svg, r, textos, cor) {
   const mk = (nome, at) => { const e = document.createElementNS(SVGNS, nome); for (const k in at) e.setAttribute(k, at[k]); return e; };
   const nf = textos.nf || "";
-  svg.appendChild(mk("rect", { x: r.x - r.w / 2, y: r.y - r.h / 2, width: r.w, height: r.h, rx: r.fs * 0.25, fill: "#fff", "fill-opacity": 0.9 }));
+  svg.appendChild(mk("rect", { x: r.x - r.w / 2, y: r.y - r.h / 2, width: r.w, height: r.h, rx: r.fs * 0.25, fill: "#fff", "fill-opacity": OPAC_FUNDO }));
   const t = mk("text", { x: r.x, y: nf ? r.y - r.fs * 0.55 : r.y, "text-anchor": "middle", "dominant-baseline": "central",
     "font-size": r.fs, "font-weight": 700, "font-family": "Arial, Helvetica, sans-serif", fill: cor });
   t.textContent = textos.bt;
@@ -130,7 +134,7 @@ export function rotuloCanvas(ctx, r, textos, cor, ox, oy, k) {
   const nf = textos.nf || "";
   const x = ox + r.x * k, y = oy + r.y * k, fs = r.fs * k, fs2 = r.fs2 * k, w = r.w * k, h = r.h * k;
   ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "rgba(255,255,255," + OPAC_FUNDO + ")";
   const rr = fs * 0.25;
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(x - w / 2, y - h / 2, w, h, rr); else ctx.rect(x - w / 2, y - h / 2, w, h);

@@ -68,3 +68,7 @@ html.edmapa-aberto, html.edmapa-aberto body { overflow: hidden; }
 /* v1.15: lupa ao segurar o dedo no modo "Nova área" */
 .edmapa-lupa { position: fixed; z-index: 3; width: 150px; height: 150px; border-radius: 50%; border: 3px solid #fff;
   box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.45); pointer-events: none; background: #fff; }
+
+/* v1.17: trecho redesenhado em alta resolução por cima da planta (zoom nítido) */
+.edmapa-mundo canvas.edmapa-detalhe { inset: auto; width: auto; height: auto; background: transparent; pointer-events: none; }
+.edmapa-mundo canvas.edmapa-detalhe[hidden] { display: none; }

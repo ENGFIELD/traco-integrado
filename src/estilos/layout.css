@@ -640,3 +640,4 @@ body.somente-leitura .fvs-semana-acao, body.somente-leitura .et-sel { display: n
 body.somente-leitura [data-assinar], body.somente-leitura [data-cad-assin], body.somente-leitura [data-nova-rev], body.somente-leitura #btn-minha-assinatura { display: none !important; }
 .ficha-travada .modal-body #open-linked-rast { pointer-events: auto; }
 .ct-just { border-color: var(--bad); } .ct-just textarea { width: 100%; }
+.ct-linha-obs { display: block; margin-top: 2px; color: var(--text); font-size: 12.5px; }

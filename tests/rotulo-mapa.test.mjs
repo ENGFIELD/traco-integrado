@@ -19,11 +19,11 @@ ok(dentro(c2.x, c2.y, L) && c2.d >= 14, `L → centro visual dentro da área, ${
 // tamanho: limitado pela largura da planta
 const W = 4000, H = 2800;
 const grande = rotuloArea([[0.05, 0.05], [0.95, 0.05], [0.95, 0.95], [0.05, 0.95]], W, H, { bt: "BT 1", nf: "NF: 204254" });
-ok(Math.abs(grande.fs - W * 0.022) < 0.01, "área enorme → fonte no máximo (" + grande.fs.toFixed(0) + " px)");
+ok(Math.abs(grande.fs - W * 0.011) < 0.01, "área enorme → fonte no máximo (" + grande.fs.toFixed(0) + " px)");
 const pequena = rotuloArea([[0.5, 0.5], [0.51, 0.5], [0.51, 0.51], [0.5, 0.51]], W, H, { bt: "BT 1", nf: "" });
-ok(Math.abs(pequena.fs - W * 0.009) < 0.01, "área minúscula → fonte no mínimo (" + pequena.fs.toFixed(0) + " px)");
+ok(Math.abs(pequena.fs - W * 0.0055) < 0.01, "área minúscula → fonte no mínimo (" + pequena.fs.toFixed(0) + " px)");
 const media2 = rotuloArea([[0.4, 0.4], [0.5, 0.4], [0.5, 0.46], [0.4, 0.46]], W, H, { bt: "BT 2", nf: "NF: 1234" });
-ok(media2.fs > W * 0.009 && media2.fs < W * 0.022 && media2.w / 2 < 200 && media2.h / 2 < 84, "área média → caixa cabe na área (fonte " + media2.fs.toFixed(0) + " px)");
+ok(media2.fs > W * 0.0055 && media2.fs < W * 0.011 && media2.w / 2 < 200 && media2.h / 2 < 84, "área média → caixa cabe na área (fonte " + media2.fs.toFixed(0) + " px)");
 ok(Math.abs(media2.x - 1800) < 5 && Math.abs(media2.y - 1204) < 5, "área média → rótulo no meio");
 
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
