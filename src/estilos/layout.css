@@ -60,7 +60,7 @@ svg.ti-i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-w
 }
 .ti-side.aberto { transform: none; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
 .ti-side-fundo { position: fixed; inset: 0; z-index: 110; background: rgba(10,12,12,.45); }
-.ti-side-logo { padding: 2px 8px 14px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.ti-side-logo { padding: 2px 8px 14px; text-align: center; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
 .ti-side-logo img { height: 42px; width: auto; }
 .ti-prod { font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .3px; margin-top: 8px; color: var(--accent-strong); }
 .ti-side-novo { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
