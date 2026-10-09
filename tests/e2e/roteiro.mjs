@@ -49,6 +49,9 @@ await db.doc("controleTecnologico/nf_05538").set({ notaRemessa: "05538", dataCon
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 await db.doc("assinaturas/" + uidSuellen).set({ nome: "Suellen Alves", papel: "engenheiro", crea: "CREA-RJ 123", email: "suellen.alves@sig.eng.br", imagem: PNG });
 await db.doc("assinaturas/" + uidMatheus).set({ nome: "Matheus Alves", papel: "estagiario", email: "matheus.alves@sig.eng.br", imagem: PNG });
+// v1.32: 7 dias vencido e sem resultado (concretagem há 9 dias) tem que aparecer como pendente
+const diasAtras = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+await db.doc("controleTecnologico/nf_07001").set({ notaRemessa: "07001", dataConcretagem: diasAtras(9), data7: diasAtras(2), data28: diasAtras(-19), data63: diasAtras(-54), fck: 40, local: "Laje teste 7 dias", anteriorAoSistema: false, atualizadoEm: T });
 await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "Matheus Alves", status: "aberta", criadoPor: "suellen.alves@sig.eng.br", criadoEm: T, atualizadoEm: T });
 
 // ---------- navegador ----------
@@ -106,6 +109,7 @@ try {
 
   // 2c) controle tecnológico: abrir a ficha da nota e lançar o resultado de 28 dias
   await irPara(m, "btn-view-ct");
+  ok(await m.$('[data-ct-abrir="nf_07001"]') !== null, "CT: resultado de 7 dias vencido aparece como pendente");
   await m.evaluate(() => { const b = document.querySelector('[data-ct-sit="todos"]'); if (b) b.click(); }); await m.waitForTimeout(400); // ver todas as notas
   await m.click('[data-ct-abrir="nf_05538"]'); await m.waitForSelector('[data-ctf="r28"]', { timeout: 8000 });
   ok((await m.$$eval(".ct-res-grid label", (l) => l.map((x) => x.textContent).join("|"))) === "7 dias|7' dias|28 dias|28' dias|63 dias|63' dias", "ficha do CT só com 7, 28 e 63 dias");
@@ -191,6 +195,19 @@ try {
   await m2.click('.row[data-fvs="f1"] [data-open-fvs="f1"]'); await m2.waitForSelector('#modal [data-assinar-papel="tecnico"]', { timeout: 8000 });
   await m2.click('#modal [data-assinar-papel="tecnico"]');
   ok(await esperar(async () => ((await db.doc("fvs/f1").get()).data().assinaturas || []).length === 2), "estagiário assina a ficha travada (2 assinaturas)");
+  // 5c) estagiário assina em lote (inspeção/coleta) — antes o botão ficava desligado
+  await m2.click("#modal-close").catch(() => {}); await m2.waitForTimeout(300);
+  await irPara(m2, "btn-view-assinar");
+  await m2.selectOption("#eng-periodo", "todas"); await m2.waitForTimeout(300);
+  ok(await m2.$('[data-eng-sel="fvs|f3"]') !== null && await m2.$('[data-eng-sel="rastreabilidade|r1"], [data-eng-sel="rast|r1"]') !== null && await m2.$('[data-eng-sel="fvs|f1"]') === null,
+    "Assinar em lote: lista o que falta a assinatura do estagiário (e não a que ele já assinou)");
+  await m2.click("[data-eng-sel-todas]"); await m2.waitForTimeout(200);
+  await m2.click("[data-eng-lote]");
+  const lote = await esperar(async () => {
+    const f3 = (await db.doc("fvs/f3").get()).data(), r1 = (await db.doc("rastreabilidade/r1").get()).data();
+    return (f3.assinaturas || []).some((a) => a.papel === "estagiario") && (r1.assinaturas || []).some((a) => a.papel === "estagiario") && f3.travada !== true;
+  });
+  ok(lote, "estagiário assinou em lote a FVS e a rastreabilidade (sem travar a FVS)");
   await m2.context().close();
 
   // 6) Jessica só visualiza

@@ -781,3 +781,4 @@ body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
 .eq-login { display: flex; gap: 8px; align-items: center; font-size: 13.5px; }
 @media (max-width: 640px) { .eq-item { flex-wrap: wrap; } .eq-item .hist-tx { flex-basis: 100%; } .eq-item select { flex: 1 1 auto; max-width: none; } }
 .eq-nova .hint:empty { display: none; }
+body[data-perfil="qualidade"] .so-assinar { display: none !important; }

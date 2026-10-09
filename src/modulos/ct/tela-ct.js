@@ -62,8 +62,8 @@ function ctValorPreenchido(v){ return v!=null && String(v).trim()!==""; }
 // (campo concluida:true) — encerra a cobrança de todas as idades sem resultado.
 /* v1.18 (regras do dono, ver modulos/ct/regras-ct.js):
    - anterior ao sistema (pela data da 1ª rastreabilidade): fora de tudo;
-   - só 28 e 63 dias são obrigatórios — 7 nunca vira pendência (v1.32: 3 e
-     14 dias não contam mais no app);
+   - v1.32: o app considera 7, 28 e 63 dias — resultado atrasado em qualquer
+     uma delas é pendência; 3 e 14 dias não contam mais no app;
    - concluída (no app, "Concluído" na planilha ou 28 e 63 ok) e "você
      decide" (justificativa) não cobram resultado. */
 var ctInicioCache = null;
@@ -89,7 +89,9 @@ function ctStatusIdade(row, idade){
   var sit = ctSituacao(row);
   if(sit==="anterior" || sit==="concluida" || sit==="decidir") return "dispensado";
   if(dataPrev > todayISO()) return "aguardando";
-  if(idade.key!=="28" && idade.key!=="63") return "dispensado";
+  // v1.32 (pedido do dono): todo resultado de 7, 28 ou 63 dias que já devia
+  // ter saído e não saiu é pendência (antes só 28 e 63 eram cobrados). Só não
+  // cobra nota anterior ao sistema, concluída ou esperando a sua decisão.
   return "pendente";
 }
 function ctIdadesPendentes(row){
