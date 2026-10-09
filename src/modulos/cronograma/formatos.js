@@ -105,6 +105,21 @@ export function lerProjectXml(xml) {
   return out.length > 1 ? out : null;
 }
 
+/**
+ * v1.35: data de referência do cronograma (até quando o % concluído foi
+ * atualizado): "DATA: 31/08/2026" na impressão (PDF) ou <StatusDate> do XML.
+ * Devolve "aaaa-mm-dd" ou "".
+ */
+export function dataStatusDoTexto(texto) {
+  const s = String(texto || "");
+  let m = /<StatusDate>(\d{4}-\d{2}-\d{2})/.exec(s);
+  if (m) return m[1];
+  m = /\b(?:DATA(?: DE STATUS| DO STATUS)?|STATUS|ATUALIZADO EM|POSI[CÇ][AÃ]O EM)\s*:?\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i.exec(s);
+  if (!m) return "";
+  let a = Number(m[3]); if (a < 100) a += 2000;
+  return a + "-" + String(m[2]).padStart(2, "0") + "-" + String(m[1]).padStart(2, "0");
+}
+
 // ---------- PDF (texto posicionado na página) ----------
 /**
  * itens: [{ str, x, y, w, pagina }] do pdf.js (y cresce para CIMA, como no PDF).
@@ -166,7 +181,10 @@ export function tabelaDeItensPdf(itens) {
   for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] >= 3) passo = Math.min(passo, xs[i] - xs[i - 1]);
   if (!isFinite(passo)) passo = 10;
   const x0 = xs[0];
-  const tabela = [cab.map((c) => ({ nome: "Nome", pct: "% concluída", pred: "Predecessoras", ini: "Início", dur: "Duração", fim: "Término", nivel: "Nível" }[c.papel] || ""))];
+  // v1.35: a coluna "Nº"/"Id" do MS Project vai junto — é o número que as
+  // predecessoras usam ("29;31"). Na impressão faltam as linhas recolhidas
+  // (16, 20, 21…), então renumerar pela ordem ligava as atividades erradas.
+  const tabela = [cab.map((c) => ({ id: "Id", nome: "Nome", pct: "% concluída", pred: "Predecessoras", ini: "Início", dur: "Duração", fim: "Término", nivel: "Nível" }[c.papel] || ""))];
   dados.forEach((d) => {
     const nivel = d.xNome == null ? 0 : Math.round((d.xNome - x0) / passo);
     tabela.push(d.cel.map((c, k) => (k === iNome ? " ".repeat(3 * nivel) + c : c)));

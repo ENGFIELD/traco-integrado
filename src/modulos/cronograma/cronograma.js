@@ -13,7 +13,7 @@
 import { lerCronograma, calcularFolgas, atividadesNoPeriodo, pctPrevisto, idxUtil, isoDeUtil } from "./cpm.js";
 import { pintarIcones } from "../../ui/icones.js";
 import { ETAPAS, ETAPA_POR_KEY, NIVEIS, classificar, resumoEtapas, chaveAtividade } from "./etapas.js";
-import { normalizarTabela, separadorCsv, lerProjectXml, tabelaDeItensPdf } from "./formatos.js";
+import { normalizarTabela, separadorCsv, lerProjectXml, tabelaDeItensPdf, dataStatusDoTexto } from "./formatos.js";
 import { garantirPdf } from "../../libs.js";
 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -200,12 +200,16 @@ export function renderViewCronograma(container) {
 }
 
 function cabecalho() {
-  const info = doc ? `Versão de ${esc(doc.arquivo || "")} · enviada ${esc(String(doc.importadoEm || "").slice(0, 10).split("-").reverse().join("/"))} por ${esc(doc.importadoPor || "")}` : "Nenhum cronograma enviado ainda.";
+  const info = doc ? `Versão de ${esc(doc.arquivo || "")} · enviada ${esc(String(doc.importadoEm || "").slice(0, 10).split("-").reverse().join("/"))} por ${esc(doc.importadoPor || "")}`
+    + (doc.dataStatus ? ` · <b>% concluído do cronograma de ${esc(ctx.fmtDateBR(doc.dataStatus))}</b>` : "") : "Nenhum cronograma enviado ainda.";
+  // v1.35: % antigo faz atividade parecer atrasada só por falta de atualização
+  const diasStatus = doc && doc.dataStatus ? Math.round((Date.parse(ctx.todayISO()) - Date.parse(doc.dataStatus)) / 86400000) : 0;
+  const avisoStatus = diasStatus > 14 ? `<div class="banner">O % concluído deste cronograma é de <b>${esc(ctx.fmtDateBR(doc.dataStatus))}</b> (${diasStatus} dias atrás). Atividades podem aparecer como atrasadas só porque o % não foi atualizado desde então — atualize o % pelo app (toque no % da atividade) ou envie o cronograma mais recente.</div>` : "";
   return `<div class="pav-header"><h2>Cronograma</h2></div>
     <p class="view-desc">Cronograma da obra (MS Project). Toque no % de uma atividade para atualizar o avanço pelo app — o Início e as metas usam esse valor. Enviar um cronograma novo recomeça do % que vier no arquivo.</p>
     <div class="ct-acoes"><button class="btn primary" type="button" data-cr-enviar><svg class="ti-i" data-i="file"></svg>${doc ? "Enviar cronograma atualizado…" : "Enviar cronograma…"}</button>
       <input type="file" data-cr-arquivo accept=".xlsx,.xls,.xlsm,.ods,.csv,.xml,.pdf,.mpp" hidden>
-      <div class="ct-acoes-info"><span>${info}</span><div class="ct-import-msg" data-cr-msg></div></div></div>`;
+      <div class="ct-acoes-info"><span>${info}</span><div class="ct-import-msg" data-cr-msg></div></div></div>${avisoStatus}`;
 }
 function ligarCabecalho(container) {
   pintarIcones(container);
@@ -336,6 +340,7 @@ async function lerArquivoCronograma(arquivo) {
     }
     const t = tabelaDeItensPdf(itens);
     if (!t) throw new Error("não achei a tabela do cronograma no PDF (precisa ter as colunas nome da tarefa, início e término). Se o PDF for uma imagem escaneada, envie em Excel ou XML");
+    t.dataStatus = dataStatusDoTexto(itens.map((i) => i.str).join(" "));
     return t;
   }
   await ctx.garantirLibs();
@@ -343,7 +348,7 @@ async function lerArquivoCronograma(arquivo) {
   if (ext === "xml") {
     const texto = await arquivo.text();
     const t = lerProjectXml(texto);
-    if (t) return t;
+    if (t) { t.dataStatus = dataStatusDoTexto(texto); return t; }
     wb = window.XLSX.read(texto, { type: "string" }); // XML de planilha (Excel 2003)
   } else if (ext === "csv") {
     const texto = await arquivo.text();
@@ -370,6 +375,7 @@ async function importar(arquivo, container) {
     const dados = {
       arquivo: arquivo.name, importadoEm: ctx.nowISO(), importadoPor: ctx.usuario(),
       totalTarefas: teste.tarefas.length,
+      dataStatus: linhasPlan.dataStatus || "", // v1.35: até quando o % do arquivo foi atualizado
       linhas: linhasPlan.map((r) => { const o = {}; COLS.forEach((k, i) => { o[k] = r && r[i] != null ? String(r[i]) : ""; }); return o; }),
     };
     const tamanho = JSON.stringify(dados).length;
@@ -384,7 +390,8 @@ async function importar(arquivo, container) {
     await Promise.all([ctx.col.doc("atual").set(dados), ctx.col.doc(versao).set(dados),
       ctx.col.doc("progresso").set({ base: dados.importadoEm, itens: {} })]);
     msg.className = "ct-import-msg ok";
-    msg.textContent = `Cronograma atualizado: ${teste.tarefas.length} atividades, ${teste.tarefas.filter(critica).length} no caminho crítico. A versão anterior foi guardada no histórico.`;
+    msg.textContent = `Cronograma atualizado: ${teste.tarefas.length} atividades, ${teste.tarefas.filter(critica).length} no caminho crítico`
+      + (dados.dataStatus ? `, % concluído de ${ctx.fmtDateBR(dados.dataStatus)}` : "") + ". A versão anterior foi guardada no histórico.";
   } catch (ex) {
     console.error(ex);
     msg.className = "ct-import-msg err";
