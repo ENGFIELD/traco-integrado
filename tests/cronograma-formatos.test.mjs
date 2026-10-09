@@ -1,5 +1,5 @@
 // Cronograma em vários formatos: node tests/cronograma-formatos.test.mjs
-import { normalizarTabela, separadorCsv, lerProjectXml, tabelaDeItensPdf } from "../src/modulos/cronograma/formatos.js";
+import { normalizarTabela, separadorCsv, lerProjectXml, tabelaDeItensPdf, dataStatusDoTexto } from "../src/modulos/cronograma/formatos.js";
 import { lerCronograma } from "../src/modulos/cronograma/cpm.js";
 
 let falhas = 0;
@@ -50,6 +50,18 @@ const cr4 = lerCronograma(t4);
 ok(cr4.porId.get(3).nome === "C" && cr4.porId.get(7).nome === "G" && cr4.porId.get(7).pred[0].id === 3, "IDs preservados (linha vazia e salto 3 → 7)");
 const t5 = normalizarTabela([["Nome", "Início", "Término"], ["A", "01/06/26", "05/06/26"], ["", "", ""], ["C", "08/06/26", "12/06/26"]]);
 ok(lerCronograma(t5).porId.get(3).nome === "C", "sem coluna Id: linha vazia mantém a posição");
+
+// v1.35: PDF impresso com linhas recolhidas — a coluna "Nº" do MS Project manda (as predecessoras usam esse número)
+const pdfN = [
+  it("Nº", 30, 760), it("Atividade", 50, 760), it("% concluída", 260, 760), it("Predecessoras", 310, 760), it("Início", 380, 760), it("Duração", 440, 760), it("Término", 490, 760),
+  it("1", 30, 740), it("OBRA", 50, 740), it("6%", 260, 740), it("Seg 01/06/26", 380, 740), it("300 d", 440, 740), it("Sex 30/07/27", 490, 740),
+  it("20", 30, 728), it("Escavação", 60, 728), it("100%", 260, 728), it("Seg 01/06/26", 380, 728), it("5 d", 440, 728), it("Sex 05/06/26", 490, 728),
+  it("31", 30, 716), it("Contenção", 60, 716), it("0%", 260, 716), it("20", 310, 716), it("Seg 08/06/26", 380, 716), it("5 d", 440, 716), it("Sex 12/06/26", 490, 716),
+];
+const crN = lerCronograma(tabelaDeItensPdf(pdfN));
+ok(crN.porId.get(20) && crN.porId.get(20).nome === "Escavação" && crN.porId.get(31).pred[0].id === 20 && crN.porId.get(crN.porId.get(31).pred[0].id).nome === "Escavação",
+  "PDF com Nº saltado (1, 20, 31): predecessora “20” liga na atividade certa");
+ok(dataStatusDoTexto("CRONOGRAMA REPLANEJADO DATA: 31/08/2026") === "2026-08-31" && dataStatusDoTexto("<StatusDate>2026-09-30T08:00:00</StatusDate>") === "2026-09-30" && dataStatusDoTexto("sem data") === "", "data de referência do cronograma (PDF e XML)");
 
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);
