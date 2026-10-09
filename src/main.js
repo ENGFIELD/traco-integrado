@@ -611,6 +611,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(viewLix && !viewLix.hidden) renderViewLixeira();
     var viewEng = document.getElementById("view-engenharia");
     if(viewEng && !viewEng.hidden) renderViewEngenharia();
+    var viewAssinar = document.getElementById("view-assinar");
+    if(viewAssinar && !viewAssinar.hidden) renderViewAssinar();
     var viewPlantas = document.getElementById("view-plantas");
     if(viewPlantas && !viewPlantas.hidden) renderViewPlantas();
     var viewAco = document.getElementById("view-aco");
@@ -653,25 +655,85 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function verEngenharia(){ return perfilAtual==="engenharia" || perfilAtual==="admin"; }
 
   var filtrosEng = { tipo:"todos", periodo:"30", sel:{} };
+  // v1.32: quem assina em lote — engenheiro(a) assina como engenharia;
+  // estagiário(a)/técnico(a) assina no campo de inspeção (FVS) / coleta (rastreabilidade)
+  function papelLote(){ var p = minhaAssinatura && minhaAssinatura.papel; return p==="engenheiro" ? "engenheiro" : (p==="tecnico" || p==="estagiario") ? p : ""; }
   function engPendentesAssinatura(){
     var desde = filtrosEng.periodo==="todas" ? "" : ctSomarDias(todayISO(), -Number(filtrosEng.periodo));
-    var out = [];
-    var semEng = function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel==="engenheiro"; }); };
+    var out = [], insp = papelLote()==="tecnico" || papelLote()==="estagiario";
+    var semEng = insp
+      ? function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel==="tecnico" || a.papel==="estagiario"; }); }
+      : function(d){ return !(d.assinaturas||[]).some(function(a){ return a.papel==="engenheiro"; }); };
     if(filtrosEng.tipo!=="rast") fvsMap.forEach(function(f, id){
       var dt = f.dataConcretagem||f.dataAbertura||"";
-      if(f.travada || !semEng(f) || (desde && dt < desde)) return;
+      if((f.travada && !insp) || !semEng(f) || (desde && dt < desde)) return;
       var st = fvsStatus(f);
       out.push({ tipo:"fvs", id:id, d:f, data:dt, pronta:!!f.fechado, titulo:(f.codigo||"FVS")+" nº "+(f.numero||"s/ nº"),
-        sub:(fvsPavimentosList(f).join(", ")||f.local||"")+" · "+st.label, inspecao:!!assinaturaDoPapel(f, "tecnico") });
+        sub:(fvsPavimentosList(f).join(", ")||f.local||"")+" · "+st.label, inspecao:!!assinaturaDoPapel(f, insp ? "engenheiro" : "tecnico") });
     });
     if(filtrosEng.tipo!=="fvs") rastMap.forEach(function(r, id){
       var dt = r.data||"";
       if(!semEng(r) || (desde && dt < desde)) return;
       out.push({ tipo:"rast", id:id, d:r, data:dt, pronta:!!r.fechado, titulo:"Rastreabilidade "+fmtDateBR(dt),
-        sub:(r.blocoPav||(r.pavimentos||[])[0]||"")+" · "+(r.linhas||[]).length+" BT · "+rastStatus(r).label, inspecao:!!assinaturaDoPapel(r, "tecnico") });
+        sub:(r.blocoPav||(r.pavimentos||[])[0]||"")+" · "+(r.linhas||[]).length+" BT · "+rastStatus(r).label, inspecao:!!assinaturaDoPapel(r, insp ? "engenheiro" : "tecnico") });
     });
     out.sort(function(a,b){ return (b.pronta-a.pronta) || (b.data||"").localeCompare(a.data||""); });
     return out;
+  }
+  function avisoAssinaturaLote(){
+    if(!minhaAssinatura) return '<div class="banner">Cadastre a sua assinatura para assinar as fichas. <button type="button" class="btn small" data-cad-assin>Cadastrar assinatura</button></div>';
+    var p = papelLote();
+    if(!p) return '<div class="banner">Seu cadastro de assinatura está como '+escapeHtml(PAPEIS_ASSIN[minhaAssinatura.papel]||minhaAssinatura.papel)+', que não assina fichas. Troque a função em “Minha assinatura”. <button type="button" class="btn small" data-cad-assin>Minha assinatura</button></div>';
+    if(p!=="engenheiro") return '<div class="banner">Você assina como <b>'+escapeHtml(PAPEIS_ASSIN[p]||p)+'</b>: na FVS vai no campo “Inspecionado por” e na rastreabilidade em “Responsável pela coleta”. A lista mostra as fichas que ainda não têm essa assinatura. <button type="button" class="btn small" data-cad-assin>Minha assinatura</button></div>';
+    return "";
+  }
+  // v1.32: fila "Para assinar" (Painel da engenharia e tela "Assinar em lote" dos estagiários)
+  function filaAssinaturaHtml(pend, todasPend){
+    var p = papelLote(), insp = p && p!=="engenheiro";
+    var nSel = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; }).length;
+    var chipT = function(k, rot, n){ return '<button type="button" class="chip" data-eng-tipo="'+k+'" aria-pressed="'+(filtrosEng.tipo===k)+'">'+rot+' <span class="n">'+n+'</span></button>'; };
+    var lista = pend.length ? pend.map(function(x){
+      var k = x.tipo+"|"+x.id;
+      return '<div class="eng-item'+(x.pronta?"":" rascunho")+'"><label class="eng-chk"><input type="checkbox" data-eng-sel="'+escapeHtml(k)+'"'+(filtrosEng.sel[k]?" checked":"")+'></label>'
+        + '<div class="eng-item-tx"><span class="eng-tipo '+x.tipo+'">'+(x.tipo==="fvs"?"FVS":"Rastr.")+'</span><b>'+escapeHtml(x.titulo)+'</b>'
+        + '<small>'+escapeHtml(x.sub)+(x.data ? ' · '+escapeHtml(fmtDateBR(x.data)) : '')+'</small>'
+        + '<small class="'+(x.pronta?"ok":"warn")+'">'+(x.pronta ? "pronta para assinar" : "ainda em preenchimento")
+          +(insp ? (x.inspecao ? " · engenharia já assinou" : "") : (x.inspecao ? " · inspeção já assinou" : " · falta a inspeção"))+'</small></div>'
+        + '<div class="eng-item-ac"><button type="button" class="btn small" data-eng-abrir="'+escapeHtml(k)+'">Abrir</button>'
+        + '<button type="button" class="btn small primary" data-eng-assinar="'+escapeHtml(k)+'"'+(p ? "" : " disabled")+'>Assinar</button></div></div>';
+    }).join("") : '<div class="dash-vazio">Nada pendente de assinatura neste filtro. 👍</div>';
+    return '<div class="dash-card" id="eng-assin"><div class="dash-card-h"><h3>Para assinar'+(insp ? " — inspeção / coleta" : "")+'</h3><span class="hoje-cont">'+pend.length+'</span></div>'
+        + '<div class="eng-filtros"><div class="chips">'+chipT("todos", "Todas", todasPend.length)+chipT("fvs", "FVS", todasPend.filter(function(x){ return x.tipo==="fvs"; }).length)+chipT("rast", "Rastreabilidades", todasPend.filter(function(x){ return x.tipo==="rast"; }).length)+'</div>'
+          + '<select id="eng-periodo" aria-label="Período"><option value="30"'+(filtrosEng.periodo==="30"?" selected":"")+'>Últimos 30 dias</option><option value="90"'+(filtrosEng.periodo==="90"?" selected":"")+'>Últimos 90 dias</option><option value="todas"'+(filtrosEng.periodo==="todas"?" selected":"")+'>Todas</option></select></div>'
+        + '<div class="eng-lote"><button type="button" class="btn small" data-eng-sel-prontas>Selecionar as prontas</button><button type="button" class="btn small" data-eng-sel-todas>Selecionar todas</button><button type="button" class="btn small" data-eng-limpar>Limpar seleção</button>'
+          + '<button type="button" class="btn primary" data-eng-lote'+(nSel && p ? "" : " disabled")+'>✍ Assinar selecionadas ('+nSel+')</button></div>'
+        + '<div class="eng-lista">'+lista+'</div></div>';
+  }
+  function ligarFilaAssinatura(c, pend, re){
+    c.querySelectorAll("[data-cad-assin]").forEach(function(b){ b.addEventListener("click", abrirMinhaAssinatura); });
+    c.querySelectorAll("[data-eng-tipo]").forEach(function(b){ b.addEventListener("click", function(){ filtrosEng.tipo = b.getAttribute("data-eng-tipo"); re(); }); });
+    c.querySelector("#eng-periodo").addEventListener("change", function(e){ filtrosEng.periodo = e.target.value; re(); });
+    c.querySelectorAll("[data-eng-sel]").forEach(function(ch){ ch.addEventListener("change", function(){ filtrosEng.sel[ch.getAttribute("data-eng-sel")] = ch.checked; re(); }); });
+    c.querySelector("[data-eng-sel-prontas]").addEventListener("click", function(){ pend.forEach(function(x){ if(x.pronta) filtrosEng.sel[x.tipo+"|"+x.id] = true; }); re(); });
+    c.querySelector("[data-eng-sel-todas]").addEventListener("click", function(){ pend.forEach(function(x){ filtrosEng.sel[x.tipo+"|"+x.id] = true; }); re(); });
+    c.querySelector("[data-eng-limpar]").addEventListener("click", function(){ filtrosEng.sel = {}; re(); });
+    c.querySelectorAll("[data-eng-abrir]").forEach(function(b){ b.addEventListener("click", function(){ var p = b.getAttribute("data-eng-abrir").split("|"); openModal(p[0], p[1]); }); });
+    c.querySelectorAll("[data-eng-assinar]").forEach(function(b){ b.addEventListener("click", function(){ engAssinarLote([b.getAttribute("data-eng-assinar")], b, re); }); });
+    c.querySelector("[data-eng-lote]").addEventListener("click", function(ev){
+      var ks = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; });
+      engAssinarLote(ks, ev.currentTarget, re);
+    });
+  }
+  // tela "Assinar em lote" (estagiários e administrador)
+  function renderViewAssinar(){
+    var c = document.getElementById("view-assinar"); if(!c) return;
+    var pend = engPendentesAssinatura();
+    var todasPend = (function(){ var s = filtrosEng.tipo; filtrosEng.tipo = "todos"; var x = engPendentesAssinatura(); filtrosEng.tipo = s; return x; })();
+    c.innerHTML = '<div class="pav-header"><h2>Assinar em lote</h2><span class="pav-total">'+todasPend.length+' para assinar</span></div>'
+      + '<p class="view-desc">Marque as fichas e assine todas de uma vez com a sua assinatura cadastrada.</p>'
+      + avisoAssinaturaLote() + filaAssinaturaHtml(pend, todasPend);
+    pintarIcones(c);
+    ligarFilaAssinatura(c, pend, renderViewAssinar);
   }
   function renderViewEngenharia(){
     var c = document.getElementById("view-engenharia"); if(!c) return;
@@ -694,19 +756,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + partes.map(function(p){ return p.n ? '<i class="'+p.tom+'" style="width:'+(p.n*100/tot)+'%" title="'+escapeHtml(p.rot+': '+p.n)+'"></i>' : ''; }).join("")
         + '</div><div class="eng-barra-leg">'+partes.map(function(p){ return '<span><i class="'+p.tom+'"></i>'+escapeHtml(p.rot)+' <b>'+p.n+'</b></span>'; }).join("")+'</div></div>';
     };
-    var semAssin = !minhaAssinatura ? '<div class="banner">Cadastre a sua assinatura para assinar as fichas. <button type="button" class="btn small" data-cad-assin>Cadastrar assinatura</button></div>'
-      : (minhaAssinatura.papel!=="engenheiro" ? '<div class="banner">Seu cadastro de assinatura está como '+escapeHtml(PAPEIS_ASSIN[minhaAssinatura.papel]||minhaAssinatura.papel)+'. Para assinar como engenheira, troque a função em “Minha assinatura”. <button type="button" class="btn small" data-cad-assin>Minha assinatura</button></div>' : '');
-    var nSel = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; }).length;
-    var chipT = function(k, rot, n){ return '<button type="button" class="chip" data-eng-tipo="'+k+'" aria-pressed="'+(filtrosEng.tipo===k)+'">'+rot+' <span class="n">'+n+'</span></button>'; };
-    var lista = pend.length ? pend.map(function(x){
-      var k = x.tipo+"|"+x.id;
-      return '<div class="eng-item'+(x.pronta?"":" rascunho")+'"><label class="eng-chk"><input type="checkbox" data-eng-sel="'+escapeHtml(k)+'"'+(filtrosEng.sel[k]?" checked":"")+'></label>'
-        + '<div class="eng-item-tx"><span class="eng-tipo '+x.tipo+'">'+(x.tipo==="fvs"?"FVS":"Rastr.")+'</span><b>'+escapeHtml(x.titulo)+'</b>'
-        + '<small>'+escapeHtml(x.sub)+(x.data ? ' · '+escapeHtml(fmtDateBR(x.data)) : '')+'</small>'
-        + '<small class="'+(x.pronta?"ok":"warn")+'">'+(x.pronta ? "pronta para assinar" : "ainda em preenchimento")+(x.inspecao ? " · inspeção já assinou" : " · falta a inspeção")+'</small></div>'
-        + '<div class="eng-item-ac"><button type="button" class="btn small" data-eng-abrir="'+escapeHtml(k)+'">Abrir</button>'
-        + '<button type="button" class="btn small primary" data-eng-assinar="'+escapeHtml(k)+'"'+(minhaAssinatura && minhaAssinatura.papel==="engenheiro" ? "" : " disabled")+'>Assinar</button></div></div>';
-    }).join("") : '<div class="dash-vazio">Nada pendente de assinatura neste filtro. 👍</div>';
+    var semAssin = avisoAssinaturaLote();
     var opcoesPara = '<option value="estagiarios">Todos os estagiários</option>' + recebemTarefas(equipeMap).map(function(e){ return '<option value="'+escapeHtml(e.email||e.nome)+'">'+escapeHtml(e.nome)+'</option>'; }).join("");
     var tarefaLi = function(t){
       var venc = t.status!=="feita" && t.prazo && t.prazo < hoje;
@@ -725,12 +775,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + kpi(ctDec+ctAb, "Concreto: decidir", ctDec+" com justificativa · "+ctAb+" abaixo do fck", ctDec+ctAb ? "nc" : "ok", 'data-goto-view="ct"')
         + kpi(tAbertas.length, "Tarefas em aberto", tAbertas.filter(function(t){ return t.prazo && t.prazo < hoje; }).length+" com prazo vencido", "info", 'data-eng-ir="tarefas"')
       + '</div>'
-      + '<div class="dash-card" id="eng-assin"><div class="dash-card-h"><h3>Para assinar</h3><span class="hoje-cont">'+pend.length+'</span></div>'
-        + '<div class="eng-filtros"><div class="chips">'+chipT("todos", "Todas", todasPend.length)+chipT("fvs", "FVS", todasPend.filter(function(x){ return x.tipo==="fvs"; }).length)+chipT("rast", "Rastreabilidades", todasPend.filter(function(x){ return x.tipo==="rast"; }).length)+'</div>'
-          + '<select id="eng-periodo" aria-label="Período"><option value="30"'+(filtrosEng.periodo==="30"?" selected":"")+'>Últimos 30 dias</option><option value="90"'+(filtrosEng.periodo==="90"?" selected":"")+'>Últimos 90 dias</option><option value="todas"'+(filtrosEng.periodo==="todas"?" selected":"")+'>Todas</option></select></div>'
-        + '<div class="eng-lote"><button type="button" class="btn small" data-eng-sel-prontas>Selecionar as prontas</button><button type="button" class="btn small" data-eng-limpar>Limpar seleção</button>'
-          + '<button type="button" class="btn primary" data-eng-lote'+(nSel && minhaAssinatura && minhaAssinatura.papel==="engenheiro" ? "" : " disabled")+'>✍ Assinar selecionadas ('+nSel+')</button></div>'
-        + '<div class="eng-lista">'+lista+'</div></div>'
+      + filaAssinaturaHtml(pend, todasPend)
       + '<div class="dash-grid">'
         + '<div class="dash-card" id="eng-tarefas"><div class="dash-card-h"><h3>Tarefas para os estagiários</h3><span class="hoje-cont">'+tAbertas.length+' em aberto</span></div>'
           + '<div class="eng-nova"><div class="field"><label for="eng-t-tit">O que fazer</label><input id="eng-t-tit" placeholder="ex.: completar betonadas da rastreabilidade de 05/10"></div>'
@@ -748,20 +793,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '</div>';
     pintarIcones(c);
     var re = function(){ renderViewEngenharia(); };
-    c.querySelectorAll("[data-cad-assin]").forEach(function(b){ b.addEventListener("click", abrirMinhaAssinatura); });
+    ligarFilaAssinatura(c, pend, re);
     c.querySelectorAll("[data-goto-view]").forEach(function(b){ b.addEventListener("click", function(){ switchView(b.getAttribute("data-goto-view")); }); });
     c.querySelectorAll("[data-eng-ir]").forEach(function(b){ b.addEventListener("click", function(){ var el = document.getElementById("eng-"+b.getAttribute("data-eng-ir")); if(el) el.scrollIntoView({ behavior:"smooth" }); }); });
-    c.querySelectorAll("[data-eng-tipo]").forEach(function(b){ b.addEventListener("click", function(){ filtrosEng.tipo = b.getAttribute("data-eng-tipo"); re(); }); });
-    c.querySelector("#eng-periodo").addEventListener("change", function(e){ filtrosEng.periodo = e.target.value; re(); });
-    c.querySelectorAll("[data-eng-sel]").forEach(function(ch){ ch.addEventListener("change", function(){ filtrosEng.sel[ch.getAttribute("data-eng-sel")] = ch.checked; re(); }); });
-    c.querySelector("[data-eng-sel-prontas]").addEventListener("click", function(){ pend.forEach(function(x){ if(x.pronta) filtrosEng.sel[x.tipo+"|"+x.id] = true; }); re(); });
-    c.querySelector("[data-eng-limpar]").addEventListener("click", function(){ filtrosEng.sel = {}; re(); });
-    c.querySelectorAll("[data-eng-abrir]").forEach(function(b){ b.addEventListener("click", function(){ var p = b.getAttribute("data-eng-abrir").split("|"); openModal(p[0], p[1]); }); });
-    c.querySelectorAll("[data-eng-assinar]").forEach(function(b){ b.addEventListener("click", function(){ engAssinarLote([b.getAttribute("data-eng-assinar")], b); }); });
-    c.querySelector("[data-eng-lote]").addEventListener("click", function(ev){
-      var ks = Object.keys(filtrosEng.sel).filter(function(k){ return filtrosEng.sel[k]; });
-      engAssinarLote(ks, ev.currentTarget);
-    });
     c.querySelector("[data-eng-tarefa]").addEventListener("click", function(ev){
       var tit = c.querySelector("#eng-t-tit").value.trim();
       if(!tit){ alert("Escreva o que precisa ser feito."); return; }
@@ -777,17 +811,21 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }); });
   }
   // Assina como engenheira várias fichas de uma vez (FVS: também fecha e trava, como no botão da ficha)
-  async function engAssinarLote(chaves, botao){
-    if(!minhaAssinatura || minhaAssinatura.papel!=="engenheiro"){ alert("Para assinar como engenheira, cadastre a sua assinatura com a função Engenheiro(a)."); return; }
+  async function engAssinarLote(chaves, botao, depois){
+    var papel = papelLote(), insp = papel && papel!=="engenheiro";
+    if(!papel){ alert(minhaAssinatura ? "Sua assinatura está cadastrada com uma função que não assina fichas. Troque em “Minha assinatura”." : "Cadastre a sua assinatura em “Minha assinatura” para assinar."); return; }
+    var jaTem = function(d){ return (d.assinaturas||[]).some(function(a){ return insp ? (a.papel==="tecnico" || a.papel==="estagiario") : a.papel==="engenheiro"; }); };
     var itens = chaves.map(function(k){ var p = k.split("|"); return { tipo:p[0], id:p[1], d:(p[0]==="fvs" ? fvsMap : rastMap).get(p[1]) }; })
-      .filter(function(x){ return x.d && !(x.tipo==="fvs" && x.d.travada) && !(x.d.assinaturas||[]).some(function(a){ return a.papel==="engenheiro"; }); });
+      .filter(function(x){ return x.d && !(x.tipo==="fvs" && x.d.travada && !insp) && !jaTem(x.d); });
     if(!itens.length){ alert("Nenhuma ficha selecionada precisa da sua assinatura."); return; }
     var nF = itens.filter(function(x){ return x.tipo==="fvs"; }).length, nR = itens.length - nF;
     var abertas = itens.filter(function(x){ return !x.d.fechado; }).length;
-    if(!confirm("Assinar "+itens.length+" ficha(s) como "+(PAPEIS_ASSIN.engenheiro)+"?\n\n"+(nF ? "• "+nF+" FVS — serão fechadas e travadas\n" : "")+(nR ? "• "+nR+" rastreabilidade(s)\n" : "")
+    if(!confirm("Assinar "+itens.length+" ficha(s) como "+(PAPEIS_ASSIN[papel]||papel)+"?\n\n"
+      +(nF ? "• "+nF+" FVS"+(insp ? " — no campo “Inspecionado por”" : " — serão fechadas e travadas")+"\n" : "")
+      +(nR ? "• "+nR+" rastreabilidade(s)"+(insp ? " — no campo “Responsável pela coleta”" : "")+"\n" : "")
       +(abertas ? "\nAtenção: "+abertas+" ainda estão em preenchimento." : ""))) return;
     var agora = nowISO(), uid = (auth.currentUser||{}).uid||"";
-    var assin = { papel:"engenheiro", nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"", email:currentUserEmail, uid:uid, em:agora, imagem:minhaAssinatura.imagem||"" };
+    var assin = { papel:papel, nome:minhaAssinatura.nome||"", crea:minhaAssinatura.crea||"", email:currentUserEmail, uid:uid, em:agora, imagem:minhaAssinatura.imagem||"" };
     if(botao){ botao.disabled = true; botao.textContent = "Assinando…"; }
     try{
       var envios = [];
@@ -795,8 +833,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         var lote = dbf.batch();
         itens.slice(i, i+200).forEach(function(x){
           var d = x.d, dados = { assinaturas:(d.assinaturas||[]).concat([Object.assign({}, assin, x.tipo==="fvs" ? { revisao:d.revisao||0 } : {})]), updatedAt:agora, updatedByEmail:currentUserEmail||"" };
-          if(!d.engenheiro) dados.engenheiro = minhaAssinatura.nome||"";
-          if(x.tipo==="fvs"){
+          if(insp){
+            // inspeção/coleta: só acrescenta a assinatura (vale também para FVS já travada)
+            if(x.tipo==="fvs" && !d.inspecionadoPor) dados.inspecionadoPor = minhaAssinatura.nome||"";
+            if(x.tipo==="rast" && !d.responsavelColeta) dados.responsavelColeta = minhaAssinatura.nome||"";
+          } else if(!d.engenheiro) dados.engenheiro = minhaAssinatura.nome||"";
+          if(x.tipo==="fvs" && !insp){
             dados.fechado = true; if(!d.dataFechamento) dados.dataFechamento = todayISO();
             dados.travada = true; dados.travadaEm = agora; dados.travadaPor = currentUserEmail||"";
           }
@@ -811,7 +853,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       console.error(ex);
       alert("Não foi possível assinar: "+(ex && ex.message ? ex.message : "erro desconhecido"));
     }
-    renderViewEngenharia();
+    (depois || renderViewEngenharia)();
   }
   // Tarefas da engenharia para mim (estagiários / admin) — no Início
   function minhasTarefas(){
@@ -832,7 +874,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div><button type="button" class="btn small primary" data-tarefa-feita="'+escapeHtml(t._id)+'">✓ Feita</button></div>'; }).join("")
       + '</div>';
   }
-  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira", equipe:"view-equipe" };
+  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira", equipe:"view-equipe", assinar:"view-assinar" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -853,6 +895,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     else if(nome==="historico") renderViewHistorico();
     else if(nome==="lixeira") renderViewLixeira();
     else if(nome==="equipe") renderViewEquipe();
+    else if(nome==="assinar") renderViewAssinar();
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -2172,6 +2215,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     unsubAssin = assinCol.doc(user.uid).onSnapshot(function(snap){
       minhaAssinatura = snap.exists ? snap.data() : null;
       if(draft && draft.type==="fvs") renderModal();
+      var vA = document.getElementById("view-assinar"); if(vA && !vA.hidden) renderViewAssinar();
+      var vE = document.getElementById("view-engenharia"); if(vE && !vE.hidden) renderViewEngenharia();
     }, function(err){ console.warn("assinaturas:", err && err.code); });
     // v1.25: tarefas da engenharia para os estagiários
     if(unsubTarefas) unsubTarefas();
@@ -4282,6 +4327,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-historico").addEventListener("click", function(){ switchView("historico"); });
     document.getElementById("btn-view-lixeira").addEventListener("click", function(){ switchView("lixeira"); });
     document.getElementById("btn-view-equipe").addEventListener("click", function(){ switchView("equipe"); });
+    document.getElementById("btn-view-assinar").addEventListener("click", function(){ filtrosEng.sel = {}; switchView("assinar"); });
     document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });

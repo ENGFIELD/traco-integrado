@@ -3,7 +3,9 @@
  *  1. Notas ANTERIORES AO SISTEMA (concretadas antes da 1ª rastreabilidade do
  *     app) ficam fora de tudo: indicadores, pendências e cobranças.
  *  2. O fck exigido vem da planilha (40 ou 45 MPa). Os resultados que contam
- *     são os de 28 e 63 dias — 7 e 14 dias nunca geram pendência.
+ *     são os de 28 e 63 dias (comparados com o fck). v1.32: o app considera
+ *     7, 28 e 63 dias — resultado atrasado em qualquer uma delas é pendência
+ *     (tela-ct.js, ctStatusIdade); 3 e 14 ficam só na planilha.
  *  3. "Concluído" na coluna Observação → nota concluída automaticamente.
  *     Observação com justificativa → fica EM ABERTO até o dono decidir.
  *  4. Bateu o fck aos 28 dias → conta como concluída, aguardando o de 63.

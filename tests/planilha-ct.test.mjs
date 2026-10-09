@@ -1,7 +1,7 @@
 // Teste da exportação do CT na planilha-modelo: node tests/planilha-ct.test.mjs
 import XLSX from "xlsx-js-style";
 import JSZip from "jszip";
-import { preencherPlanilhaCt } from "../src/modulos/ct/planilha-ct.js";
+import { preencherPlanilhaCt, conferirExportacao } from "../src/modulos/ct/planilha-ct.js";
 
 const COLS = { local:0, volume:4, fck:5, notaRemessa:6, laboratorio:7, concreteira:8, dataConcretagem:9, numCps:10, slump:11,
   data7:12, data14:13, data28:14, data63:15, cpsConforme:16, r3:17, r7:18, r7b:19, r14:20, r14b:21, r28:22, r28b:23, r63:24, r63b:25, observacao:26 };
@@ -72,6 +72,19 @@ const estilo = (ref) => (new RegExp(`<c r="${ref}"[^>]*?s="(\\d+)"`).exec(xmlAba
 ok(estilo("J12") === estilo("J9") && estilo("A12") === estilo("A9"), "linha nova com o mesmo estilo da linha-modelo");
 ok(estilo("W7") === (new RegExp(`<c r="W8"[^>]*?s="(\\d+)"`).exec(xmlAba) || [])[1], "célula alterada mantém o estilo");
 ok(/fullCalcOnLoad="1"/.test(await zip.file("xl/workbook.xml").async("string")), "Excel recalcula ao abrir");
+ok(res.alteradas.includes("W7") && res.alteradas.includes("S8") && res.alteradas.includes("G10"), "lista das células escritas");
+
+// v1.32: conferência de ida e volta (feita a cada importação)
+const igual = [
+  { notaRemessa: "1001", local: "Laje 1º pav", volume: 8, fck: 35, laboratorio: "Lab X", concreteira: "Concreteira Y", dataConcretagem: "2025-12-09", r28: 38.5 },
+  { notaRemessa: "1002", local: "Laje 1º pav", volume: 8, fck: 35, laboratorio: "Lab X", concreteira: "Concreteira Y", dataConcretagem: "2025-12-10" },
+  { notaRemessa: "001003", local: "Pilares", volume: 8, fck: 35, laboratorio: "Lab X", concreteira: "Concreteira Y", dataConcretagem: "2025-12-11" },
+];
+const c0 = await conferirExportacao(JSZip, bufModelo, igual, COLS);
+ok(c0.alteradas.length === 0 && c0.inesperadas.length === 0 && c0.restoIgual, "importar e exportar sem mexer: planilha idêntica" + (c0.alteradas.length ? " (mudou " + c0.alteradas.join() + ")" : ""));
+const c1 = await conferirExportacao(JSZip, bufModelo, igual.map((r, i) => i === 1 ? Object.assign({}, r, { r7: "27,5" }) : r).concat([{ notaRemessa: "3001", local: "Nova", fck: 40 }]), COLS);
+ok(c1.alteradas.join() === "S8,A10,F10,G10" && c1.inesperadas.length === 0 && c1.restoIgual, "com um resultado e uma nota nova: só essas células mudam (" + c1.alteradas.join() + ")");
+
 if (process.env.SAIDA) (await import("fs")).writeFileSync(process.env.SAIDA, saida);
 console.log(falhas ? `\n${falhas} falha(s)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);
