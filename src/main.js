@@ -2146,7 +2146,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     unsubFvs = sincFvs.parar;
     window.__tracoSincFvs = sincFvs.modo; // para o teste de ponta a ponta
     unsubRast = escutarColecao({ col:rastCol, campo:"updatedAt", chave:"traco-rast-sync-completa", dias:1, aoErro:erroSync,
-      aoMudar:function(mapa){ todosPorColecao.rastreabilidade = mapa; rastMap = soAtivos(mapa); ctLimparInicio(); render(); } }).parar;
+      aoMudar:function(mapa){
+        todosPorColecao.rastreabilidade = mapa;
+        // v1.34: cada pavimento separado (inclusive "A / B" das fichas antigas) para filtros e avanço da obra
+        rastMap = new Map(); soAtivos(mapa).forEach(function(r, id){ rastMap.set(id, Object.assign({}, r, { pavimentos: pavimentosDaRast(r) })); });
+        ctLimparInicio(); render(); } }).parar;
     // Controle Tecnológico (desde a v1.6): baixa tudo uma vez por semana.
     unsubCt = escutarColecao({ col:ctCol, campo:"atualizadoEm", chave:"traco-ct-sync-completa", dias:7, aoErro:erroSync,
       aoMudar:function(mapa){
@@ -2477,6 +2481,39 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     return juntarPavimento(b.value, t ? t.value : "");
   }
 
+  // v1.34: uma concretagem pode pegar mais de um pavimento. "Bloco / Pavimento"
+  // guarda todos juntos com " / " (é o que vai no Excel) e a lista "pavimentos"
+  // tem cada um separado (filtros, avanço da obra). Fichas antigas digitadas
+  // como "Piso do 5º Embasamento / Piso do 2º Embasamento" são lidas assim.
+  function dividirPavimentos(txt){ return String(txt||"").split(/\s*\/\s*/).map(function(x){ return x.trim(); }).filter(Boolean); }
+  function pavimentosDaRast(r){
+    var out = [];
+    dividirPavimentos(r && r.blocoPav).concat((r && r.pavimentos) || []).forEach(function(p){
+      var sp = separarPavimento(p), v = sp.base ? juntarPavimento(sp.base, sp.trecho) : String(p||"").trim();
+      if(v && out.indexOf(v)===-1) out.push(v);
+    });
+    return out;
+  }
+  function blocoPavMultiHtml(d){
+    var lista = pavimentosDaRast(d); if(!lista.length) lista = [""];
+    return '<div id="bloco-pav-caixa" data-antigos="'+escapeHtml(JSON.stringify(lista))+'">'
+      + lista.map(function(p, i){ return blocoPavLinhaHtml(p, i); }).join("")
+      + '</div><button type="button" class="btn small" id="add-bloco-pav">+ Adicionar pavimento</button>'
+      + '<div class="hint" style="margin-top:4px;">Quando a concretagem do dia pega mais de um pavimento, adicione os outros aqui.</div>';
+  }
+  function blocoPavLinhaHtml(valor, i){
+    return '<div class="bloco-pav-linha" data-bp-i="'+i+'">'+pavSelectsHtml(valor, "", i ? "Escolha outro pavimento…" : "Selecione o pavimento…")
+      + (i ? '<button type="button" class="close-x bloco-pav-rm" data-bp-rm title="Tirar este pavimento" aria-label="Tirar este pavimento">✕</button>' : '')+'</div>';
+  }
+  function lerBlocoPavMulti(caixa){
+    var antigos = []; try{ antigos = JSON.parse(caixa.getAttribute("data-antigos")||"[]"); }catch(ex){}
+    var vals = [];
+    caixa.querySelectorAll(".bloco-pav-linha").forEach(function(l){
+      var v = lerPavSelects(l, antigos[+l.getAttribute("data-bp-i")]||"");
+      if(v && vals.indexOf(v)===-1) vals.push(v);
+    });
+    return vals;
+  }
   function pavimentosFieldHtml(d){
     var pavs = d.pavimentos || [];
     return '<div class="unidades-row">'
@@ -2587,6 +2624,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // sempre, sem perder a não conformidade que já estava registrada.
     if(type==="fvs" && !Array.isArray(data.naoConformidades)) data.naoConformidades = fichaNaoConformidades(data);
     if(!data.pavimentos) data.pavimentos=[]; // fichas antigas, de antes do multi-pavimento — fallback usa local/blocoPav
+    // v1.34: rastreabilidade — "A / B" digitado antes vira dois pavimentos
+    if(type==="rast"){ var pvs = pavimentosDaRast(data); if(pvs.length){ data.pavimentos = pvs; data.blocoPav = pvs.join(" / "); } }
     draft = { type:type, id:id||null, data:data, orig:JSON.stringify(data), chave:chave };
     // Ficha que só existe no rascunho (nunca chegou ao servidor): conta como
     // alterada, para pedir confirmação antes de fechar sem salvar.
@@ -3079,7 +3118,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '<fieldset><legend>Identificação</legend><div class="grid2">'
         // v1.4: sem "Nº do controle" — a ficha é identificada por data + pavimento
         + field("Data da concretagem","data",d.data,"date")
-        + '<div class="field"><label>Bloco / Pavimento</label><div id="bloco-pav-caixa">'+pavSelectsHtml(d.blocoPav, "", "Selecione o pavimento…")+'</div></div>'
+        + '<div class="field"><label>Bloco / Pavimento</label>'+blocoPavMultiHtml(d)+'</div>'
         + '</div><div class="grid3">'
         + field("Obra","obra",d.obra,"text")
         + field("Projeto de referência","projetoReferencia",d.projetoReferencia,"text")
@@ -3087,7 +3126,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</div><div class="grid3">'
         + field("FCK solicitado","fckSolicitado",d.fckSolicitado,"text","ex.: 30 MPa")
         + '</div></fieldset>'
-      + '<fieldset><legend>Pavimentos deste controle</legend>'+pavimentosFieldHtml(d)+'</fieldset>'
       + '<fieldset><legend>Betonadas <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— tempo máx. de lançamento: 2h30</span></legend>'
         + '<div class="lines-wrap"><table class="lines"><thead><tr>'
         + ['Seq','NF','Betoneira','Lacre','Vol. (m³)','Acum. (m³)','Fornecedor','Série CP','Nº CPs','Slump','Saída usina','Chegada obra','Lanç. inicial','Lanç. final','Tempo gasto','Água folga (L)','Água lanç. (L)','Peças concretadas',''].map(function(h){return '<th>'+h+'</th>';}).join("")
@@ -3326,9 +3364,25 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       });
       // "Bloco / Pavimento" da rastreabilidade: listas em vez de texto livre
       var caixaBloco = m.querySelector("#bloco-pav-caixa");
-      if(caixaBloco) caixaBloco.addEventListener("change", function(){
-        draft.data.blocoPav = lerPavSelects(caixaBloco, draft.data.blocoPav);
-      });
+      var atualizarBloco = function(){
+        var vals = lerBlocoPavMulti(caixaBloco);
+        draft.data.pavimentos = vals;
+        draft.data.blocoPav = vals.join(" / ");
+      };
+      if(caixaBloco){
+        caixaBloco.addEventListener("change", atualizarBloco);
+        caixaBloco.addEventListener("click", function(e){
+          var rm = e.target.closest("[data-bp-rm]"); if(!rm) return;
+          rm.closest(".bloco-pav-linha").remove(); atualizarBloco();
+        });
+        var addBp = m.querySelector("#add-bloco-pav");
+        if(addBp) addBp.addEventListener("click", function(){
+          var n = caixaBloco.querySelectorAll(".bloco-pav-linha").length, maior = 0;
+          caixaBloco.querySelectorAll(".bloco-pav-linha").forEach(function(l){ maior = Math.max(maior, +l.getAttribute("data-bp-i")); });
+          caixaBloco.insertAdjacentHTML("beforeend", blocoPavLinhaHtml("", Math.max(n, maior+1)));
+          var novo = caixaBloco.lastElementChild.querySelector("[data-pav-base]"); if(novo) novo.focus();
+        });
+      }
       m.querySelectorAll("[data-rm-pavimento]").forEach(function(btn){
         btn.addEventListener("click", function(){
           var idx=+btn.getAttribute("data-rm-pavimento");
