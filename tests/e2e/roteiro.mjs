@@ -108,6 +108,7 @@ try {
   await irPara(m, "btn-view-ct");
   await m.evaluate(() => { const b = document.querySelector('[data-ct-sit="todos"]'); if (b) b.click(); }); await m.waitForTimeout(400); // ver todas as notas
   await m.click('[data-ct-abrir="nf_05538"]'); await m.waitForSelector('[data-ctf="r28"]', { timeout: 8000 });
+  ok((await m.$$eval(".ct-res-grid label", (l) => l.map((x) => x.textContent).join("|"))) === "7 dias|7' dias|28 dias|28' dias|63 dias|63' dias", "ficha do CT só com 7, 28 e 63 dias");
   await m.fill('[data-ctf="r28"]', "45"); await m.click("[data-ct-salvar]");
   const ct = await esperar(async () => { const x = (await db.doc("controleTecnologico/nf_05538").get()).data(); return String(x.r28) === "45" && x.atualizadoPor === "matheus.alves@sig.eng.br"; });
   ok(ct, "controle tecnológico: resultado gravado e carimbado");

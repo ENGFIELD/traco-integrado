@@ -144,6 +144,7 @@ export async function preencherPlanilhaCt(zip, registros, COLS) {
   const campos = Object.keys(COLS);
   const novasLinhas = new Map(); // r → xml (substituições e inclusões)
   let celulas = 0, atualizadas = 0;
+  const alteradas = []; // v1.32: endereço de cada célula escrita (ex.: "W435")
 
   // escreve os campos de um registro numa linha (xml) — devolve o xml novo
   const escrever = (rowXml, r, reg, modeloCelulas) => {
@@ -160,7 +161,7 @@ export async function preencherPlanilhaCt(zip, registros, COLS) {
       if (atual && campo === "notaRemessa" && normNota(valorCelula(atual, ss)) === normNota(novo)) return; // 001003 = 1003
       const s = atual ? estilo(atual.attrs) : (modeloCelulas.get(col) || {}).s;
       porCol.set(col, { col, xml: montarCelula(letraColuna(col) + r, s, novo), novo: true });
-      alterou = true; celulas++;
+      alterou = true; celulas++; alteradas.push(letraColuna(col) + r);
     });
     if (!alterou) return null;
     const abre = /^<row\b[^>]*?(\/?)>/.exec(rowXml);
@@ -232,7 +233,34 @@ export async function preencherPlanilhaCt(zip, registros, COLS) {
     const rels = await zip.file("xl/_rels/workbook.xml.rels").async("string");
     zip.file("xl/_rels/workbook.xml.rels", rels.replace(/<Relationship[^>]*calcChain[^>]*\/>/, ""));
   }
-  return { aba: aba.nome, atualizadas, novas: faltando.length, celulas, avisos: [...new Set(avisos)] };
+  return { aba: aba.nome, atualizadas, novas: faltando.length, celulas, alteradas, avisos: [...new Set(avisos)] };
+}
+
+/**
+ * v1.32 — conferência de ida e volta, feita a cada importação.
+ * Exporta (em memória) os registros do app na própria planilha recém-importada
+ * e compara com o original, célula por célula:
+ *   - alteradas: células que a exportação muda (valores lançados no app);
+ *   - inesperadas: qualquer outra diferença (não deveria haver nenhuma);
+ *   - restoIgual: cabeçalho, larguras, mesclagens, impressão etc. iguais.
+ * JSZip vem de fora (no navegador é carregado sob demanda).
+ */
+export async function conferirExportacao(JSZip, dadosPlanilha, registros, COLS) {
+  const original = await JSZip.loadAsync(dadosPlanilha);
+  const zip = await JSZip.loadAsync(dadosPlanilha);
+  const aba = await acharAba(original, /CONT\.?\s*TECNOL/i);
+  const antes = await original.file(aba.caminho).async("string");
+  const res = await preencherPlanilhaCt(zip, registros, COLS);
+  const depois = await zip.file(aba.caminho).async("string");
+  const celulas = (x) => { const m = new Map(); for (const c of x.matchAll(/<c r="([A-Z]+\d+)"[\s\S]*?(?:\/>|<\/c>)/g)) m.set(c[1], c[0]); return m; };
+  const a = celulas(antes), d = celulas(depois), esperadas = new Set(res.alteradas);
+  const inesperadas = [];
+  d.forEach((x, ref) => { if (a.get(ref) !== x && !esperadas.has(ref)) inesperadas.push(ref); });
+  a.forEach((x, ref) => { if (!d.has(ref)) inesperadas.push(ref); });
+  const semDados = (x) => x.replace(/<sheetData[\s\S]*<\/sheetData>/, "").replace(/<dimension [^>]*\/>/, "").replace(/<mergeCells[\s\S]*?<\/mergeCells>/, "").replace(/sqref="[^"]*"/g, "");
+  // linhas novas (notas só do app) podem estender dimensão/mesclagens/formatação; o resto tem que ser igual
+  const restoIgual = semDados(antes) === semDados(depois);
+  return { alteradas: res.alteradas, novas: res.novas, inesperadas, restoIgual };
 }
 
 // copia a linha-modelo para a linha r: mesmo estilo, valores limpos, fórmulas ajustadas

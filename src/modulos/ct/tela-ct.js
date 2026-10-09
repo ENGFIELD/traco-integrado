@@ -5,7 +5,7 @@ import { abaixoEm as ctAbaixoEm, anterior as ctAnteriorRegra, anterioresAoSistem
 import { escapeHtml, fmtDateBR, fmtDateTimeBR, nowISO, rastRotulo, todayISO } from "../comum/formatos.js";
 import { garantirLibs } from "../../libs.js";
 import { safeName, triggerDownload } from "../exportar/xlsx-xml.js";
-import { preencherPlanilhaCt } from "./planilha-ct.js";
+import { preencherPlanilhaCt, conferirExportacao } from "./planilha-ct.js";
 import { pintarIcones } from "../../ui/icones.js";
 import { DEFAULT_OBRA } from "../fvs/catalogo.js";
 
@@ -41,9 +41,11 @@ var CT_COLS = {
 // ex. "7' Dias", para reensaio). Um resultado é "pendente" quando a data
 // prevista já passou e nenhum dos dois foi preenchido; se a data prevista
 // ainda não chegou, simplesmente ainda não é o caso de cobrar o resultado.
+// v1.32 (pedido do dono): o sistema só considera os resultados de 7, 28 e 63
+// dias. Os de 3 e 14 dias continuam na planilha (importados e devolvidos
+// iguais na exportação), mas não aparecem nem contam em nada no app.
 var CT_IDADES = [
   {key:"7", dataCampo:"data7", campos:["r7","r7b"]},
-  {key:"14", dataCampo:"data14", campos:["r14","r14b"]},
   {key:"28", dataCampo:"data28", campos:["r28","r28b"]},
   {key:"63", dataCampo:"data63", campos:["r63","r63b"]}
 ];
@@ -60,7 +62,8 @@ function ctValorPreenchido(v){ return v!=null && String(v).trim()!==""; }
 // (campo concluida:true) — encerra a cobrança de todas as idades sem resultado.
 /* v1.18 (regras do dono, ver modulos/ct/regras-ct.js):
    - anterior ao sistema (pela data da 1ª rastreabilidade): fora de tudo;
-   - só 28 e 63 dias são obrigatórios — 7 e 14 nunca viram pendência;
+   - só 28 e 63 dias são obrigatórios — 7 nunca vira pendência (v1.32: 3 e
+     14 dias não contam mais no app);
    - concluída (no app, "Concluído" na planilha ou 28 e 63 ok) e "você
      decide" (justificativa) não cobram resultado. */
 var ctInicioCache = null;
@@ -143,6 +146,8 @@ function ctBruto(v){
 }
 
 var ctImportando = false;
+var ctUltimaConferencia = null; // v1.32: resultado da conferência da última importação (para o teste de ponta a ponta)
+window.__tracoCtConferencia = function(){ return ctUltimaConferencia; };
 function ctSetStatus(msg, tone){
   var el = document.getElementById("ct-import-msg");
   if(!el) return;
@@ -241,11 +246,31 @@ async function ctImportarArquivo(file){
 
     var modeloOk = true;
     try{ await ctSalvarModelo(file, buf); }catch(exM){ modeloOk = false; console.warn("modelo da planilha:", exM); }
+    // v1.32: confere, já com os dados do app, que a exportação sai no mesmo formato desta planilha
+    var conferencia = "";
+    try{
+      var depois = new Map(); ctx.ctMap.forEach(function(d, id){ depois.set(id, d); });
+      ops.forEach(function(op){ depois.set(op.id, op.data); });
+      var regsConf = [];
+      depois.forEach(function(d, id){ if(id!=="_meta" && d && d.notaRemessa) regsConf.push(Object.assign({}, ctComAnterior(Object.assign({ _id:id }, d)))); });
+      regsConf = regsConf.map(function(r){ return Object.assign({}, r, { observacao: ctObsExportada(r) }); });
+      var conf = await conferirExportacao(JSZip, buf, regsConf, CT_COLS);
+      if(conf.inesperadas.length || !conf.restoIgual){
+        conferencia = " ⚠ Conferência da exportação: "+(conf.inesperadas.length ? conf.inesperadas.length+" célula(s) sairiam diferentes sem motivo ("+conf.inesperadas.slice(0,6).join(", ")+")" : "o layout da aba mudaria")+" — me avise antes de exportar.";
+      } else if(!conf.alteradas.length){
+        conferencia = " ✓ Conferido: exportando agora, a planilha sai idêntica a esta.";
+      } else {
+        conferencia = " ✓ Conferido: a exportação sai no mesmo formato desta planilha; só "+conf.alteradas.length+" célula(s) mudam, com o que foi lançado no app"
+          +(conf.novas ? " ("+conf.novas+" nota(s) nova(s) do app)" : "")+": "+conf.alteradas.slice(0,8).join(", ")+(conf.alteradas.length>8 ? "…" : "")+".";
+      }
+      ctUltimaConferencia = conf;
+    }catch(exC){ console.warn("conferência da exportação:", exC); }
     ctSetStatus(linhas.length+" linha(s) na planilha — "+novos+" nova(s), "+atualizados+" atualizada(s)"
       +(preservados ? "; "+preservados+" valor(es) lançado(s) pelo site mantido(s) (célula vazia na planilha)" : "")
       +(ignoradas ? "; "+ignoradas+" nota(s) que você concluiu no app ficaram como estavam" : "")
       +(anteriores ? "; "+anteriores+" nota(s) anterior(es) ao sistema (antes de "+fmtDateBR(inicioSistema)+") marcadas como concluídas, fora dos indicadores" : "")+"."
-      +(modeloOk ? "" : " (Não consegui guardar a planilha como modelo de exportação.)"), "ok");
+      +(modeloOk ? "" : " (Não consegui guardar a planilha como modelo de exportação.)")
+      +conferencia, conferencia.indexOf("⚠")!==-1 ? "err" : "ok");
   } catch(ex){
     console.error(ex);
     ctSetStatus("Não foi possível importar: "+(ex && ex.message ? ex.message : "erro desconhecido")+".", "err");
@@ -493,13 +518,10 @@ function renderCtTable(){
       + '<th rowspan="2">Nº de CPs</th>'
       + '<th rowspan="2">Slump</th>'
       + '<th rowspan="2">Data 7 Dias</th>'
-      + '<th rowspan="2">Data 14 Dias</th>'
       + '<th rowspan="2">Data 28 Dias</th>'
       + '<th rowspan="2">Data 63 Dias</th>'
       + '<th rowspan="2">CPs Conforme</th>'
-      + '<th rowspan="2">3 Dias</th>'
       + '<th class="ct-th-group" colspan="2">7 Dias</th>'
-      + '<th class="ct-th-group" colspan="2">14 Dias</th>'
       + '<th class="ct-th-group" colspan="2">28 Dias</th>'
       + '<th class="ct-th-group" colspan="2">63 Dias</th>'
       + '<th rowspan="2">Observação</th>'
@@ -507,7 +529,6 @@ function renderCtTable(){
     + '</tr>'
     + '<tr>'
       + '<th class="ct-th-sub">7 Dias</th><th class="ct-th-sub">7\' Dias</th>'
-      + '<th class="ct-th-sub">14 Dias</th><th class="ct-th-sub">14\' Dias</th>'
       + '<th class="ct-th-sub">28 Dias</th><th class="ct-th-sub">28\' Dias</th>'
       + '<th class="ct-th-sub">63 Dias</th><th class="ct-th-sub">63\' Dias</th>'
     + '</tr>'
@@ -524,19 +545,16 @@ function renderCtTable(){
         + ctCelulaTexto(row.numCps)
         + ctCelulaTexto(row.slump)
         + ctCelulaData(row.data7)
-        + ctCelulaData(row.data14)
         + ctCelulaData(row.data28)
         + ctCelulaData(row.data63)
         + ctCelulaTexto(row.cpsConforme)
-        + ctCelulaResultado(row, "r3", null)
         + ctCelulaResultado(row, "r7", CT_IDADES[0]) + ctCelulaResultado(row, "r7b", CT_IDADES[0])
-        + ctCelulaResultado(row, "r14", CT_IDADES[1]) + ctCelulaResultado(row, "r14b", CT_IDADES[1])
-        + ctCelulaResultado(row, "r28", CT_IDADES[2]) + ctCelulaResultado(row, "r28b", CT_IDADES[2])
-        + ctCelulaResultado(row, "r63", CT_IDADES[3]) + ctCelulaResultado(row, "r63b", CT_IDADES[3])
+        + ctCelulaResultado(row, "r28", CT_IDADES[1]) + ctCelulaResultado(row, "r28b", CT_IDADES[1])
+        + ctCelulaResultado(row, "r63", CT_IDADES[2]) + ctCelulaResultado(row, "r63b", CT_IDADES[2])
         + ctCelulaTexto(row.concluida===true ? "✓ concluída"+(row.observacao ? " · "+row.observacao : "") : row.observacao, "left")
         + ctCelulaRastreabilidade(row)
       + '</tr>';
-    }).join("") : '<tr><td colspan="25" style="text-align:center;color:var(--text-muted);padding:20px;">Nenhum traço encontrado com os filtros atuais.</td></tr>')
+    }).join("") : '<tr><td colspan="21" style="text-align:center;color:var(--text-muted);padding:20px;">Nenhum traço encontrado com os filtros atuais.</td></tr>')
   + '</tbody></table></div>';
   el.querySelectorAll("[data-open-rast]").forEach(function(btn){
     btn.addEventListener("click", function(e){ e.stopPropagation(); ctx.openModal("rast", btn.getAttribute("data-open-rast")); });
@@ -748,7 +766,7 @@ function renderViewCt(){
   container.innerHTML =
     '<div class="pav-header"><button class="btn" id="btn-voltar-ct">← Voltar</button><h2>Controle tecnológico</h2>'
       + '<span class="pav-total">'+rows.length+' nota(s) de concreto</span></div>'
-    + '<p class="view-desc">Corpos de prova por nota fiscal (7/14/28/63 dias). Importe a planilha do laboratório ou lance direto aqui; cada nota fica ligada à rastreabilidade da concretagem pela NF e pela data.</p>'
+    + '<p class="view-desc">Corpos de prova por nota fiscal (7, 28 e 63 dias). Importe a planilha do laboratório ou lance direto aqui; cada nota fica ligada à rastreabilidade da concretagem pela NF e pela data.</p>'
     + kpis + acoes + filtros
     + '<div id="ct-table-container"></div>';
   pintarIcones(container);
@@ -898,7 +916,8 @@ var CT_CAMPOS_FICHA = [
   ["local","Local / peças","text"], ["volume","Volume (m³)","num"], ["fck","fck (MPa)","num"], ["slump","Slump (cm)","num"],
   ["numCps","Nº de CPs","num"], ["concreteira","Concreteira","text"], ["laboratorio","Laboratório","text"]
 ];
-var CT_CAMPOS_RESULT = [["r3","3 dias"],["r7","7 dias"],["r7b","7' dias"],["r14","14 dias"],["r14b","14' dias"],["r28","28 dias"],["r28b","28' dias"],["r63","63 dias"],["r63b","63' dias"]];
+// v1.32: só 7, 28 e 63 dias (3 e 14 ficam na planilha, intocados)
+var CT_CAMPOS_RESULT = [["r7","7 dias"],["r7b","7' dias"],["r28","28 dias"],["r28b","28' dias"],["r63","63 dias"],["r63b","63' dias"]];
 // padrao: dados para pré-preencher uma nota NOVA (ex.: vindos da betonada)
 function abrirFichaNf(id, padrao){
   var atual = id ? ctx.ctMap.get(id) : null;

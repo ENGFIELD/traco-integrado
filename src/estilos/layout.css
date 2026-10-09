@@ -328,8 +328,8 @@ legend { font-size: 16px; }
 .ct-selo.nada { background: var(--surface-2); color: var(--text-muted); }
 .ct-selo.abaixo, .ct-selo.atraso { background: var(--bad-soft); color: var(--bad); }
 .ct-tr { cursor: pointer; }
-.ct-res-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 4px; }
-@media (min-width: 760px) { .ct-res-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.ct-res-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 4px; }
+@media (min-width: 760px) { .ct-res-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .ct-aviso-fck { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-weight: 600; font-size: 13.5px; }
 .ct-lig { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ct-lig > span { font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
