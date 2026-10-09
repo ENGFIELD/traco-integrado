@@ -14,6 +14,7 @@
  *
  * Uso: npm run build && npm run test:e2e
  */
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
 
@@ -21,6 +22,7 @@ const require = createRequire(new URL("../../scripts/package.json", import.meta.
 process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
 process.env.FIREBASE_AUTH_EMULATOR_HOST ||= "127.0.0.1:9099";
 const admin = require("firebase-admin");
+const JSZip = createRequire(import.meta.url)("jszip");
 admin.initializeApp({ projectId: "traco-integrado-sig" });
 const db = admin.firestore();
 
@@ -39,7 +41,7 @@ const uidMatheus = await usuario("matheus.alves@sig.eng.br", "Matheus Alves");
 const uidSuellen = await usuario("suellen.alves@sig.eng.br", "Suellen Alves");
 await usuario("jessica.araujo@sig.eng.br", "Jessica Araujo");
 const linha = (seq, nf, pecas) => ({ seq, notaFiscal: nf, betoneira: "", lacre: "", volBetoneira: "8", volAcumulado: "", fornecedor: "Polimix", nSerieCP: "", nCPs: "2", slump: "12", saidaUsina: "08:00", chegadaObra: "08:30", lancInicial: "08:40", lancFinal: "09:10", aguaFolga: "", aguaLanc: "", pecas });
-await db.doc("fvs/f1").set({ tipo: "fvs04", codigo: "FVS 04", numero: "14", pavimentos: ["3º Embasamento"], dataAbertura: "2026-09-20", elementos: {}, checklist: {}, naoConformidades: [], fechado: true, dataFechamento: "2026-09-25", updatedAt: T });
+await db.doc("fvs/f1").set({ tipo: "fvs04", codigo: "FVS 04", numero: "14", pavimentos: ["3º Embasamento"], dataAbertura: "2026-09-20", elementos: {}, checklist: {}, naoConformidades: [{ descricao: "Prumo do pilar P7 fora da tolerância", correcao: "", concluida: false, dataConclusao: "", dataRegistro: "2026-09-21", anexos: [] }], fechado: true, dataFechamento: "2026-09-25", updatedAt: T });
 await db.doc("fvs/f3").set({ tipo: "fvs04", codigo: "FVS 04", numero: "30", pavimentos: ["6º Pavimento Tipo"], dataAbertura: "2026-10-03", elementos: {}, checklist: {}, naoConformidades: [], updatedAt: T });
 await db.doc("rastreabilidade/r1").set({ data: "2026-10-05", blocoPav: "4º Pavimento Tipo", pavimentos: ["4º Pavimento Tipo"], obra: "Belavista Ipanema", fckSolicitado: "40 MPa", slumpAprovado: "12±2", linhas: [linha(1, "05538", "L5, V1b"), linha(2, "05544", "P1, P4")], fechado: false, responsavelColeta: "Matheus Alves", engenheiro: "Suellen Alves", createdAt: T, updatedAt: T });
 await db.doc("controleTecnologico/nf_05538").set({ notaRemessa: "05538", dataConcretagem: "2026-10-05", fck: 40, atualizadoEm: T });
@@ -52,7 +54,7 @@ await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "
 const navegador = await chromium.launch(process.env.PLAYWRIGHT_BROWSERS_PATH === "/opt/pw-browsers" ? { executablePath: "/opt/pw-browsers/chromium" } : {});
 const erros = [];
 async function entrar(email, viewport) {
-  const ctx = await navegador.newContext({ viewport: viewport || { width: 1200, height: 900 }, serviceWorkers: "block" });
+  const ctx = await navegador.newContext({ viewport: viewport || { width: 1200, height: 900 }, serviceWorkers: "block", acceptDownloads: true });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => erros.push(email + ": " + e.message));
   p.on("dialog", (d) => d.accept());
@@ -87,7 +89,30 @@ try {
   ok(r1 && d1.updatedByEmail === "matheus.alves@sig.eng.br" && d1.updatedAt > T, "salvar rastreabilidade grava e carimba quem/quando");
   await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
 
+  // 2b) exportações nos modelos oficiais (Excel) e relatório de NC (Word)
+  const baixar = async (acao) => { const [dl] = await Promise.all([m.waitForEvent("download", { timeout: 20000 }), acao()]); return JSZip.loadAsync(fs.readFileSync(await dl.path())); };
+  for (const [tipo, id] of [["fvs", "f1"], ["rast", "r1"]]) {
+    await irPara(m, "btn-nav-board");
+    await m.click(`[data-open-${tipo}="${id}"]`); await m.waitForTimeout(800);
+    const z = await baixar(() => m.click("#btn-export"));
+    const planilha = Object.keys(z.files).find((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+    ok(planilha && /Belavista|Suellen|05538|FVS|14/.test(await z.file(planilha).async("string") + await (z.file("xl/sharedStrings.xml") ? z.file("xl/sharedStrings.xml").async("string") : "")), `exportar ${tipo === "fvs" ? "FVS" : "rastreabilidade"} para Excel (modelo oficial)`);
+    await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+  }
+  await irPara(m, "btn-nav-nc");
+  const w = await baixar(() => m.evaluate(() => document.getElementById("btn-relatorio-nc").click()));
+  ok(/Prumo do pilar P7/.test(await w.file("word/document.xml").async("string")), "relatório de NC em Word traz a pendência");
+
+  // 2c) controle tecnológico: abrir a ficha da nota e lançar o resultado de 28 dias
+  await irPara(m, "btn-view-ct");
+  await m.evaluate(() => { const b = document.querySelector('[data-ct-sit="todos"]'); if (b) b.click(); }); await m.waitForTimeout(400); // ver todas as notas
+  await m.click('[data-ct-abrir="nf_05538"]'); await m.waitForSelector('[data-ctf="r28"]', { timeout: 8000 });
+  await m.fill('[data-ctf="r28"]', "45"); await m.click("[data-ct-salvar]");
+  const ct = await esperar(async () => { const x = (await db.doc("controleTecnologico/nf_05538").get()).data(); return String(x.r28) === "45" && x.atualizadoPor === "matheus.alves@sig.eng.br"; });
+  ok(ct, "controle tecnológico: resultado gravado e carimbado");
+
   // 3) excluir FVS = lixeira (continua no banco, some do app)
+  await irPara(m, "btn-nav-board");
   await m.click('.row[data-fvs="f3"] [data-open-fvs="f3"]'); await m.waitForSelector("#btn-delete", { timeout: 8000 });
   await m.click("#btn-delete");
   const foi = await esperar(async () => (await db.doc("fvs/f3").get()).data().excluido === true);
