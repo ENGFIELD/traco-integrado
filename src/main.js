@@ -11,6 +11,7 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { instalarPorteiro, dadosExclusao, ativo } from "./modulos/dados/porteiro.js";
 import { escutarColecao } from "./modulos/dados/sincronia.js";
+import { iniciarTelasDados, renderViewHistorico, renderViewLixeira, verHistoricoDe } from "./modulos/dados/telas-dados.js";
 import { DEFAULT_OBRA, FVS_CHECKLIST, FVS_ELEMENTOS, FVS_TIPOS, TEMPO_MAX_MIN, getFvsTipo } from "./modulos/fvs/catalogo.js";
 import { diffMin, dowBR, escapeHtml, fmtDateBR, fmtDateTimeBR, fmtMin, lastUpdatedHtml, nowISO, rastRotulo, todayISO } from "./modulos/comum/formatos.js";
 import { safeName, triggerDownload } from "./modulos/exportar/xlsx-xml.js";
@@ -49,6 +50,9 @@ var dbf = firebase.firestore();
    gravação "parecia" salva até o servidor recusar). */
 var CONTAS_SOMENTE_LEITURA = ["jessica.araujo@sig.eng.br"];
 var somenteLeitura = false;
+// v1.30: como um registro está no aparelho antes de gravar (para o histórico
+// anotar só os campos que mudaram). Definido no bloco 2, onde ficam os dados.
+var buscarAnterior = null;
 function ehSomenteLeitura(email){
   email = String(email||"").toLowerCase();
   // teste local: localStorage "traco-teste-leitura" = "1" simula a conta de visualização
@@ -86,7 +90,10 @@ instalarPorteiro(firebase.firestore, {
   email: function(){ return (auth.currentUser && auth.currentUser.email) || ""; },
   agora: function(){ return new Date().toISOString(); },
   pendente: marcarPendente,
-  nomeTipo: function(col){ return NOMES_COLECAO[col] || col || "registro"; }
+  nomeTipo: function(col){ return NOMES_COLECAO[col] || col || "registro"; },
+  // v1.30: histórico de alterações (auditoria/AAAA-MM-DD)
+  db: function(){ return dbf; },
+  anterior: function(col, id){ return buscarAnterior ? buscarAnterior(col, id) : null; }
 });
 // Rodando no próprio PC (http://localhost): usa os Firebase Emulators com uma
 // CÓPIA dos dados, nunca o banco real. No site publicado isto não se aplica.
@@ -103,6 +110,15 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
 (function(){
   "use strict";
   // v1.29: liga os módulos separados do main.js ao estado do app (só leitura, sempre o valor atual)
+  iniciarTelasDados({ db: function(){ return dbf; }, get todos(){ return todosPorColecao; }, get ctMap(){ return ctMap; }, get tarefasMap(){ return tarefasMap; },
+    somenteLeitura: function(){ return somenteLeitura; }, email: function(){ return currentUserEmail||""; }, agora: function(){ return nowISO(); },
+    switchView: function(v){ switchView(v); },
+    abrir: function(col, id){
+      if(col==="controleTecnologico"){ abrirFichaNf(id); return; }
+      var tipo = col==="fvs" ? "fvs" : "rast", m = col==="fvs" ? fvsMap : rastMap;
+      if(!m.has(id)){ alert("Este registro está na lixeira (ou ainda não chegou neste aparelho)."); return; }
+      openModal(tipo, id);
+    } });
   iniciarTelaCt({ get ctCol(){ return ctCol; }, get ctMap(){ return ctMap; }, get currentUserEmail(){ return currentUserEmail; }, get dbf(){ return dbf; }, get modelosCol(){ return modelosCol; }, get openModal(){ return openModal; }, get rastCol(){ return rastCol; }, get rastMap(){ return rastMap; }, get somenteLeitura(){ return somenteLeitura; }, get switchView(){ return switchView; } });
   iniciarModelosExcel({ get fichaNaoConformidades(){ return fichaNaoConformidades; } });
   iniciarRelatorioWord({ get buildRelatorioNc(){ return buildRelatorioNc; }, get currentUserEmail(){ return currentUserEmail; }, get descricaoFiltrosNc(){ return descricaoFiltrosNc; }, get filtrosNc(){ return filtrosNc; }, get ncAnexoEhImagem(){ return ncAnexoEhImagem; } });
@@ -181,6 +197,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   var fvsRevCol = dbf.collection("fvsRevisoes");
   var minhaAssinatura = null, unsubAssin = null;
   var fvsMap=new Map(), rastMap=new Map(), ctMap=new Map(), plantasMap=new Map();
+  // v1.30: tudo o que veio do banco, inclusive o que está na lixeira (excluido:true)
+  var todosPorColecao = { fvs:new Map(), rastreabilidade:new Map(), plantas:new Map(), entregasAco:new Map() };
+  buscarAnterior = function(col, id){
+    var m = todosPorColecao[col] || (col==="controleTecnologico" ? ctMap : col==="tarefas" ? tarefasMap : null);
+    return (m && id && m.get(id)) || null;
+  };
   var currentUserEmail="";
   var filters={ search:"", from:"", to:"", sit:"todos", pavimento:"" };
   var draft=null;
@@ -537,6 +559,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     sel.value = vals.indexOf(current)!==-1 ? current : "";
     filters.pavimento = sel.value;
   }
+  // v1.30: link "Ver histórico" no pé da ficha já salva
+  function verHistoricoHtml(col, id){
+    return id ? '<div class="last-updated"><button type="button" class="linkish" data-ver-historico="'+escapeHtml(col+"|"+id)+'">Ver histórico de alterações</button></div>' : "";
+  }
+  document.addEventListener("click", function(e){
+    var b = e.target.closest && e.target.closest("[data-ver-historico]");
+    if(!b) return;
+    var p = b.getAttribute("data-ver-historico").split("|");
+    closeModal();
+    verHistoricoDe(p[0], p[1]);
+  });
   function render(){
     var allRows = buildRows();
     renderPavimentoOptions(allRows);
@@ -553,6 +586,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(viewCt && !viewCt.hidden) renderViewCt();
     var viewDash = document.getElementById("view-dashboard");
     if(viewDash && !viewDash.hidden) renderViewDashboard();
+    var viewLix = document.getElementById("view-lixeira");
+    if(viewLix && !viewLix.hidden) renderViewLixeira();
     var viewEng = document.getElementById("view-engenharia");
     if(viewEng && !viewEng.hidden) renderViewEngenharia();
     var viewPlantas = document.getElementById("view-plantas");
@@ -767,7 +802,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div><button type="button" class="btn small primary" data-tarefa-feita="'+escapeHtml(t._id)+'">✓ Feita</button></div>'; }).join("")
       + '</div>';
   }
-  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma" };
+  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -785,6 +820,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     else if(nome==="plantas") renderViewPlantas();
     else if(nome==="aco") renderViewAco(document.getElementById("view-aco"));
     else if(nome==="cronograma") renderViewCronograma(document.getElementById("view-cronograma"));
+    else if(nome==="historico") renderViewHistorico();
+    else if(nome==="lixeira") renderViewLixeira();
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -2031,11 +2068,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // lixeira (excluido:true) ficam no banco, mas fora do app.
     var soAtivos = function(mapa){ var m = new Map(); mapa.forEach(function(x, id){ if(ativo(x)) m.set(id, x); }); return m; };
     var sincFvs = escutarColecao({ col:fvsCol, campo:"updatedAt", chave:"traco-fvs-sync-completa", dias:1, aoErro:erroSync,
-      aoMudar:function(mapa){ fvsMap = soAtivos(mapa); render(); } });
+      aoMudar:function(mapa){ todosPorColecao.fvs = mapa; fvsMap = soAtivos(mapa); render(); } });
     unsubFvs = sincFvs.parar;
     window.__tracoSincFvs = sincFvs.modo; // para o teste de ponta a ponta
     unsubRast = escutarColecao({ col:rastCol, campo:"updatedAt", chave:"traco-rast-sync-completa", dias:1, aoErro:erroSync,
-      aoMudar:function(mapa){ rastMap = soAtivos(mapa); ctLimparInicio(); render(); } }).parar;
+      aoMudar:function(mapa){ todosPorColecao.rastreabilidade = mapa; rastMap = soAtivos(mapa); ctLimparInicio(); render(); } }).parar;
     // Controle Tecnológico (desde a v1.6): baixa tudo uma vez por semana.
     unsubCt = escutarColecao({ col:ctCol, campo:"atualizadoEm", chave:"traco-ct-sync-completa", dias:7, aoErro:erroSync,
       aoMudar:function(mapa){
@@ -2049,13 +2086,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       } }).parar;
     // plantas são pesadas (imagem dentro do registro): também uma vez por semana
     unsubPlantas = escutarColecao({ col:plantasCol, campo:"atualizadoEm", chave:"traco-plantas-sync-completa", dias:7, aoErro:erroSync,
-      aoMudar:function(mapa){ plantasMap = soAtivos(mapa); render(); } }).parar;
+      aoMudar:function(mapa){ todosPorColecao.plantas = mapa; plantasMap = soAtivos(mapa); render(); } }).parar;
     // Aço: se as regras do banco ainda não liberam esta coleção, a tela avisa
     // em vez de marcar o app inteiro como "erro de sincronização".
     unsubAco = escutarColecao({ col:acoCol, campo:"atualizadoEm", chave:"traco-aco-sync-completa", dias:1,
       aoErro:function(err){ acoErroAcesso = true; console.warn("entregasAco:", err && err.code); render(); },
       aoMudar:function(mapa){
         acoErroAcesso = false;
+        todosPorColecao.entregasAco = mapa;
         acoMap = new Map();
         mapa.forEach(function(x, id){ if(ativo(x)) acoMap.set(id, Object.assign({ id:id }, x)); });
         render();
@@ -2890,7 +2928,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + '<fieldset><legend>Observações</legend>'+field("","observacoes",d.observacoes,"textarea")+'</fieldset>'
       + '<fieldset><legend>Rastreabilidade de concreto vinculada</legend>'+linkHtml+'</fieldset>'
       + fvsAssinaturasFieldHtml(d, id)
-      + lastUpdatedHtml(d)
+      + lastUpdatedHtml(d) + verHistoricoHtml("fvs", id)
       + '</div>'
       + '<div class="modal-foot">'
         + '<div style="display:flex;gap:10px;">'
@@ -2987,7 +3025,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</fieldset>'
       + rastAssinaturasFieldHtml(d, id)
       + '<fieldset><legend>Ficha FVS vinculada</legend>'+linkHtml+'</fieldset>'
-      + lastUpdatedHtml(d)
+      + lastUpdatedHtml(d) + verHistoricoHtml("rastreabilidade", id)
       + '</div>'
       + '<div class="modal-foot">'
         + '<div style="display:flex;gap:10px;">'
@@ -4205,6 +4243,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
     document.getElementById("btn-view-aco").addEventListener("click", function(){ switchView("aco"); });
     document.getElementById("btn-view-cronograma").addEventListener("click", function(){ switchView("cronograma"); });
+    document.getElementById("btn-view-historico").addEventListener("click", function(){ switchView("historico"); });
+    document.getElementById("btn-view-lixeira").addEventListener("click", function(){ switchView("lixeira"); });
     document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });

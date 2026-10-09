@@ -758,3 +758,17 @@ body[data-perfil="qualidade"] .so-obra, body[data-perfil="qualidade"] .so-campo 
 /* v1.27: na barra de baixo, o "Painel" só aparece para a engenharia (no lugar do Início);
    o admin abre o painel pelo menu lateral — a barra fica com 5 botões */
 body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
+
+/* v1.30: histórico de alterações e lixeira */
+.hist-filtros select, .hist-filtros input { max-width: 220px; }
+.hist-filtros input[type="search"] { flex: 1 1 180px; }
+.hist-lista { padding: 0 0 4px; }
+.hist-dia { padding: 10px 16px 4px; font: 700 12px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; background: var(--surface-2); }
+.hist-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-top: 1px solid var(--border); }
+.hist-hora { font: 600 12.5px var(--font-mono); color: var(--text-muted); min-width: 42px; }
+.hist-tx { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; overflow-wrap: anywhere; }
+.hist-tx small { font-size: 12px; color: var(--text-muted); }
+.hist-area { font: 700 10.5px var(--font-mono); padding: 1px 7px; border-radius: 999px; background: var(--surface-2); white-space: nowrap; }
+@media (max-width: 640px) { .hist-area { display: none; } .hist-filtros select { max-width: none; flex: 1 1 140px; } }
+.hist-frase { display: block; line-height: 1.4; }
+.hist-frase .linkish { text-align: left; font-weight: 600; }

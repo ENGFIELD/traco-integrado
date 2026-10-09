@@ -128,6 +128,28 @@ try {
   ok(await m.$('.row[data-fvs="f1"]') !== null && await m.$('.row[data-fvs="f3"]') === null, "reaberto do cache: fichas certas (sem a da lixeira)");
   await db.doc("fvs/f1").set({ numero: "77", updatedAt: new Date().toISOString(), updatedByEmail: "outro@aparelho" }, { merge: true });
   ok(await esperar(async () => /FVS 04 · 77/.test(await m.$eval('.row[data-fvs="f1"]', (e) => e.textContent).catch(() => ""))), "alteração de outro aparelho chega sem baixar tudo");
+
+  // 4b) lixeira: a FVS excluída aparece lá e volta ao restaurar
+  await irPara(m, "btn-view-lixeira");
+  ok(await m.$('[data-restaurar="fvs|f3"]') !== null, "lixeira mostra a FVS excluída");
+  await m.click('[data-restaurar="fvs|f3"]');
+  ok(await esperar(async () => (await db.doc("fvs/f3").get()).data().excluido === false), "restaurar tira da lixeira (no banco)");
+  await irPara(m, "btn-nav-board");
+  ok(await esperar(async () => (await m.$('.row[data-fvs="f3"]')) !== null), "FVS restaurada volta para a lista");
+
+  // 4c) histórico de alterações: um documento por dia, com quem/quando/o quê
+  const dia = (() => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); })();
+  const ents = async () => ((await db.doc("auditoria/" + dia).get()).data() || {}).entradas || [];
+  ok(await esperar(async () => (await ents()).some((e) => e.col === "fvs" && e.id === "f3" && e.acao === "restaurou")), "histórico registra excluir e restaurar");
+  const e = await ents();
+  ok(e.some((x) => x.col === "fvs" && x.id === "f3" && x.acao === "excluiu" && x.por === "matheus.alves@sig.eng.br")
+    && e.some((x) => x.col === "rastreabilidade" && x.id === "r1" && x.acao === "alterou" && (x.campos || []).includes("linhas")), "histórico: quem excluiu e quais campos mudaram na rastreabilidade");
+  await irPara(m, "btn-view-historico"); await m.waitForTimeout(1200);
+  ok((await m.$$("#view-historico .hist-item")).length >= 3, "tela Histórico lista as alterações");
+  await m.click('.row[data-rast="r1"] [data-open-rast="r1"]').catch(async () => { await irPara(m, "btn-nav-board"); await m.click('.row[data-rast="r1"] [data-open-rast="r1"]'); });
+  await m.waitForSelector('#modal [data-ver-historico]', { timeout: 8000 }); await m.click('#modal [data-ver-historico]'); await m.waitForTimeout(1200);
+  const soDela = await m.$$eval("#view-historico .hist-item", (l) => l.map((x) => x.textContent));
+  ok(soDela.length >= 1 && soDela.every((t) => /Rastreabilidade/.test(t)), "“Ver histórico” da ficha mostra só as alterações dela");
   await m.context().close();
 
   // 5) Suellen abre no Painel da engenharia

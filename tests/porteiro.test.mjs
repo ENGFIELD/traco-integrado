@@ -1,5 +1,5 @@
 // Porteiro de gravação e sincronização incremental: node tests/porteiro.test.mjs
-import { carimbar, camposCarimbo, dadosExclusao, ativo, instalarPorteiro } from "../src/modulos/dados/porteiro.js";
+import { carimbar, camposCarimbo, dadosExclusao, ativo, instalarPorteiro, entradaAuditoria, diaAuditoria } from "../src/modulos/dados/porteiro.js";
 import { desdeQuando, precisaCompleta, escutarColecao } from "../src/modulos/dados/sincronia.js";
 
 let falhas = 0;
@@ -22,28 +22,56 @@ ok(ex.excluido === true && ex.excluidoPor === "m@sig" && ex.updatedAt === AGORA,
 ok(ativo({ x: 1 }) && !ativo(ex) && !ativo(null), "ativo() esconde os da lixeira");
 
 // instalação no Firestore (falso)
-class Col { constructor(id) { this.id = id; } add(d) { gravado.push(["add", this.id, d]); return Promise.resolve(); } doc(id) { return new Doc(this, id); } }
+let auto = 0;
+class Col { constructor(id) { this.id = id; } add(d) { gravado.push(["add", this.id, d]); return Promise.resolve(); } doc(id) { return new Doc(this, id || "auto" + (++auto)); } }
 class Doc { constructor(p, id) { this.parent = p; this.id = id; } set(d, o) { gravado.push(["set", this.parent.id, d, o]); return Promise.resolve(); } update(d) { gravado.push(["update", this.parent.id, d]); return Promise.resolve(); } delete() { gravado.push(["delete", this.parent.id]); return Promise.resolve(); } }
 class Lote { set(r, d, o) { gravado.push(["lote.set", r.parent.id, d, o]); return this; } update(r, d) { gravado.push(["lote.update", r.parent.id, d]); return this; } commit() { return Promise.resolve(); } }
 let gravado = [], leitura = false, pend = 0;
-const fs = { DocumentReference: Doc, CollectionReference: Col, WriteBatch: Lote };
-const ctx = { somenteLeitura: () => leitura, recusar: () => Promise.reject(new Error("leitura")), email: () => "eu@sig", agora: () => AGORA, pendente: (t, d) => { pend += d; }, nomeTipo: (c) => c };
+const fs = { DocumentReference: Doc, CollectionReference: Col, WriteBatch: Lote, FieldValue: { arrayUnion: (...x) => ({ uniao: x }) } };
+const banco = { collection: (c) => new Col(c) };
+const noAparelho = { "fvs/f1": { numero: "1", fechado: false } };
+const ctx = { somenteLeitura: () => leitura, recusar: () => Promise.reject(new Error("leitura")), email: () => "eu@sig", agora: () => AGORA, pendente: (t, d) => { pend += d; }, nomeTipo: (c) => c,
+  db: () => banco, anterior: (c, id) => noAparelho[c + "/" + id] || null };
+const historico = () => gravado.filter((g) => g[1] === "auditoria");
+const principais = () => gravado.filter((g) => g[1] !== "auditoria");
 instalarPorteiro(fs, ctx);
 instalarPorteiro(fs, ctx); // instalar duas vezes não embrulha de novo
 const fvs = new Col("fvs");
 await fvs.doc("f1").set({ numero: "1" }, { merge: true });
-ok(gravado[0][2].updatedAt === AGORA && gravado[0][2].updatedByEmail === "eu@sig" && gravado[0][3].merge, "set carimba e mantém as opções");
+let g = principais();
+ok(g[0][2].updatedAt === AGORA && g[0][2].updatedByEmail === "eu@sig" && g[0][3].merge, "set carimba e mantém as opções");
+ok(historico().length === 0, "histórico: gravar o que já estava igual não vira linha");
 await fvs.doc("f1").update({ fechado: true });
-ok(gravado[1][2].updatedAt === AGORA, "update carimba");
-await new Col("tarefas").add({ titulo: "x" });
-ok(gravado[2][2].atualizadoEm === AGORA && gravado[2][2].atualizadoPor === "eu@sig", "add carimba");
+g = principais(); let h = historico();
+ok(g[1][2].updatedAt === AGORA, "update carimba");
+ok(h.length === 1 && h[0][2].entradas.uniao[0].acao === "alterou" && h[0][2].entradas.uniao[0].campos.join() === "fechado" && h[0][3].merge, "histórico: 'alterou' com só o campo que mudou, no documento do dia");
+ok(!("atualizadoEm" in h[0][2]), "histórico não é carimbado nem passa pelo porteiro");
+const ref = await new Col("tarefas").add({ titulo: "x" });
+g = principais(); h = historico();
+ok(g[2][0] === "set" && g[2][2].atualizadoEm === AGORA && g[2][2].atualizadoPor === "eu@sig" && /^auto/.test(ref.id), "add carimba (grava num id novo)");
+ok(h[1][2].entradas.uniao[0].acao === "criou" && h[1][2].entradas.uniao[0].id === ref.id, "histórico: 'criou' já com o id do registro novo");
 const l = new Lote(); l.set(new Col("controleTecnologico").doc("n1"), { fck: 40 }, { merge: true }); l.update(fvs.doc("f2"), { a: 1 });
-ok(gravado[3][2].atualizadoEm === AGORA && gravado[3][3].merge && gravado[4][2].updatedAt === AGORA, "lote carimba set e update");
+g = principais();
+ok(g[3][2].atualizadoEm === AGORA && g[3][3].merge && g[4][2].updatedAt === AGORA, "lote carimba set e update");
 await l.commit(); await Promise.resolve();
+h = historico();
+ok(h.length === 3 && h[2][2].entradas.uniao.length === 2, "lote: uma linha por registro, gravadas juntas no commit");
 ok(pend === 0, "fila 'aguardando envio' volta a zero");
-leitura = true; let recusou = false;
+leitura = true; let recusou = false; const antes = gravado.length;
 await fvs.doc("f1").set({ a: 1 }).catch(() => { recusou = true; });
-ok(recusou && gravado.length === 5, "conta só de visualização: recusa sem gravar");
+ok(recusou && gravado.length === antes, "conta só de visualização: recusa sem gravar (nem histórico)");
+leitura = false;
+
+// linhas do histórico
+const E = (o) => entradaAuditoria(Object.assign({ colecao: "fvs", id: "f9", metodo: "set", dados: {}, merge: true, anterior: null, email: "m@sig", agoraISO: AGORA }, o));
+ok(E({ dados: { excluido: true, excluidoEm: AGORA } }).acao === "excluiu", "excluir");
+ok(E({ dados: { excluido: false }, anterior: { excluido: true } }).acao === "restaurou", "restaurar");
+ok(E({ metodo: "delete" }).acao === "apagou", "apagar");
+ok(E({ merge: false, dados: { numero: "1" } }).acao === "criou", "set sem merge de registro que o aparelho não tinha = criou");
+ok(E({ colecao: "planilhasModelo", dados: { a: 1 } }) === null && E({ colecao: "auditoria", dados: { a: 1 } }) === null, "coleções fora do histórico");
+ok(E({ dados: Object.fromEntries(Array.from({ length: 40 }, (_, i) => ["c" + i, i])) }).campos.length === 25, "no máximo 25 campos por linha");
+ok(E({ dados: { obs: "", r7: null, lista: [], fck: 40 }, anterior: { fck: 40 } }) === null, "campo que só passou de vazio para em branco não conta como alteração");
+ok(diaAuditoria(new Date(2026, 9, 9, 23, 59)) === "2026-10-09", "dia do histórico pela data local");
 
 // sincronização
 ok(desdeQuando("2026-10-08T12:00:00.000Z") === "2026-10-06T12:00:00.000Z", "pede alterações com 2 dias de folga");
