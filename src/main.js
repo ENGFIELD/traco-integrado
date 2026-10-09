@@ -11,6 +11,7 @@ import "firebase/compat/auth";
 import "firebase/compat/firestore";
 import { instalarPorteiro, dadosExclusao, ativo } from "./modulos/dados/porteiro.js";
 import { escutarColecao } from "./modulos/dados/sincronia.js";
+import { iniciarEquipe, renderViewEquipe, perfilDe as perfilDaEquipe, soVisualiza, cadastroDe, recebemTarefas } from "./modulos/dados/equipe.js";
 import { iniciarTelasDados, renderViewHistorico, renderViewLixeira, verHistoricoDe } from "./modulos/dados/telas-dados.js";
 import { DEFAULT_OBRA, FVS_CHECKLIST, FVS_ELEMENTOS, FVS_TIPOS, TEMPO_MAX_MIN, getFvsTipo } from "./modulos/fvs/catalogo.js";
 import { diffMin, dowBR, escapeHtml, fmtDateBR, fmtDateTimeBR, fmtMin, lastUpdatedHtml, nowISO, rastRotulo, todayISO } from "./modulos/comum/formatos.js";
@@ -110,6 +111,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
 (function(){
   "use strict";
   // v1.29: liga os módulos separados do main.js ao estado do app (só leitura, sempre o valor atual)
+  iniciarEquipe({ db: function(){ return dbf; }, equipe: function(){ return equipeMap; }, email: function(){ return currentUserEmail||""; },
+    agora: function(){ return nowISO(); }, criarLogin: criarLogin });
   iniciarTelasDados({ db: function(){ return dbf; }, get todos(){ return todosPorColecao; }, get ctMap(){ return ctMap; }, get tarefasMap(){ return tarefasMap; },
     somenteLeitura: function(){ return somenteLeitura; }, email: function(){ return currentUserEmail||""; }, agora: function(){ return nowISO(); },
     switchView: function(v){ switchView(v); },
@@ -559,6 +562,24 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     sel.value = vals.indexOf(current)!==-1 ? current : "";
     filters.pavimento = sel.value;
   }
+  // v1.31: cria o login de uma pessoa nova sem sair da conta de quem está
+  // usando (numa "segunda instância" do Firebase) e manda o e-mail para ela
+  // criar a própria senha.
+  function criarLogin(email){
+    var app2 = firebase.apps.filter(function(a){ return a.name==="cadastro"; })[0] || firebase.initializeApp(firebaseConfig, "cadastro");
+    var a2 = app2.auth();
+    if((location.hostname==="localhost" || location.hostname==="127.0.0.1") && !a2.__emu){ a2.useEmulator("http://127.0.0.1:9099"); a2.__emu = true; }
+    var bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
+    var senha = Array.from(bytes).map(function(b){ return ("0"+b.toString(16)).slice(-2); }).join("") + "Aa1!";
+    return a2.createUserWithEmailAndPassword(email, senha)
+      .then(function(){ return a2.signOut(); })
+      .then(function(){ return auth.sendPasswordResetEmail(email); })
+      .then(function(){ return "Login criado: a pessoa recebeu um e-mail para criar a senha."; })
+      .catch(function(e){
+        if(e && e.code==="auth/email-already-in-use") return auth.sendPasswordResetEmail(email).then(function(){ return "Essa pessoa já tinha login — mandei o e-mail para ela criar uma senha nova."; });
+        throw e;
+      });
+  }
   // v1.30: link "Ver histórico" no pé da ficha já salva
   function verHistoricoHtml(col, id){
     return id ? '<div class="last-updated"><button type="button" class="linkish" data-ver-historico="'+escapeHtml(col+"|"+id)+'">Ver histórico de alterações</button></div>' : "";
@@ -616,10 +637,19 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
                      de assinaturas, assinar em lote, tarefas para estagiários)
        qualidade   — Jessica: só visualiza FVS, controle tecnológico e NCs
      A permissão de gravar continua nas regras do banco (Jessica: só leitura). */
-  var PERFIS_EMAIL = { "matheus.alves@sig.eng.br":"admin", "suellen.alves@sig.eng.br":"engenharia", "jessica.araujo@sig.eng.br":"qualidade", "alice.soares@sig.eng.br":"estagiario" };
-  var ESTAGIARIOS = [{ email:"matheus.alves@sig.eng.br", nome:"Matheus Alves" }, { email:"alice.soares@sig.eng.br", nome:"Alice Soares" }];
+  // v1.31: perfis vêm do cadastro da equipe no banco (equipe/{e-mail}, tela Equipe);
+  // enquanto o cadastro não existe, vale a lista de src/modulos/dados/equipe.js
+  var equipeMap = new Map(), unsubEquipe = null;
   var perfilAtual = "estagiario";
-  function perfilDe(email){ return PERFIS_EMAIL[String(email||"").toLowerCase()] || "estagiario"; }
+  function perfilDe(email){ return perfilDaEquipe(email, equipeMap); }
+  function aplicarPerfil(){
+    var antes = perfilAtual + "|" + somenteLeitura;
+    somenteLeitura = cadastroDe(currentUserEmail, equipeMap) ? (soVisualiza(currentUserEmail, equipeMap) || ehSomenteLeitura("")) : ehSomenteLeitura(currentUserEmail);
+    document.body.classList.toggle("somente-leitura", somenteLeitura);
+    perfilAtual = perfilDe(currentUserEmail);
+    document.body.setAttribute("data-perfil", perfilAtual);
+    return antes !== perfilAtual + "|" + somenteLeitura;
+  }
   function verEngenharia(){ return perfilAtual==="engenharia" || perfilAtual==="admin"; }
 
   var filtrosEng = { tipo:"todos", periodo:"30", sel:{} };
@@ -677,7 +707,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '<div class="eng-item-ac"><button type="button" class="btn small" data-eng-abrir="'+escapeHtml(k)+'">Abrir</button>'
         + '<button type="button" class="btn small primary" data-eng-assinar="'+escapeHtml(k)+'"'+(minhaAssinatura && minhaAssinatura.papel==="engenheiro" ? "" : " disabled")+'>Assinar</button></div></div>';
     }).join("") : '<div class="dash-vazio">Nada pendente de assinatura neste filtro. 👍</div>';
-    var opcoesPara = '<option value="estagiarios">Todos os estagiários</option>' + ESTAGIARIOS.map(function(e){ return '<option value="'+escapeHtml(e.email||e.nome)+'">'+escapeHtml(e.nome)+'</option>'; }).join("");
+    var opcoesPara = '<option value="estagiarios">Todos os estagiários</option>' + recebemTarefas(equipeMap).map(function(e){ return '<option value="'+escapeHtml(e.email||e.nome)+'">'+escapeHtml(e.nome)+'</option>'; }).join("");
     var tarefaLi = function(t){
       var venc = t.status!=="feita" && t.prazo && t.prazo < hoje;
       return '<div class="eng-tarefa'+(t.status==="feita"?" feita":"")+'"><div><b>'+escapeHtml(t.titulo)+'</b><small>Para: '+escapeHtml(t.paraNome||"estagiários")
@@ -802,7 +832,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div><button type="button" class="btn small primary" data-tarefa-feita="'+escapeHtml(t._id)+'">✓ Feita</button></div>'; }).join("")
       + '</div>';
   }
-  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira" };
+  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira", equipe:"view-equipe" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -822,6 +852,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     else if(nome==="cronograma") renderViewCronograma(document.getElementById("view-cronograma"));
     else if(nome==="historico") renderViewHistorico();
     else if(nome==="lixeira") renderViewLixeira();
+    else if(nome==="equipe") renderViewEquipe();
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -2122,10 +2153,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("app-root").hidden = false;
     document.getElementById("user-name").textContent = user.displayName || user.email || "";
     currentUserEmail = user.email || "";
-    somenteLeitura = ehSomenteLeitura(currentUserEmail);
-    document.body.classList.toggle("somente-leitura", somenteLeitura);
-    perfilAtual = perfilDe(currentUserEmail);
-    document.body.setAttribute("data-perfil", perfilAtual);
+    aplicarPerfil();
+    // v1.31: cadastro da equipe (poucos registros) — perfil e "só visualiza" vêm daqui
+    if(unsubEquipe) unsubEquipe();
+    unsubEquipe = dbf.collection("equipe").onSnapshot(function(snap){
+      equipeMap = new Map(); snap.docs.forEach(function(d){ equipeMap.set(d.id, d.data()); });
+      if(aplicarPerfil()) render();
+      var v = document.getElementById("view-equipe"); if(v && !v.hidden) renderViewEquipe();
+    }, function(err){ console.warn("equipe:", err && err.code); });
     // v1.11: sem faixa de aviso (quebrava o layout); a conta só de visualização
     // vê tudo igual aos outros, só sem os botões de criar/alterar/apagar.
     definirUsuario(currentUserEmail);
@@ -2165,6 +2200,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(unsubCronEtapas){ unsubCronEtapas(); unsubCronEtapas=null; }
     if(unsubAssin){ unsubAssin(); unsubAssin=null; } minhaAssinatura = null;
     if(unsubTarefas){ unsubTarefas(); unsubTarefas=null; } tarefasMap = new Map();
+    if(unsubEquipe){ unsubEquipe(); unsubEquipe=null; } equipeMap = new Map();
     fvsMap=new Map(); rastMap=new Map(); ctMap=new Map();
     currentUserEmail="";
   }
@@ -4245,6 +4281,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-cronograma").addEventListener("click", function(){ switchView("cronograma"); });
     document.getElementById("btn-view-historico").addEventListener("click", function(){ switchView("historico"); });
     document.getElementById("btn-view-lixeira").addEventListener("click", function(){ switchView("lixeira"); });
+    document.getElementById("btn-view-equipe").addEventListener("click", function(){ switchView("equipe"); });
     document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
