@@ -15,9 +15,9 @@ let ctx = null;
  *         somenteLeitura, email, agora, abrir(col,id), switchView } */
 export function iniciarTelasDados(c) { ctx = c; }
 
-const AREAS = { fvs: "FVS", rastreabilidade: "Rastreabilidade", controleTecnologico: "Controle tecnológico", entregasAco: "Aço", tarefas: "Tarefas", plantas: "Plantas", cronogramas: "Cronograma", assinaturas: "Assinaturas" };
+const AREAS = { fvs: "FVS", rastreabilidade: "Rastreabilidade", controleTecnologico: "Controle tecnológico", entregasAco: "Aço", tarefas: "Tarefas", plantas: "Plantas", cronogramas: "Cronograma", assinaturas: "Assinaturas", equipe: "Equipe" };
 const ACOES = { criou: "criou", alterou: "alterou", excluiu: "excluiu", restaurou: "restaurou", apagou: "apagou" };
-const CAMPOS = { fechado: "situação (aberta/fechada)", assinaturas: "assinaturas", naoConformidades: "não conformidades", linhas: "betonadas", checklist: "checklist", elementos: "elementos", travada: "trava da assinatura", revisao: "revisão", numero: "número", inspecionadoPor: "inspeção", mapeamento: "mapeamento", mapeamentosExtras: "plantas do mapeamento", status: "situação", concluida: "concluída", engenheiro: "engenheiro", local: "local", volume: "volume", slump: "slump", obs: "observação", observacoes: "observações", pecas: "peças" };
+const CAMPOS = { fechado: "situação (aberta/fechada)", assinaturas: "assinaturas", naoConformidades: "não conformidades", linhas: "betonadas", checklist: "checklist", elementos: "elementos", travada: "trava da assinatura", revisao: "revisão", numero: "número", inspecionadoPor: "inspeção", mapeamento: "mapeamento", mapeamentosExtras: "plantas do mapeamento", perfil: "perfil", ativo: "acesso", status: "situação", concluida: "concluída", engenheiro: "engenheiro", local: "local", volume: "volume", slump: "slump", obs: "observação", observacoes: "observações", pecas: "peças" };
 
 export function nomePessoa(email) {
   const u = String(email || "").split("@")[0];
@@ -37,6 +37,7 @@ export function rotulo(col, id) {
   if (col === "tarefas") { const x = ctx.tarefasMap && ctx.tarefasMap.get(id); return "Tarefa · " + ((x && x.titulo) || id); }
   if (col === "cronogramas") return "Cronograma (" + id + ")";
   if (col === "assinaturas") return "Assinatura cadastrada";
+  if (col === "equipe") return "Equipe · " + nomePessoa(id);
   return col + " (" + id + ")";
 }
 

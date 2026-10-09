@@ -12,11 +12,33 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // v1.9: contas só de visualização (leem tudo, não gravam nada). Enquanto
-    // os papéis da v2 (firestore.v2.rules) não entram em produção, a lista
-    // fica aqui. Para liberar edição, tire o e-mail da lista e publique.
+    // v1.31: cadastro da equipe no banco (equipe/{e-mail}, tela Equipe do app).
+    // Quem NÃO está no cadastro continua como antes (edita). O cadastro serve
+    // para deixar alguém só visualizando (perfil "qualidade") ou desativar.
+    function emailUsuario() {
+      return request.auth.token.get('email', '').lower();
+    }
+    function caminhoEquipe() {
+      return /databases/$(database)/documents/equipe/$(emailUsuario());
+    }
+    function cadastrado() {
+      return exists(caminhoEquipe());
+    }
+    function cadastro() {
+      return get(caminhoEquipe()).data;
+    }
+    // v1.9: contas só de visualização. Sem cadastro, vale a lista antiga
+    // (Jessica); com cadastro, vale o perfil/ativo de lá.
     function somenteLeitura() {
-      return request.auth.token.get('email', '').lower() in ['jessica.araujo@sig.eng.br'];
+      return emailUsuario() != 'matheus.alves@sig.eng.br' && (
+        (cadastrado() && (cadastro().get('perfil', '') == 'qualidade' || cadastro().get('ativo', true) == false))
+        || (!cadastrado() && emailUsuario() in ['jessica.araujo@sig.eng.br']));
+    }
+    // administrador: o Matheus sempre (para nunca ficar trancado para fora)
+    // e quem tiver perfil admin ativo no cadastro
+    function ehAdmin() {
+      return request.auth != null && (emailUsuario() == 'matheus.alves@sig.eng.br'
+        || (cadastrado() && cadastro().get('perfil', '') == 'admin' && cadastro().get('ativo', true) != false));
     }
     function podeEditar() {
       return request.auth != null && !somenteLeitura();
@@ -108,6 +130,16 @@ service cloud.firestore {
     match /tarefas/{docId} {
       allow read: if request.auth != null;
       allow create, update: if podeEditar();
+      allow delete: if false;
+    }
+
+    // v1.31: equipe — todos leem; só o administrador inclui/altera; ninguém apaga
+    match /equipe/{email} {
+      allow read: if request.auth != null;
+      allow create, update: if ehAdmin()
+        && email == email.lower()
+        && request.resource.data.email == email
+        && request.resource.data.perfil in ['admin', 'engenharia', 'estagiario', 'qualidade'];
       allow delete: if false;
     }
 

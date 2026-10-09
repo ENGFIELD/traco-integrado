@@ -772,3 +772,12 @@ body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
 @media (max-width: 640px) { .hist-area { display: none; } .hist-filtros select { max-width: none; flex: 1 1 140px; } }
 .hist-frase { display: block; line-height: 1.4; }
 .hist-frase .linkish { text-align: left; font-weight: 600; }
+
+/* v1.31: equipe */
+.eq-item select { max-width: 200px; }
+.eq-item.inativo .hist-tx { opacity: .55; }
+.eq-nova { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; }
+.eq-nova .btn { align-self: flex-start; }
+.eq-login { display: flex; gap: 8px; align-items: center; font-size: 13.5px; }
+@media (max-width: 640px) { .eq-item { flex-wrap: wrap; } .eq-item .hist-tx { flex-basis: 100%; } .eq-item select { flex: 1 1 auto; max-width: none; } }
+.eq-nova .hint:empty { display: none; }

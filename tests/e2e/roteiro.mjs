@@ -40,6 +40,7 @@ const usuario = async (email, nome) => {
 const uidMatheus = await usuario("matheus.alves@sig.eng.br", "Matheus Alves");
 const uidSuellen = await usuario("suellen.alves@sig.eng.br", "Suellen Alves");
 await usuario("jessica.araujo@sig.eng.br", "Jessica Araujo");
+await usuario("alice.soares@sig.eng.br", "Alice Soares");
 const linha = (seq, nf, pecas) => ({ seq, notaFiscal: nf, betoneira: "", lacre: "", volBetoneira: "8", volAcumulado: "", fornecedor: "Polimix", nSerieCP: "", nCPs: "2", slump: "12", saidaUsina: "08:00", chegadaObra: "08:30", lancInicial: "08:40", lancFinal: "09:10", aguaFolga: "", aguaLanc: "", pecas });
 await db.doc("fvs/f1").set({ tipo: "fvs04", codigo: "FVS 04", numero: "14", pavimentos: ["3º Embasamento"], dataAbertura: "2026-09-20", elementos: {}, checklist: {}, naoConformidades: [{ descricao: "Prumo do pilar P7 fora da tolerância", correcao: "", concluida: false, dataConclusao: "", dataRegistro: "2026-09-21", anexos: [] }], fechado: true, dataFechamento: "2026-09-25", updatedAt: T });
 await db.doc("fvs/f3").set({ tipo: "fvs04", codigo: "FVS 04", numero: "30", pavimentos: ["6º Pavimento Tipo"], dataAbertura: "2026-10-03", elementos: {}, checklist: {}, naoConformidades: [], updatedAt: T });
@@ -57,7 +58,7 @@ async function entrar(email, viewport) {
   const ctx = await navegador.newContext({ viewport: viewport || { width: 1200, height: 900 }, serviceWorkers: "block", acceptDownloads: true });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => erros.push(email + ": " + e.message));
-  p.on("dialog", (d) => d.accept());
+  p.on("dialog", (d) => d.accept().catch(() => {})); // o aviso pode chegar quando a janela já está fechando
   await p.goto(URL_APP);
   await p.fill("#login-email", email); await p.fill("#login-password", SENHA); await p.click("#login-submit");
   await p.waitForSelector("#app-root:not([hidden])", { timeout: 30000 });
@@ -151,6 +152,26 @@ try {
   const soDela = await m.$$eval("#view-historico .hist-item", (l) => l.map((x) => x.textContent));
   ok(soDela.length >= 1 && soDela.every((t) => /Rastreabilidade/.test(t)), "“Ver histórico” da ficha mostra só as alterações dela");
   await m.context().close();
+
+  // 4d) Equipe: guardar a equipe no banco, incluir pessoa (com login) e deixar a Alice só visualizando
+  const eqm = await entrar("matheus.alves@sig.eng.br");
+  await irPara(eqm, "btn-view-equipe");
+  await eqm.click("[data-eq-salvar-inicial]");
+  ok(await esperar(async () => (await db.collection("equipe").get()).size === 4), "Equipe: a lista de hoje vai para o banco (4 pessoas)");
+  await eqm.waitForSelector("#eq-nome", { timeout: 8000 });
+  await eqm.fill("#eq-nome", "Bruno Teste"); await eqm.fill("#eq-email", "Bruno.Teste@sig.eng.br"); await eqm.selectOption("#eq-perfil", "estagiario");
+  await eqm.click("[data-eq-incluir]");
+  ok(await esperar(async () => (await db.doc("equipe/bruno.teste@sig.eng.br").get()).exists), "Equipe: pessoa nova incluída (e-mail em minúsculas)");
+  ok(await esperar(async () => { try { await admin.auth().getUserByEmail("bruno.teste@sig.eng.br"); return true; } catch (e) { return false; } }), "Equipe: login da pessoa nova criado (e o Matheus continua logado)");
+  ok(await eqm.evaluate(() => window.firebase.auth().currentUser.email) === "matheus.alves@sig.eng.br", "quem criou o login não foi desconectado");
+  await eqm.selectOption('[data-eq-perfil="alice.soares@sig.eng.br"]', "qualidade");
+  ok(await esperar(async () => (await db.doc("equipe/alice.soares@sig.eng.br").get()).data().perfil === "qualidade"), "Equipe: perfil da Alice trocado para qualidade");
+  await eqm.context().close();
+  const al = await entrar("alice.soares@sig.eng.br");
+  ok(await esperar(() => al.evaluate(() => document.body.classList.contains("somente-leitura"))), "Alice (qualidade) entra só visualizando — sem versão nova");
+  const alRec = await al.evaluate(() => window.firebase.firestore().collection("tarefas").doc("t1").update({ titulo: "y" }).then(() => false, (e) => e.code === "permission-denied"));
+  ok(alRec, "e o banco também recusa a gravação dela");
+  await al.context().close();
 
   // 5) Suellen abre no Painel da engenharia
   const s = await entrar("suellen.alves@sig.eng.br");

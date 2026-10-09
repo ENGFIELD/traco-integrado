@@ -113,3 +113,36 @@ test("lixeira: excluir e restaurar FVS aberta; travada não vai para a lixeira",
   await assertSucceeds(m.doc("fvs/lx2").set({ numero: "10", travada: true, revisao: 0 }));
   await assertFails(m.doc("fvs/lx2").set({ excluido: true }, { merge: true }));
 });
+
+// v1.31: equipe no banco (tela Equipe)
+test("equipe: só o administrador inclui/altera; ninguém apaga; perfil inválido recusado", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("equipe/alice.soares@sig.eng.br").set({ email: "alice.soares@sig.eng.br", nome: "Alice", perfil: "estagiario", ativo: true }));
+  await assertFails(m.doc("equipe/x@sig.eng.br").set({ email: "x@sig.eng.br", nome: "X", perfil: "chefe" }));
+  await assertFails(m.doc("equipe/y@sig.eng.br").set({ email: "outro@sig.eng.br", nome: "Y", perfil: "estagiario" }));
+  await assertFails(m.doc("equipe/alice.soares@sig.eng.br").delete());
+  const a = db("alice.soares@sig.eng.br");
+  await assertSucceeds(a.doc("equipe/alice.soares@sig.eng.br").get());
+  await assertFails(a.doc("equipe/alice.soares@sig.eng.br").set({ perfil: "admin" }, { merge: true }));
+  await assertFails(db("sem.cadastro@sig.eng.br").doc("equipe/z@sig.eng.br").set({ email: "z@sig.eng.br", nome: "Z", perfil: "admin" }));
+});
+test("equipe: perfil qualidade ou desativado só visualiza; quem não está no cadastro segue editando", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("equipe/beto@sig.eng.br").set({ email: "beto@sig.eng.br", nome: "Beto", perfil: "qualidade", ativo: true }));
+  await assertSucceeds(m.doc("equipe/caio@sig.eng.br").set({ email: "caio@sig.eng.br", nome: "Caio", perfil: "estagiario", ativo: false }));
+  await assertFails(db("beto@sig.eng.br").doc("fvs/eq1").set({ y: 1 }));
+  await assertFails(db("caio@sig.eng.br").doc("fvs/eq1").set({ y: 1 }));
+  await assertSucceeds(db("novo@sig.eng.br").doc("fvs/eq1").set({ y: 1 }));
+  // Jessica cadastrada como estagiária passa a editar (o cadastro manda)
+  await assertSucceeds(m.doc("equipe/jessica.araujo@sig.eng.br").set({ email: "jessica.araujo@sig.eng.br", nome: "Jessica", perfil: "estagiario", ativo: true }));
+  await assertSucceeds(db("jessica.araujo@sig.eng.br").doc("fvs/eq2").set({ y: 1 }));
+  await assertSucceeds(m.doc("equipe/jessica.araujo@sig.eng.br").set({ perfil: "qualidade" }, { merge: true }));
+  await assertFails(db("jessica.araujo@sig.eng.br").doc("fvs/eq3").set({ y: 1 }));
+});
+test("equipe: outro administrador do cadastro pode alterar; administrador desativado não", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("equipe/dani@sig.eng.br").set({ email: "dani@sig.eng.br", nome: "Dani", perfil: "admin", ativo: true }));
+  await assertSucceeds(db("dani@sig.eng.br").doc("equipe/eva@sig.eng.br").set({ email: "eva@sig.eng.br", nome: "Eva", perfil: "estagiario", ativo: true }));
+  await assertSucceeds(m.doc("equipe/dani@sig.eng.br").set({ ativo: false }, { merge: true }));
+  await assertFails(db("dani@sig.eng.br").doc("equipe/eva@sig.eng.br").set({ perfil: "admin" }, { merge: true }));
+});

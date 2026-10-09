@@ -59,7 +59,7 @@ export function ativo(dados) {
 // Cada gravação vira uma linha no histórico do dia: auditoria/AAAA-MM-DD,
 // lista "entradas" que só cresce. Um documento por dia (e não um por
 // alteração) para o histórico e o backup lerem pouco do banco.
-export const COLECOES_AUDITADAS = ["fvs", "rastreabilidade", "controleTecnologico", "entregasAco", "tarefas", "plantas", "cronogramas", "assinaturas"];
+export const COLECOES_AUDITADAS = ["fvs", "rastreabilidade", "controleTecnologico", "entregasAco", "tarefas", "plantas", "cronogramas", "assinaturas", "equipe"];
 const CAMPOS_IGNORADOS = new Set(["updatedAt", "updatedByEmail", "atualizadoEm", "atualizadoPor", "excluido", "excluidoEm", "excluidoPor", "restauradoEm", "restauradoPor", "editadoNoSite", "travadaEm", "travadaPor"]);
 const vazio = (x) => x === undefined || x === null || x === "" || (Array.isArray(x) && !x.length);
 const igual = (a, b) => { if (vazio(a) && vazio(b)) return true; try { return JSON.stringify(a) === JSON.stringify(b); } catch (e) { return false; } };
