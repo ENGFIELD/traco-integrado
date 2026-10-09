@@ -3,7 +3,8 @@
 #     merge assim que os testes passam — autorização do dono, ver CLAUDE.md);
 #  2) manual: Actions → Run workflow, digitando PUBLICAR.
 # Antes de publicar: testes, build e BACKUP do
-# banco (guardado como anexo privado do workflow por 30 dias). Depois marca a
+# banco (guardado como anexo privado do workflow por 90 dias; no máximo um a
+# cada 20 h — ver backup-diario.yml). Depois marca a
 # versão com uma tag producao-AAAA-MM-DD-HHMM para dar para voltar.
 name: Publicar em produção
 
@@ -23,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # v1.30: ver se já existe backup do dia
 
 concurrency:
   group: producao
@@ -70,15 +72,31 @@ jobs:
           printf '%s' "$CHAVE" > "$RUNNER_TEMP/chave.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/chave.json" >> "$GITHUB_ENV"
 
+      # v1.30: o backup lê o banco inteiro. Para não gastar a cota diária grátis
+      # em dias de muitas publicações, ele roda no máximo uma vez a cada 20 h:
+      # se já existe um backup recente (o diário automático ou o de outra
+      # publicação), esta publicação usa aquele.
+      - name: Já existe backup recente?
+        id: backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LIMITE=$(date -u -d '20 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENTE=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            --jq "[.artifacts[] | select((.name|startswith(\"backup-firestore\")) and (.expired|not) and .created_at > \"$LIMITE\")] | length" || echo 0)
+          echo "Backups nas últimas 20 h: $RECENTE"
+          if [ "${RECENTE:-0}" -gt 0 ]; then echo "fazer=false" >> "$GITHUB_OUTPUT"; else echo "fazer=true" >> "$GITHUB_OUTPUT"; fi
       - name: Backup do banco antes de publicar
+        if: steps.backup.outputs.fazer == 'true'
         run: |
           cd scripts && npm ci --omit=dev && cd ..
           node scripts/backup-firestore.js --key "$GOOGLE_APPLICATION_CREDENTIALS"
       - uses: actions/upload-artifact@v4
+        if: steps.backup.outputs.fazer == 'true'
         with:
           name: backup-firestore
           path: backups/firestore_*.json
-          retention-days: 30
+          retention-days: 90
 
       - name: Publicar site
         run: npx --yes firebase-tools@13 deploy --only hosting --project traco-integrado-sig --non-interactive

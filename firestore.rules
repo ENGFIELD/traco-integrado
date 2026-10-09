@@ -111,6 +111,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // v1.30: histórico de alterações — um documento por dia (AAAA-MM-DD) com
+    // a lista "entradas", que só cresce. Ninguém altera nem apaga o que já
+    // foi registrado.
+    match /auditoria/{dia} {
+      allow read: if request.auth != null;
+      allow create: if podeEditar()
+        && request.resource.data.keys().hasOnly(['entradas'])
+        && request.resource.data.entradas is list;
+      allow update: if podeEditar()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['entradas'])
+        && request.resource.data.entradas is list
+        && request.resource.data.entradas.size() >= resource.data.entradas.size()
+        && request.resource.data.entradas.hasAll(resource.data.entradas);
+      allow delete: if false;
+    }
+
     // Bloqueia qualquer outra coleção não prevista acima por padrão.
     match /{document=**} {
       allow read, write: if false;

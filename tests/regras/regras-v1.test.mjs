@@ -89,3 +89,27 @@ test("revisões guardadas: cria, não altera nem apaga", async () => {
   await assertFails(m.doc("fvsRevisoes/r1").delete());
   await assertFails(db("jessica.araujo@sig.eng.br").doc("fvsRevisoes/r2").set({ x: 1 }));
 });
+
+// v1.30: histórico de alterações (auditoria/AAAA-MM-DD)
+test("histórico: equipe acrescenta linhas; ninguém altera, tira ou apaga; Jessica só lê", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  const e1 = { em: "2026-10-09T10:00:00Z", por: "matheus.alves@sig.eng.br", col: "fvs", id: "a", acao: "alterou", campos: ["fechado"] };
+  const e2 = Object.assign({}, e1, { em: "2026-10-09T11:00:00Z" });
+  await assertSucceeds(m.doc("auditoria/2026-10-09").set({ entradas: [e1] }, { merge: true }));
+  await assertSucceeds(m.doc("auditoria/2026-10-09").set({ entradas: [e1, e2] }, { merge: true }));
+  await assertFails(m.doc("auditoria/2026-10-09").set({ entradas: [e2] }));             // tirar linha
+  await assertFails(m.doc("auditoria/2026-10-09").set({ entradas: [Object.assign({}, e1, { por: "outro" }), e2] })); // mudar linha
+  await assertFails(m.doc("auditoria/2026-10-09").set({ entradas: [e1, e2], extra: 1 }));
+  await assertFails(m.doc("auditoria/2026-10-09").delete());
+  const j = db("jessica.araujo@sig.eng.br");
+  await assertSucceeds(j.doc("auditoria/2026-10-09").get());
+  await assertFails(j.doc("auditoria/2026-10-10").set({ entradas: [e1] }));
+});
+test("lixeira: excluir e restaurar FVS aberta; travada não vai para a lixeira", async () => {
+  const m = db("matheus.alves@sig.eng.br");
+  await assertSucceeds(m.doc("fvs/lx").set({ numero: "9", travada: false }));
+  await assertSucceeds(m.doc("fvs/lx").set({ excluido: true, excluidoEm: "x", excluidoPor: "m", updatedAt: "x" }, { merge: true }));
+  await assertSucceeds(m.doc("fvs/lx").set({ excluido: false, restauradoEm: "y", restauradoPor: "m", updatedAt: "y" }, { merge: true }));
+  await assertSucceeds(m.doc("fvs/lx2").set({ numero: "10", travada: true, revisao: 0 }));
+  await assertFails(m.doc("fvs/lx2").set({ excluido: true }, { merge: true }));
+});

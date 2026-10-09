@@ -1,0 +1,48 @@
+# v1.30: backup diário do banco (fase B4 do plano de arquitetura).
+# Roda sozinho todo dia de madrugada (03:47 de Brasília), lê o banco inteiro
+# (somente leitura) e guarda o arquivo como anexo privado do workflow por
+# 90 dias (o máximo que o GitHub guarda). A publicação reaproveita este
+# backup se ele tiver menos de 20 h, para não gastar a cota grátis duas vezes.
+# Também dá para rodar à mão: Actions → Backup diário do banco → Run workflow.
+name: Backup diário do banco
+
+on:
+  schedule:
+    - cron: "47 6 * * *" # 06:47 UTC = 03:47 em Brasília (logo depois da cota grátis renovar)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/package-lock.json
+      - name: Chave do Firebase (só durante este workflow)
+        env:
+          CHAVE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$CHAVE" > "$RUNNER_TEMP/chave.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/chave.json" >> "$GITHUB_ENV"
+      - name: Backup do banco
+        run: |
+          cd scripts && npm ci --omit=dev && cd ..
+          node scripts/backup-firestore.js --key "$GOOGLE_APPLICATION_CREDENTIALS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-firestore-diario
+          path: backups/firestore_*.json
+          retention-days: 90
+      - name: Apagar a chave
+        if: always()
+        run: rm -f "$RUNNER_TEMP/chave.json"
