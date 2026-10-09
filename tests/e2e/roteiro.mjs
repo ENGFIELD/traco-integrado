@@ -197,6 +197,7 @@ try {
   ok(await esperar(async () => ((await db.doc("fvs/f1").get()).data().assinaturas || []).length === 2), "estagiário assina a ficha travada (2 assinaturas)");
   // 5c) estagiário assina em lote (inspeção/coleta) — antes o botão ficava desligado
   await m2.click("#modal-close").catch(() => {}); await m2.waitForTimeout(300);
+  ok(await m2.evaluate(() => getComputedStyle(document.getElementById("btn-view-assinar")).display === "none"), "administrador não vê “Assinar em lote” no menu (usa o Painel da engenharia)");
   await irPara(m2, "btn-view-assinar");
   await m2.selectOption("#eng-periodo", "todas"); await m2.waitForTimeout(300);
   ok(await m2.$('[data-eng-sel="fvs|f3"]') !== null && await m2.$('[data-eng-sel="rastreabilidade|r1"], [data-eng-sel="rast|r1"]') !== null && await m2.$('[data-eng-sel="fvs|f1"]') === null,
