@@ -115,7 +115,11 @@ jobs:
         run: npx --yes firebase-tools@13 emulators:exec --config firebase.test.json --only firestore --project demo-traco-regras-v1 "node --test tests/regras/regras-v1.test.mjs"
       - name: Publicar regras do banco
         if: steps.regras.outputs.publicar == 'true'
-        run: node scripts/publicar-regras.js
+        # instala as ferramentas dos scripts aqui também: quando o backup do dia
+        # é reaproveitado, o passo do backup (que instalava) não roda (v1.30)
+        run: |
+          cd scripts && npm ci --omit=dev && cd ..
+          node scripts/publicar-regras.js
 
       - name: Marcar a versão publicada
         run: |
