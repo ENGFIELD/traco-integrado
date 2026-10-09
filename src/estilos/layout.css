@@ -782,3 +782,5 @@ body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
 @media (max-width: 640px) { .eq-item { flex-wrap: wrap; } .eq-item .hist-tx { flex-basis: 100%; } .eq-item select { flex: 1 1 auto; max-width: none; } }
 .eq-nova .hint:empty { display: none; }
 body[data-perfil="qualidade"] .so-assinar { display: none !important; }
+/* v1.33: quem tem o Painel da engenharia (admin) assina em lote por lá — o item do menu fica só para os estagiários */
+body[data-perfil="admin"] .so-assinar { display: none !important; }

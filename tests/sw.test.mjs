@@ -29,5 +29,5 @@ ok(await pedir("http://x/api", { method: "POST" }) === "IGNORADO", "POST não pa
 ok(await pedir("http://x/__/firebase/init.json") === "IGNORADO", "/__/ do Hosting ignorado");
 lojas.set("traco-v1.16-assets", new Map()); lojas.set("traco-v1.1-assets", new Map());
 await new Promise((r) => ouvintes.activate({ waitUntil: (p) => p.then(r) }));
-ok(!lojas.has("traco-v1.31-assets") && !lojas.has("traco-v1.1-assets") && lojas.has("traco-v1.32-assets"), "caches de versões antigas são limpos");
+ok(!lojas.has("traco-v1.32-assets") && !lojas.has("traco-v1.1-assets") && lojas.has("traco-v1.33-assets"), "caches de versões antigas são limpos");
 console.log(falhas ? falhas + " falha(s)" : "Tudo certo."); process.exit(falhas ? 1 : 0);
