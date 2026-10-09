@@ -45,6 +45,7 @@ const linha = (seq, nf, pecas) => ({ seq, notaFiscal: nf, betoneira: "", lacre: 
 await db.doc("fvs/f1").set({ tipo: "fvs04", codigo: "FVS 04", numero: "14", pavimentos: ["3º Embasamento"], dataAbertura: "2026-09-20", elementos: {}, checklist: {}, naoConformidades: [{ descricao: "Prumo do pilar P7 fora da tolerância", correcao: "", concluida: false, dataConclusao: "", dataRegistro: "2026-09-21", anexos: [] }], fechado: true, dataFechamento: "2026-09-25", updatedAt: T });
 await db.doc("fvs/f3").set({ tipo: "fvs04", codigo: "FVS 04", numero: "30", pavimentos: ["6º Pavimento Tipo"], dataAbertura: "2026-10-03", elementos: {}, checklist: {}, naoConformidades: [], updatedAt: T });
 await db.doc("rastreabilidade/r1").set({ data: "2026-10-05", blocoPav: "4º Pavimento Tipo", pavimentos: ["4º Pavimento Tipo"], obra: "Belavista Ipanema", fckSolicitado: "40 MPa", slumpAprovado: "12±2", linhas: [linha(1, "05538", "L5, V1b"), linha(2, "05544", "P1, P4")], fechado: false, responsavelColeta: "Matheus Alves", engenheiro: "Suellen Alves", createdAt: T, updatedAt: T });
+await db.doc("rastreabilidade/r2").set({ data: "2026-10-06", blocoPav: "Piso do 5º Embasamento / Piso do 2⁰ Embasamento", pavimentos: [], obra: "Belavista Ipanema", linhas: [linha(1, "06001", "L1")], fechado: false, createdAt: T, updatedAt: T });
 await db.doc("controleTecnologico/nf_05538").set({ notaRemessa: "05538", dataConcretagem: "2026-10-05", fck: 40, atualizadoEm: T });
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 await db.doc("assinaturas/" + uidSuellen).set({ nome: "Suellen Alves", papel: "engenheiro", crea: "CREA-RJ 123", email: "suellen.alves@sig.eng.br", imagem: PNG });
@@ -91,6 +92,17 @@ try {
   const r1 = await esperar(async () => ((await db.doc("rastreabilidade/r1").get()).data().linhas[0].pecas === "L5, V1b, V2"));
   const d1 = (await db.doc("rastreabilidade/r1").get()).data();
   ok(r1 && d1.updatedByEmail === "matheus.alves@sig.eng.br" && d1.updatedAt > T, "salvar rastreabilidade grava e carimba quem/quando");
+  await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+
+  // 2a) v1.34: concretagem que pega mais de um pavimento ("A / B" digitado antes vira dois)
+  await irPara(m, "btn-nav-board");
+  await m.click('.row[data-rast="r2"] [data-open-rast="r2"]'); await m.waitForSelector("#bloco-pav-caixa", { timeout: 8000 });
+  const lidos = await m.$$eval("#bloco-pav-caixa [data-pav-base]", (l) => l.map((x) => x.value));
+  ok(lidos.join("|") === "Piso do 5º Embasamento|Piso do 2º Embasamento", "ficha antiga com “/” abre com os dois pavimentos separados (" + lidos.join(" | ") + ")");
+  await m.click("#add-bloco-pav");
+  await m.selectOption("#bloco-pav-caixa .bloco-pav-linha:last-child [data-pav-base]", "Piso do 3º Embasamento");
+  await m.click("#btn-save");
+  ok(await esperar(async () => { const x = (await db.doc("rastreabilidade/r2").get()).data(); return (x.pavimentos || []).length === 3 && x.blocoPav === "Piso do 5º Embasamento / Piso do 2º Embasamento / Piso do 3º Embasamento"; }), "adicionar pavimento no topo da ficha grava os três");
   await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
 
   // 2b) exportações nos modelos oficiais (Excel) e relatório de NC (Word)

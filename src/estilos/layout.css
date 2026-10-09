@@ -784,3 +784,8 @@ body[data-perfil="admin"] .ti-bn.so-eng { display: none !important; }
 body[data-perfil="qualidade"] .so-assinar { display: none !important; }
 /* v1.33: quem tem o Painel da engenharia (admin) assina em lote por lá — o item do menu fica só para os estagiários */
 body[data-perfil="admin"] .so-assinar { display: none !important; }
+
+/* v1.34: vários pavimentos na mesma rastreabilidade */
+.bloco-pav-linha { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 6px; }
+.bloco-pav-linha .pav-sel { flex: 1 1 auto; min-width: 0; }
+.bloco-pav-rm { flex: 0 0 auto; margin-top: 6px; }
