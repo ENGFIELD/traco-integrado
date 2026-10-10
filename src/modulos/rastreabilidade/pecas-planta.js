@@ -80,13 +80,34 @@ function distBorda(x, y, pol) {
   }
   return m;
 }
+// fração da peça (polígono) que cai dentro da área — amostra pontos dentro da peça
+export function fracaoDentro(peca, area) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  peca.forEach((p) => { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); });
+  let total = 0, den = 0;
+  const N = 12;
+  for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+    const x = x0 + ((x1 - x0) * (i + 0.5)) / (N + 1), y = y0 + ((y1 - y0) * (j + 0.5)) / (N + 1);
+    if (!dentro(x, y, peca)) continue;
+    total++; if (dentro(x, y, area)) den++;
+  }
+  if (!total) { // peça muito fina: usa os cantos
+    peca.forEach((p) => { total++; if (dentro(p[0], p[1], area) || distBorda(p[0], p[1], area) < 0.002) den++; });
+  }
+  return total ? den / total : 0;
+}
 const ORDEM = (n) => (/^P/.test(n) ? 0 : /^V/.test(n) ? 1 : /^L/.test(n) ? 2 : 3);
 /**
- * Peças dentro da área (pontos 0..1). tol: o nome pode estar logo fora da linha
- * desenhada (o rótulo da viga fica ao lado dela) — padrão 0,6% da planta.
+ * Peças dentro da área (pontos 0..1). Cada peça é um nome com posição
+ * ({ n, x, y }, lido do PDF) ou uma peça desenhada à mão ({ n, pontos }).
+ * Nome: dentro ou até tol da borda (o rótulo da viga fica ao lado dela).
+ * Peça desenhada: entra se pelo menos 30% dela estiver dentro da área.
  */
 export function pecasNaArea(pontos, pecas, tol = 0.006) {
   const nomes = new Set();
-  (pecas || []).forEach((p) => { if (dentro(p.x, p.y, pontos) || distBorda(p.x, p.y, pontos) <= tol) nomes.add(p.n); });
+  (pecas || []).forEach((p) => {
+    if (p.pontos && p.pontos.length >= 3) { if (fracaoDentro(p.pontos, pontos) >= 0.3) nomes.add(p.n); return; }
+    if (dentro(p.x, p.y, pontos) || distBorda(p.x, p.y, pontos) <= tol) nomes.add(p.n);
+  });
   return [...nomes].sort((a, b) => ORDEM(a) - ORDEM(b) || a.localeCompare(b, "pt-BR", { numeric: true }));
 }

@@ -2079,9 +2079,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
                 + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
                 + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
                 + '<select class="planta-disc" data-disc-planta="'+escapeHtml(p.id)+'" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option'+(disciplinaDa(p)===d?" selected":"")+'>'+d+'</option>'; }).join("")+'</select>'
-                + (disciplinaDa(p)==="Forma" ? (Array.isArray(p.pecas) && p.pecas.length
-                    ? '<span class="planta-pecas" title="Nomes das peças lidos do PDF — preenchem as peças concretadas ao demarcar">'+p.pecas.length+' peças</span>'
-                    : '<label class="btn ghost small" title="Escolha o PDF original desta planta para o app ler os nomes das peças (P, V, L…)">Ler peças do PDF<input type="file" accept="application/pdf" hidden data-ler-pecas="'+escapeHtml(p.id)+'"></label>') : '')
+                + (disciplinaDa(p)==="Forma"
+                    ? '<button type="button" class="btn small" data-marcar-pecas="'+escapeHtml(p.id)+'" title="Desenhe cada peça (pilar, viga, laje) uma vez: ao demarcar a concretagem, as peças dentro da área entram sozinhas na BT">Marcar peças'+((p.pecasAreas||[]).length ? ' ('+p.pecasAreas.length+')' : '')+'</button>'
+                      + (Array.isArray(p.pecas) && p.pecas.length ? '<span class="planta-pecas" title="Nomes das peças lidos do PDF">'+p.pecas.length+' nomes lidos</span>' : '')
+                    : '')
                 + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
                 + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
               + '</div>';
@@ -2130,6 +2131,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     });
     var fPav = document.getElementById("planta-filtro-pav");
     if(fPav) fPav.addEventListener("change", function(){ filtroPlantas.pav = fPav.value; renderViewPlantas(); });
+    container.querySelectorAll("[data-marcar-pecas]").forEach(function(b){
+      b.addEventListener("click", function(){ abrirMarcarPecas(b.getAttribute("data-marcar-pecas")); });
+    });
     container.querySelectorAll("[data-ler-pecas]").forEach(function(inp){
       inp.addEventListener("change", async function(){
         var f = inp.files && inp.files[0]; inp.value = "";
@@ -4001,7 +4005,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         aoAbrir: function(){
           return pecasDaPlanta(d.data.mapeamento || {}).then(function(p){
             return p.length ? p.length+" peças reconhecidas nesta planta (P, V, L…): ao demarcar, as de dentro da área entram sozinhas na BT."
-              : "Esta planta não tem os nomes das peças como texto"+((d.data.mapeamento||{}).tipo==="pdf" ? "" : " (na tela Plantas, use “Ler peças do PDF”)")+" — as peças continuam sendo digitadas.";
+              : "Esta planta ainda não tem as peças marcadas — na tela Plantas, use “Marcar peças” nesta planta; até lá as peças são digitadas.";
           });
         },
         titulo: "Mapeamento — "+rastRotulo(d.data),
@@ -4217,12 +4221,41 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     redesenharSvg(m);
   }
 
+  /* ---- v1.37: peças desenhadas à mão na planta de forma (modo "peças" do editor) ---- */
+  function corPeca(n){ n = String(n||"").toUpperCase(); return /^P(?!AR)/.test(n) ? "#C0392B" : /^V/.test(n) ? "#2E5AAC" : /^L/.test(n) ? "#2E7D46" : "#B8860B"; }
+  function abrirMarcarPecas(id){
+    var p = plantasMap.get(id);
+    if(!p) return;
+    if(somenteLeitura){ alert("Sua conta é só de visualização."); return; }
+    var mp = { plantaUrl:p.url, plantaNome:p.nome, tipo:p.tipo||"imagem", pagina:1,
+      areas:(p.pecasAreas||[]).map(function(a){ return { linhaSeq:a.n, cor:corPeca(a.n), pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; }) };
+    abrirEditorMapa({
+      mapeamento: mp, modoPecas: true,
+      linhas: function(){ return []; },
+      cor: corPeca,
+      titulo: "Peças — "+(p.nome||"planta")+(p.pavimento ? " · "+p.pavimento : ""),
+      salvar: async function(){
+        try{
+          var lista = mp.areas.filter(function(a){ return a.pontos && a.pontos.length>=3; }).map(function(a){ return { n:String(a.linhaSeq), pontos:a.pontos.map(function(q){ return { x:q[0], y:q[1] }; }) }; });
+          await esperarGravacao(plantasCol.doc(id).set({ pecasAreas:lista, pecasAreasEm:nowISO() }, { merge:true }));
+          return true;
+        }catch(ex){ console.error(ex); return false; }
+      },
+      aoFechar: function(){ var v = document.getElementById("view-plantas"); if(v && !v.hidden) renderViewPlantas(); }
+    });
+  }
+
   /* ---- v1.37: peças da planta → "Peças concretadas" da BT ao demarcar ---- */
   var cachePecasPdf = {};
   async function pecasDaPlanta(mp){
     var pl = mp.plantaId ? plantasMap.get(mp.plantaId) : null;
     if(!pl) plantasMap.forEach(function(p){ if(!pl && p.url===mp.plantaUrl) pl = p; });
-    if(pl && Array.isArray(pl.pecas) && pl.pecas.length) return pl.pecas;
+    if(pl){
+      // peças desenhadas à mão valem mais que os nomes lidos do PDF
+      var desenhadas = (pl.pecasAreas||[]).map(function(a){ return { n:a.n, pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; });
+      if(desenhadas.length) return desenhadas;
+      if(Array.isArray(pl.pecas) && pl.pecas.length) return pl.pecas;
+    }
     if(mp.tipo!=="pdf" || !mp.plantaUrl) return [];
     var chave = mp.plantaUrl+"#"+(mp.pagina||1);
     if(!cachePecasPdf[chave]){

@@ -161,6 +161,23 @@ try {
   await m.click('[data-rast-aba="concretagem"]');
   ok(await m.isVisible('[data-line-field="pecas"][data-line-idx="0"]'), "aba Concretagem: formulário de sempre");
 
+  // 2e1) v1.37: marcar as peças na planta (uma vez), na tela Plantas
+  await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+  await irPara(m, "btn-view-plantas");
+  await m.click('[data-marcar-pecas="p1"]'); await m.waitForSelector(".edmapa [data-acao=nova-area]", { timeout: 10000 });
+  await m.waitForTimeout(800);
+  await m.click(".edmapa [data-acao=nova-area]");
+  let cx0 = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  for (const [u, v] of [[0.70, 0.68], [0.75, 0.68], [0.75, 0.73], [0.70, 0.73]]) { await m.mouse.click(cx0.x + u * cx0.w, cx0.y + v * cx0.h); await m.waitForTimeout(150); }
+  await m.click(".edmapa [data-acao=fechar-area]");
+  await m.click('.edmapa [data-prefixo="P"]'); await m.keyboard.type("30");
+  await m.click('.edmapa [data-acao="confirmar-peca"]');
+  ok(await esperar(async () => ((await db.doc("plantas/p1").get()).data().pecasAreas || []).some((a) => a.n === "P30" && a.pontos.length === 4)), "marcar peças: P30 desenhada na planta e guardada");
+  await foto(m, "marcar-pecas");
+  await m.click(".edmapa [data-acao=fechar]").catch(() => {}); await m.waitForTimeout(500);
+  await irPara(m, "btn-nav-board");
+  await m.click('.row[data-rast="r3"] [data-open-rast="r3"]'); await m.waitForSelector("#mapa-abrir-editor", { timeout: 8000 });
+
   // 2e2) v1.37: ao demarcar uma área, as peças da planta que ficam dentro entram na BT
   await m.click("#mapa-abrir-editor"); await m.waitForSelector(".edmapa [data-acao=nova-area]", { timeout: 10000 });
   await m.waitForFunction(() => { const c = document.querySelector(".edmapa [data-carregando]"); return !c || c.hidden || getComputedStyle(c).display === "none"; }, null, { timeout: 10000 }).catch(() => {});
@@ -169,7 +186,7 @@ try {
   for (const [u, v] of [[0.65, 0.62], [0.85, 0.62], [0.85, 0.85], [0.65, 0.85]]) { await m.mouse.click(caixa.x + u * caixa.w, caixa.y + v * caixa.h); await m.waitForTimeout(150); }
   await m.click(".edmapa [data-acao=fechar-area]");
   await m.click('.edmapa [data-bt="1"]');
-  ok(await esperar(async () => /P30, V31/.test((await db.doc("rastreabilidade/r3").get()).data().linhas[0].pecas || "")), "demarcar área: P30 e V31 entram nas peças da BT 1 (e a L9, fora da área, não)");
+  ok(await esperar(async () => /, P30$/.test((await db.doc("rastreabilidade/r3").get()).data().linhas[0].pecas || "")), "demarcar área: a P30 (desenhada na planta) entra nas peças da BT 1");
   await foto(m, "editor-pecas");
   await m.click(".edmapa [data-acao=sair], .edmapa [data-acao=fechar]").catch(() => {});
   await m.waitForTimeout(500);

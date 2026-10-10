@@ -41,10 +41,14 @@ function esc(s) {
  *  salvar: async () => boolean   (grava a ficha; true se ok)
  *  titulo: texto do cabeçalho
  *  aoFechar: () => void
+ *  modoPecas: true = desenhar as PEÇAS da planta (P12, V105…) em vez das BTs (v1.37):
+ *             cada área recebe um nome digitado (guardado em linhaSeq)
  */
 export async function abrirEditorMapa(opts) {
   const mp = opts.mapeamento;
   if (!mp.areas) mp.areas = [];
+  const PECAS = !!opts.modoPecas;
+  const nomeArea = (a) => (PECAS ? String(a.linhaSeq) : "BT " + a.linhaSeq);
 
   const raiz = document.createElement("div");
   raiz.className = "edmapa";
@@ -233,6 +237,7 @@ export async function abrirEditorMapa(opts) {
   // e cores que não se confundem entre vizinhas — refeitos só quando algo muda
   let cacheMapa = { chave: null, rotulos: [], cores: new Map() };
   function textosDe(a) {
+    if (PECAS) return { bt: String(a.linhaSeq), nf: "" };
     const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
     return { bt: "BT " + a.linhaSeq, nf: lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "" };
   }
@@ -275,13 +280,27 @@ export async function abrirEditorMapa(opts) {
   function renderBase() {
     if (modo === "desenhar") {
       base.innerHTML = `
-        <div class="edmapa-dica">Toque nos <b>cantos</b> da área concretada. <b>Segure o dedo</b> para abrir a lupa e acertar a linha. Arraste para mover, dois dedos para zoom.</div>
+        <div class="edmapa-dica">Toque nos <b>cantos</b> ${PECAS ? "da peça" : "da área concretada"}. <b>Segure o dedo</b> para abrir a lupa e acertar a linha. Arraste para mover, dois dedos para zoom.</div>
         <div class="edmapa-linha">
           <span class="edmapa-cont">${pontos.length} ponto(s)</span>
           <button type="button" class="edmapa-btn" data-acao="desfazer" ${pontos.length ? "" : "disabled"}>↶ Desfazer</button>
           <button type="button" class="edmapa-btn" data-acao="cancelar">Cancelar</button>
           <button type="button" class="edmapa-btn primario" data-acao="fechar-area" ${pontos.length >= 3 ? "" : "disabled"}>Fechar área</button>
         </div>`;
+    } else if (modo === "escolher-bt" && PECAS) {
+      base.innerHTML = `
+        <div class="edmapa-dica">Qual é esta peça? (ex.: P12, V105, L3)</div>
+        <div class="edmapa-linha">
+          ${["P", "V", "L", "PAR", "ESC"].map((x) => `<button type="button" class="edmapa-btn" data-prefixo="${x}">${x}</button>`).join("")}
+          <input type="text" class="edmapa-nome-peca" data-nome-peca autocomplete="off" autocapitalize="characters" placeholder="nome da peça" style="flex:1;min-width:110px;font-size:16px;padding:8px;border-radius:8px;border:0;">
+        </div>
+        <div class="edmapa-linha">
+          <button type="button" class="edmapa-btn" data-acao="voltar-desenho">← Voltar aos pontos</button>
+          <button type="button" class="edmapa-btn primario" data-acao="confirmar-peca">Guardar peça</button>
+        </div>`;
+      const inp = base.querySelector("[data-nome-peca]");
+      setTimeout(() => inp.focus(), 50);
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") base.querySelector('[data-acao="confirmar-peca"]').click(); });
     } else if (modo === "escolher-bt") {
       const bts = linhasBT();
       base.innerHTML = `
@@ -295,12 +314,12 @@ export async function abrirEditorMapa(opts) {
     } else {
       base.innerHTML = `
         <div class="edmapa-linha">
-          <button type="button" class="edmapa-btn primario grande" data-acao="nova-area">+ Nova área</button>
+          <button type="button" class="edmapa-btn primario grande" data-acao="nova-area">${PECAS ? "+ Nova peça" : "+ Nova área"}</button>
         </div>
         <div class="edmapa-areas">
           ${mp.areas.length ? mp.areas.map((a, i) => {
             const l = (opts.linhas() || []).find((x) => String(x.seq) === String(a.linhaSeq));
-            return `<span class="edmapa-chip" style="--cor:${corDe(a)}"><i></i>BT ${esc(a.linhaSeq)}${l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}
+            return `<span class="edmapa-chip" style="--cor:${corDe(a)}"><i></i>${esc(nomeArea(a))}${!PECAS && l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}
               <button type="button" data-remover="${i}" aria-label="Remover área">✕</button></span>`;
           }).join("") : `<span class="edmapa-dica">Nenhuma área demarcada ainda.</span>`}
         </div>`;
@@ -323,8 +342,22 @@ export async function abrirEditorMapa(opts) {
 
   // ---------- ações ----------
   raiz.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-acao],[data-bt],[data-remover]");
+    const b = e.target.closest("[data-acao],[data-bt],[data-remover],[data-prefixo]");
     if (!b || b.disabled) return;
+    if (b.dataset.prefixo != null) {
+      const inp = base.querySelector("[data-nome-peca]");
+      if (inp) { inp.value = b.dataset.prefixo; inp.focus(); }
+      return;
+    }
+    if (b.dataset.acao === "confirmar-peca") {
+      const inp = base.querySelector("[data-nome-peca]");
+      const nome = String(inp ? inp.value : "").trim().toUpperCase().replace(/\s+/g, "");
+      if (!nome) { if (inp) inp.focus(); return; }
+      mp.areas.push({ pontos: pontos.slice(), linhaSeq: nome, cor: opts.cor(nome) });
+      pontos = []; modo = "ver";
+      renderBase(); desenhar(); salvarAgora();
+      return;
+    }
     if (b.dataset.bt != null) {
       const seq = b.dataset.bt;
       const area = { pontos: pontos.slice(), linhaSeq: seq, cor: opts.cor(seq) };
@@ -339,7 +372,7 @@ export async function abrirEditorMapa(opts) {
     }
     if (b.dataset.remover != null) {
       const i = +b.dataset.remover;
-      if (!confirm("Remover a área do BT " + mp.areas[i].linhaSeq + "?")) return;
+      if (!confirm("Remover " + (PECAS ? "a peça " : "a área do BT ") + mp.areas[i].linhaSeq + "?")) return;
       mp.areas.splice(i, 1);
       renderBase(); desenhar();
       salvarAgora();
