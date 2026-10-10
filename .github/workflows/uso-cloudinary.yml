@@ -1,0 +1,33 @@
+# v1.37: relatório do uso do Cloudinary (onde ficam as fotos das NCs e as
+# plantas). Só leitura — não apaga nem altera nada. Roda toda segunda de
+# manhã, à mão (Actions → Uso do Cloudinary → Run workflow) e quando o
+# próprio relatório muda num pull request. O resultado aparece no resumo
+# da execução.
+name: Uso do Cloudinary
+
+on:
+  schedule:
+    - cron: "13 11 * * 1" # segunda, 08:13 em Brasília
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/uso-cloudinary.mjs
+      - .github/workflows/uso-cloudinary.yml
+
+permissions:
+  contents: read
+
+jobs:
+  uso:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Relatório de uso
+        env:
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+        run: node scripts/uso-cloudinary.mjs
