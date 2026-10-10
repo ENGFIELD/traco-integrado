@@ -209,23 +209,6 @@ try {
   ok((await m.$$eval("#mapa-legenda-host .mapa-legenda-bt", (l) => l.map((x) => x.textContent))).filter((t) => /^BT 1\b/.test(t)).length === 1, "ficha: legenda com uma linha por BT (BT 1 com duas áreas)");
   ok(!(await m.$('header [data-clicar="btn-new-fvs"]')), "topo sem o botão “Nova FVS” (fica na barra lateral)");
 
-  // 2f) v1.36: pendências da desforma → não conformidade na FVS 04 da concretagem (criada e ligada)
-  await m.click('[data-rast-aba="fvs"]');
-  await m.click('[data-desforma-rast="r3"]'); await m.waitForSelector(".dsf [data-sem-foto]", { timeout: 8000 });
-  await m.click(".dsf [data-sem-foto]");
-  await m.selectOption(".dsf-item [data-campo=elemento]", "Pilar");
-  await m.fill(".dsf-item [data-campo=descricao]", "Bicheira no pilar P12");
-  await foto(m, "desforma-fotos");
-  await m.click(".dsf [data-gravar]");
-  const desf = await esperar(async () => {
-    const q = await db.collection("fvs").where("rastreabilidadeId", "==", "r3").get();
-    const r3 = (await db.doc("rastreabilidade/r3").get()).data();
-    return q.size === 1 && q.docs[0].data().naoConformidades[0].descricao === "Pilar: Bicheira no pilar P12" && q.docs[0].data().naoConformidades[0].origem === "desforma" && r3.fvsId === q.docs[0].id;
-  });
-  ok(desf, "desforma: pendência gravada na FVS 04 criada e ligada à concretagem");
-  ok(await m.isVisible(".dsf [data-enviar]"), "desforma: botão de enviar no WhatsApp");
-  await foto(m, "desforma-enviar");
-  await m.click(".dsf [data-fechar]"); await m.waitForTimeout(300);
   await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
 
   // 2g) v1.37: plantas por disciplina (as antigas contam como forma) e troca de disciplina
