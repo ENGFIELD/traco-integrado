@@ -8,6 +8,7 @@ import { safeName, triggerDownload } from "../exportar/xlsx-xml.js";
 import { preencherPlanilhaCt, conferirExportacao } from "./planilha-ct.js";
 import { pintarIcones } from "../../ui/icones.js";
 import { DEFAULT_OBRA } from "../fvs/catalogo.js";
+import { mostrarPlantaDestaque } from "../rastreabilidade/planta-destaque.js";
 
 // O que este módulo usa do app principal (ligado por iniciarTelaCt() no main.js).
 let ctx = null;
@@ -361,7 +362,7 @@ async function ctExportarPlanilha(arquivoEscolhido){
 // v1.5: filtros do Controle Tecnológico (situação, período, concreteira,
 // laboratório) e modo de visualização (agrupado por data ou tabela).
 // somentePendentes é mantido por compatibilidade (Início → "atrasados").
-var filtrosCt = { busca:"", somentePendentes:false, situacao:"pendentes", de:"", ate:"", concreteira:"", laboratorio:"", visao:"grupos" };
+var filtrosCt = { busca:"", somentePendentes:false, situacao:"pendentes", de:"", ate:"", concreteira:"", laboratorio:"", visao:"grupos", aba:"notas", mapaTodas:false };
 function ctRowsArray(){
   var out = [];
   ctx.ctMap.forEach(function(d, id){
@@ -495,6 +496,7 @@ function renderCtTable(){
     el.innerHTML = '<div class="empty-state"><div class="big">Nenhuma nota cadastrada ainda</div><p>Importe a planilha do laboratório ou toque em "Lançar nota / resultado".</p></div>';
     return;
   }
+  if(filtrosCt.aba==="mapa"){ renderCtMapa(el); return; }
   var visiveis = ctRowsFiltradas();
   // v1.10: no filtro "sem vínculo", painel para acertar em lote
   if(filtrosCt.situacao==="semvinculo" && visiveis.length){
@@ -769,7 +771,8 @@ function renderViewCt(){
     '<div class="pav-header"><button class="btn" id="btn-voltar-ct">← Voltar</button><h2>Controle tecnológico</h2>'
       + '<span class="pav-total">'+rows.length+' nota(s) de concreto</span></div>'
     + '<p class="view-desc">Corpos de prova por nota fiscal (7, 28 e 63 dias). Importe a planilha do laboratório ou lance direto aqui; cada nota fica ligada à rastreabilidade da concretagem pela NF e pela data.</p>'
-    + kpis + acoes + filtros
+    + ctAbasHtml()
+    + (filtrosCt.aba==="mapa" ? acoes : kpis + acoes + filtros)
     + '<div id="ct-table-container"></div>';
   pintarIcones(container);
 
@@ -790,6 +793,10 @@ function renderViewCt(){
     modeloInput.value = "";
     if(f) ctExportarPlanilha(f);
   });
+  container.querySelectorAll("[data-ct-aba]").forEach(function(b){
+    b.addEventListener("click", function(){ filtrosCt.aba = b.getAttribute("data-ct-aba"); renderViewCt(); });
+  });
+  if(filtrosCt.aba==="mapa"){ renderCtTable(); return; }
   document.getElementById("ct-f-busca").addEventListener("input", function(e){ filtrosCt.busca = e.target.value; renderCtTable(); });
   [["ct-f-de","de"],["ct-f-ate","ate"],["ct-f-concreteira","concreteira"],["ct-f-laboratorio","laboratorio"]].forEach(function(p){
     document.getElementById(p[0]).addEventListener("change", function(e){ filtrosCt[p[1]] = e.target.value; renderCtTable(); });
@@ -802,6 +809,112 @@ function renderViewCt(){
     b.addEventListener("click", function(){ filtrosCt.visao = b.getAttribute("data-ct-visao"); renderViewCt(); });
   });
   renderCtTable();
+}
+
+/* ---- v1.36: aba "No mapa: abaixo do fck" ----
+   Para cada nota que não atingiu o fck (aos 28 ou aos 63 dias), mostra a
+   planta demarcada na rastreabilidade daquela concretagem com SÓ a BT dessa
+   nota em destaque. */
+function ctAbaixoMapa(row){ return !ctAnterior(row) && ctAbaixoEm(row).length>0; }
+function ctAbasHtml(){
+  var n = ctRowsArray().filter(ctAbaixoFck).length;
+  return '<div class="ct-abas" role="tablist">'
+    + '<button type="button" role="tab" class="ct-aba" data-ct-aba="notas" aria-selected="'+(filtrosCt.aba!=="mapa")+'">Notas</button>'
+    + '<button type="button" role="tab" class="ct-aba" data-ct-aba="mapa" aria-selected="'+(filtrosCt.aba==="mapa")+'">No mapa: abaixo do fck'+(n ? ' <span class="ct-aba-n">'+n+'</span>' : '')+'</button>'
+  + '</div>';
+}
+function ctPontos(a){ return (a.pontos||[]).map(function(p){ return Array.isArray(p) ? p : [p.x, p.y]; }); }
+// onde a nota está na planta: [{ rastId, rast, mp, areas, seqs }] (uma entrada por planta com a BT demarcada)
+// e as rastreabilidades ligadas em que a BT da nota não foi demarcada
+function ctOndeNaPlanta(row){
+  var alvo = ctNormalizaNota(row.notaRemessa), achados = [], semMapa = [];
+  ctLigacoes(row).confirmadas.forEach(function(rid){
+    var r = ctx.rastMap.get(rid); if(!r) return;
+    var seqs = (r.linhas||[]).filter(function(l){ return ctNormalizaNota(l.notaFiscal)===alvo; }).map(function(l){ return String(l.seq); });
+    var algum = false;
+    [r.mapeamento].concat(r.mapeamentosExtras||[]).forEach(function(mp){
+      if(!mp || !mp.plantaUrl) return;
+      var areas = (mp.areas||[]).filter(function(a){ return seqs.indexOf(String(a.linhaSeq))!==-1; })
+        .map(function(a){ return { pontos:ctPontos(a), linhaSeq:a.linhaSeq }; });
+      if(areas.length){ algum = true; achados.push({ rastId:rid, rast:r, mp:mp, areas:areas, seqs:seqs }); }
+    });
+    if(!algum) semMapa.push({ rastId:rid, rast:r, seqs:seqs });
+  });
+  return { achados:achados, semMapa:semMapa };
+}
+function ctResultadoCurto(row){
+  var fck = ctNumero(row.fck), partes = [];
+  [["28", ctMelhor28(row)], ["63", ctMelhor63(row)]].forEach(function(p){
+    if(p[1]==null) return;
+    partes.push(p[0]+"d: "+String(p[1]).replace(".", ",")+(fck!=null && p[1] < fck ? " < " : " ≥ ")+"fck "+String(fck).replace(".", ","));
+  });
+  return partes.join(" · ") || "sem resultado";
+}
+// o desenho de uma nota na planta (também usado na aba de CT da ficha de concretagem)
+function ctPlantaDaNotaHtml(row, k){
+  var onde = ctOndeNaPlanta(row);
+  var html = onde.achados.map(function(a, j){
+    return '<div class="ct-mapa-planta"><div class="ct-mapa-planta-tit">Planta: '+escapeHtml(a.mp.plantaNome||"—")+' · '
+      + '<button type="button" class="linkish" data-open-rast="'+escapeHtml(a.rastId)+'">rastreabilidade de '+escapeHtml(rastRotulo(a.rast))+'</button></div>'
+      + '<div class="ct-mapa-host" data-ct-planta="'+k+':'+j+'"></div></div>';
+  }).join("");
+  html += onde.semMapa.map(function(s){
+    return '<div class="hint ct-mapa-falta">A BT '+escapeHtml(s.seqs.join(", ")||"desta nota")+' não está demarcada na planta da '
+      + '<button type="button" class="linkish" data-open-rast="'+escapeHtml(s.rastId)+'">rastreabilidade de '+escapeHtml(rastRotulo(s.rast))+'</button>.</div>';
+  }).join("");
+  if(!onde.achados.length && !onde.semMapa.length) html = '<div class="hint ct-mapa-falta">Esta nota não está ligada a nenhuma rastreabilidade — ligue pela ficha da NF para ver onde ela foi lançada.</div>';
+  return { html:html, onde:onde };
+}
+function ctDesenharPlantasDaNota(raiz, row, k, onde){
+  onde.achados.forEach(function(a, j){
+    var host = raiz.querySelector('[data-ct-planta="'+k+':'+j+'"]');
+    if(!host || host.getAttribute("data-feito")) return;
+    host.setAttribute("data-feito", "1");
+    var nf = String(row.notaRemessa||"").trim();
+    mostrarPlantaDestaque(host, {
+      mp:a.mp, areas:a.areas, cor:"#C0392B",
+      textos:function(ar){ return { bt:"BT "+ar.linhaSeq+" · NF "+nf, nf:ctResultadoCurto(row) }; },
+      titulo:"NF "+nf+" abaixo do fck — "+rastRotulo(a.rast)+" — "+ctResultadoCurto(row),
+      nomeArquivo:"nf_"+safeName(nf)+"_abaixo_fck"
+    });
+  });
+}
+function renderCtMapa(el){
+  var lista = ctRowsArray().filter(filtrosCt.mapaTodas ? ctAbaixoMapa : ctAbaixoFck)
+    .sort(function(a,b){ return String(b.dataConcretagem||"").localeCompare(String(a.dataConcretagem||"")); });
+  var totalTodas = ctRowsArray().filter(ctAbaixoMapa).length;
+  var topo = '<p class="view-desc">Notas que <b>não atingiram o fck</b> aos 28 ou aos 63 dias. Toque na nota para ver na planta onde aquele caminhão (BT) foi lançado — só a BT da nota aparece.</p>'
+    + '<label class="ct-mapa-todas"><input type="checkbox" id="ct-mapa-todas"'+(filtrosCt.mapaTodas?" checked":"")+'> mostrar também as já resolvidas ('+totalTodas+')</label>';
+  if(!lista.length){
+    el.innerHTML = topo + '<div class="empty-state"><div class="big">Nenhuma nota abaixo do fck'+(filtrosCt.mapaTodas ? "" : " em aberto")+'</div><p>Quando um resultado de 28 ou 63 dias ficar abaixo do fck, a nota aparece aqui com a planta.</p></div>';
+  } else {
+    el.innerHTML = topo + '<div class="ct-mapa-lista">' + lista.map(function(row, k){
+      return '<details class="ct-mapa-item"'+(k===0 ? " open" : "")+' data-k="'+k+'"><summary>'
+        + '<b>NF '+escapeHtml(row.notaRemessa||"—")+'</b>'
+        + '<span>'+escapeHtml(fmtDateBR(row.dataConcretagem))+(row.local ? ' · '+escapeHtml(row.local) : '')+'</span>'
+        + '<span class="ct-selo '+(ctSituacao(row)==="abaixo" ? "abaixo" : "atraso")+'">'+escapeHtml(ctResultadoCurto(row))+'</span>'
+        + '<button type="button" class="btn ghost small" data-ct-ficha="'+escapeHtml(row._id)+'">Ficha da NF</button>'
+        + '</summary><div class="ct-mapa-corpo" data-corpo></div></details>';
+    }).join("") + '</div>';
+  }
+  var chk = el.querySelector("#ct-mapa-todas");
+  if(chk) chk.addEventListener("change", function(){ filtrosCt.mapaTodas = chk.checked; renderCtTable(); });
+  var abrir = function(det){
+    var k = +det.getAttribute("data-k"), corpo = det.querySelector("[data-corpo]");
+    if(corpo.getAttribute("data-feito")) return;
+    corpo.setAttribute("data-feito", "1");
+    var p = ctPlantaDaNotaHtml(lista[k], k);
+    corpo.innerHTML = p.html;
+    corpo.querySelectorAll("[data-open-rast]").forEach(function(b){ b.addEventListener("click", function(){ ctx.openModal("rast", b.getAttribute("data-open-rast")); }); });
+    ctDesenharPlantasDaNota(corpo, lista[k], k, p.onde);
+  };
+  el.querySelectorAll("details.ct-mapa-item").forEach(function(det){
+    if(det.open) abrir(det);
+    det.addEventListener("toggle", function(){ if(det.open) abrir(det); });
+  });
+  el.querySelectorAll("[data-ct-ficha]").forEach(function(b){
+    b.addEventListener("click", function(e){ e.preventDefault(); e.stopPropagation(); abrirFichaNf(b.getAttribute("data-ct-ficha")); });
+  });
 }
 
 /* ---- v1.5: na ficha de rastreabilidade, o CT de cada betonada (pela NF) ---- */
@@ -1094,4 +1207,4 @@ async function salvarFichaNf(ov, id, novo, d, ler, botao, aoTerminar){
 function showViewCt(){ ctx.switchView("ct"); }
 function hideViewCt(){ ctx.switchView("dashboard"); }
 
-export { CT_IDADES, abrirFichaNf, ctAbaixoFck, ctAnterior, ctIdadesPendentes, ctLimparInicio, ctMelhor28, ctMelhor63, ctNumero, ctPendente, ctRomperEmBreve, ctRowsArray, ctSecaoRastHtml, ctSituacao, ctSomarDias, ctStatusIdade, ctTemPendencia, filtrosCt, renderViewCt, showViewCt };
+export { CT_IDADES, abrirFichaNf, ctAbaixoFck, ctAbaixoMapa, ctPlantaDaNotaHtml, ctDesenharPlantasDaNota, ctPorNota, ctAnterior, ctIdadesPendentes, ctLimparInicio, ctMelhor28, ctMelhor63, ctNumero, ctPendente, ctRomperEmBreve, ctRowsArray, ctSecaoRastHtml, ctSituacao, ctSomarDias, ctStatusIdade, ctTemPendencia, filtrosCt, renderViewCt, showViewCt };

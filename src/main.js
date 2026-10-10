@@ -18,7 +18,7 @@ import { diffMin, dowBR, escapeHtml, fmtDateBR, fmtDateTimeBR, fmtMin, lastUpdat
 import { safeName, triggerDownload } from "./modulos/exportar/xlsx-xml.js";
 import { assinaturaDoPapel, exportFvsXlsx, exportRastXlsx, iniciarModelosExcel } from "./modulos/exportar/modelos-excel.js";
 import { gerarRelatorioNcWord, iniciarRelatorioWord } from "./modulos/nc/relatorio-word.js";
-import { CT_IDADES, abrirFichaNf, ctAbaixoFck, ctAnterior, ctIdadesPendentes, ctLimparInicio, ctMelhor28, ctMelhor63, ctNumero, ctPendente, ctRomperEmBreve, ctRowsArray, ctSecaoRastHtml, ctSituacao, ctSomarDias, ctStatusIdade, ctTemPendencia, filtrosCt, iniciarTelaCt, renderViewCt, showViewCt } from "./modulos/ct/tela-ct.js";
+import { CT_IDADES, abrirFichaNf, ctAbaixoFck, ctAbaixoMapa, ctPlantaDaNotaHtml, ctDesenharPlantasDaNota, ctPorNota, ctAnterior, ctIdadesPendentes, ctLimparInicio, ctMelhor28, ctMelhor63, ctNumero, ctPendente, ctRomperEmBreve, ctRowsArray, ctSecaoRastHtml, ctSituacao, ctSomarDias, ctStatusIdade, ctTemPendencia, filtrosCt, iniciarTelaCt, renderViewCt, showViewCt } from "./modulos/ct/tela-ct.js";
 import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
@@ -28,10 +28,11 @@ import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
 import { corteHtml, corteEtapaHtml } from "./modulos/obra/corte-predio.js";
 import { situacaoNivel, topoEtapa, fvsPedidas } from "./modulos/cronograma/etapas.js";
-import { rotuloArea, rotuloSvg, rotuloCanvas, OPAC_FUNDO } from "./modulos/rastreabilidade/rotulo-mapa.js";
+import { rotuloSvg, rotuloCanvas, planejarRotulos, coresDistintas } from "./modulos/rastreabilidade/rotulo-mapa.js";
 import { semRepetidas as pecasSemRepetidas, pecasRepetidas, repetidasNoTexto as pecasRepetidasNoTexto } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { lerPendencias, sugerirFvs, norm as normNc } from "./modulos/nc/pendencias.js";
+import { iniciarDesforma, abrirDesforma } from "./modulos/nc/desforma.js";
 import { adicionarAssinaturasXlsx, centralizarImagemNaCaixa } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje, concretadasPorChave as acoConcretadasPorChave, chegouPelaConcretagem as acoChegouPelaConcretagem } from "./modulos/aco/aco-cronograma.js";
@@ -124,6 +125,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     } });
   iniciarTelaCt({ get ctCol(){ return ctCol; }, get ctMap(){ return ctMap; }, get currentUserEmail(){ return currentUserEmail; }, get dbf(){ return dbf; }, get modelosCol(){ return modelosCol; }, get openModal(){ return openModal; }, get rastCol(){ return rastCol; }, get rastMap(){ return rastMap; }, get somenteLeitura(){ return somenteLeitura; }, get switchView(){ return switchView; } });
   iniciarModelosExcel({ get fichaNaoConformidades(){ return fichaNaoConformidades; } });
+  iniciarDesforma({ get somenteLeitura(){ return somenteLeitura; }, get fvsMap(){ return fvsMap; }, get rastMap(){ return rastMap; }, get currentUserEmail(){ return currentUserEmail; },
+    todayISO:function(){ return todayISO(); }, nowISO:function(){ return nowISO(); },
+    pavimentosCompativeis:function(a, b){ return pavimentosCompativeis(a, b); }, pavimentosDaRast:function(r){ return pavimentosDaRast(r); },
+    pavSelectsHtml:function(v, a, r){ return pavSelectsHtml(v, a, r); }, lerPavSelects:function(c, v){ return lerPavSelects(c, v); },
+    fichaNaoConformidades:function(f){ return fichaNaoConformidades(f); }, ncGravarNaFicha:function(id, fn){ return ncGravarNaFicha(id, fn); },
+    ncUploadAnexo:function(f){ return ncUploadAnexo(f); }, criarFvs04DaRast:function(r, n){ return criarFvs04DaRast(r, n); },
+    aposAlterarFvs:function(id){ aposAlterarFvs(id); } });
   iniciarRelatorioWord({ get buildRelatorioNc(){ return buildRelatorioNc; }, get currentUserEmail(){ return currentUserEmail; }, get descricaoFiltrosNc(){ return descricaoFiltrosNc; }, get filtrosNc(){ return filtrosNc; }, get ncAnexoEhImagem(){ return ncAnexoEhImagem; } });
 
   // pdf.js precisa de um "worker" (script separado que faz o trabalho pesado
@@ -1758,7 +1766,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosNc.tipo===t.key?" selected":"")+'>'+escapeHtml(t.codigo+" — "+t.titulo)+'</option>'; }).join("")+'</select>'
       + '</div>'
       + '<div class="ct-acoes">'
-        + '<button class="btn primary" type="button" id="btn-nc-importar"><svg class="ti-i" data-i="file"></svg>Importar lista de pendências</button>'
+        + '<button class="btn primary" type="button" id="btn-nc-desforma"><svg class="ti-i" data-i="alert"></svg>Pendências da desforma (fotos)</button>'
+        + '<button class="btn" type="button" id="btn-nc-importar"><svg class="ti-i" data-i="file"></svg>Importar lista de pendências</button>'
         + '<input type="text" id="nc-f-destinatario" placeholder="Empreiteira / destinatário do relatório (opcional)" value="'+escapeHtml(filtrosNc.destinatario)+'" style="flex:1 1 220px;min-width:0">'
         + '<button class="btn" type="button" id="btn-relatorio-nc"><svg class="ti-i" data-i="download"></svg>Relatório (Word)</button>'
       + '</div>';
@@ -1807,6 +1816,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("nc-f-destinatario").addEventListener("input", function(e){ filtrosNc.destinatario = e.target.value; });
     document.getElementById("btn-relatorio-nc").addEventListener("click", gerarRelatorioNcWord);
     document.getElementById("btn-nc-importar").addEventListener("click", abrirImportarPendencias);
+    document.getElementById("btn-nc-desforma").addEventListener("click", function(){ abrirDesforma({}); });
     container.querySelectorAll("[data-nc]").forEach(function(card){
       var p = card.getAttribute("data-nc").split("|"), fid = p[0], idx = Number(p[1]);
       var on = function(sel, fn){ var b = card.querySelector(sel); if(b) b.addEventListener("click", fn); };
@@ -1840,6 +1850,46 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       alert("Não foi possível gravar: "+(ex && ex.code==="permission-denied" ? "sem permissão para alterar esta ficha." : (ex && ex.message ? ex.message : "erro desconhecido")));
     }
     if(!document.getElementById("view-nc").hidden) renderViewNc();
+  }
+
+  /* ---- v1.36: pendências da desforma (modulos/nc/desforma.js) ---- */
+  function esperarGravacao(envio){
+    return Promise.race([envio.then(function(){ return "ok"; }), new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })]);
+  }
+  // A concretagem ainda sem FVS 04: cria a ficha (já com as pendências) e liga nas duas pontas
+  async function criarFvs04DaRast(rastId, ncs){
+    var r = rastMap.get(rastId);
+    if(!r) throw new Error("concretagem não encontrada");
+    var nf = blankFvs("fvs04");
+    nf.obra = r.obra || nf.obra; nf.local = r.blocoPav || ""; nf.pavimentos = pavimentosDaRast(r);
+    nf.dataConcretagem = r.data || todayISO(); nf.dataAbertura = r.data || todayISO();
+    nf.rastreabilidadeId = rastId; nf.naoConformidades = ncs || [];
+    var pn = proximoNumeroFvs(nf.codigo, null);
+    nf.numero = pn.numero; nf.numeroSeq = pn.seq; nf.numeroAuto = true;
+    var ref = fvsCol.doc();
+    var r1 = await esperarGravacao(ref.set(nf));
+    var r2 = await esperarGravacao(rastCol.doc(rastId).set({ fvsId:ref.id, updatedAt:nowISO() }, { merge:true }));
+    if(r1==="pendente" || r2==="pendente") alert("Sem conexão no momento — a ficha será enviada quando o sinal voltar. Mantenha o app aberto.");
+    // a rastreabilidade aberta na tela passa a saber da FVS nova (senão, ao salvar, desfazia a ligação)
+    if(draft && draft.type==="rast" && draft.id===rastId){
+      draft.data.fvsId = ref.id;
+      try{ var o = JSON.parse(draft.orig); o.fvsId = ref.id; draft.orig = JSON.stringify(o); }catch(ex){}
+    }
+    return { id:ref.id, rotulo:(nf.codigo||"FVS 04")+" nº "+nf.numero };
+  }
+  // depois de gravar pendências numa FVS: a ficha aberta na tela recebe a lista nova
+  function aposAlterarFvs(fid){
+    setTimeout(function(){
+      if(!draft) return;
+      if(draft.type==="fvs" && draft.id===fid){
+        var f = fvsMap.get(fid); if(!f) return;
+        draft.data.naoConformidades = JSON.parse(JSON.stringify(fichaNaoConformidades(f)));
+        try{ var o = JSON.parse(draft.orig); o.naoConformidades = draft.data.naoConformidades; draft.orig = JSON.stringify(o); }catch(ex){}
+        renderModal();
+      } else if(draft.type==="rast"){
+        renderModal();
+      }
+    }, 400);
   }
 
   /* ---- v1.19: importar lista de pendências para as FVS ---- */
@@ -2330,6 +2380,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var n = parseInt(seq,10); if(isNaN(n) || n<1) n=1;
     return MAPA_CORES[(n-1) % MAPA_CORES.length];
   }
+  // v1.36: cor de cada BT no desenho — a de sempre, trocada só quando encosta
+  // numa BT vizinha de cor parecida (rotulo-mapa.js → coresDistintas)
+  function coresDoMapa(mp){ return coresDistintas((mp && mp.areas) || [], mapaCorSequencia); }
+  function corDaArea(cores, a){ return (cores && cores.get(String(a.linhaSeq))) || a.cor || mapaCorSequencia(a.linhaSeq); }
   // Envia um arquivo (PDF anexado manualmente, ou o blob de imagem já
   // comprimido de uma planta da biblioteca) direto pro Cloudinary, igual ao
   // envio de anexos de não conformidade — mesma conta, mesmo preset (ver
@@ -2721,7 +2775,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         m.querySelectorAll(".modal-body input, .modal-body select, .modal-body textarea").forEach(function(el){ el.disabled = true; });
         // botões do corpo também (teclado), menos o bloco de assinaturas, o aviso e "abrir rastreabilidade"
         m.querySelectorAll(".modal-body button").forEach(function(el){
-          if(!el.closest(".fvs-assin-bloco, .fvs-travada-banner") && el.id!=="open-linked-rast") el.disabled = true;
+          if(!el.closest(".fvs-assin-bloco, .fvs-travada-banner") && el.id!=="open-linked-rast" && el.id!=="fvs-desforma") el.disabled = true;
         });
       }
     } else m.classList.remove("ficha-travada");
@@ -3044,7 +3098,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</div><div class="grid2">'+field("Inspecionado por","inspecionadoPor",d.inspecionadoPor,"text")+field("Engenheiro responsável","engenheiro",d.engenheiro,"text")+'</div></fieldset>'
       + elementosHtml
       + '<fieldset><legend>Checklist de verificação</legend>'+legendaHtml+checklistHtml+'</fieldset>'
-      + '<fieldset><legend>Não conformidades</legend>'+ncListFieldHtml(d)+'</fieldset>'
+      + '<fieldset><legend>Não conformidades</legend>'
+        // v1.36: fotos da desforma entram aqui como não conformidades (modulos/nc/desforma.js)
+        + (!tipoInfo && id ? '<div class="desforma-barra"><button type="button" class="btn desforma-btn" id="fvs-desforma">📷 Pendências da desforma (fotos)</button>'
+            + '<span class="hint">'+(d.rastreabilidadeId ? 'tire as fotos e mande para a empresa de forma' : 'ligue a rastreabilidade desta concretagem para registrar')+'</span></div>' : '')
+        + ncListFieldHtml(d)+'</fieldset>'
       + '<fieldset><legend>Observações</legend>'+field("","observacoes",d.observacoes,"textarea")+'</fieldset>'
       + '<fieldset><legend>Rastreabilidade de concreto vinculada</legend>'+linkHtml+'</fieldset>'
       + fvsAssinaturasFieldHtml(d, id)
@@ -3114,6 +3172,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     return ''
       + '<div class="modal-head"><h2 id="modal-title">'+(id?"Editar rastreabilidade":"Nova rastreabilidade")+'</h2>'+statusBadgeRast(d)+'<button class="close-x" id="modal-close" aria-label="Fechar">✕</button></div>'
       + '<div class="modal-body">'
+      + rastAbasHtml(d, id)
+      + '<div class="rast-painel" data-painel="concretagem"'+(rastAbaAtual()!=="concretagem"?" hidden":"")+'>'
       + '<div class="banner" id="rast-overrun-banner" style="'+(anyOverrun?"":"display:none;")+'">Uma ou mais betonadas excederam o tempo máximo de lançamento (2h30 — NBR 12655). Registre a ação corretiva ao final.</div>'
       + '<fieldset><legend>Identificação</legend><div class="grid2">'
         // v1.4: sem "Nº do controle" — a ficha é identificada por data + pavimento
@@ -3132,7 +3192,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</tr></thead><tbody id="linhas-body">'+linhasHtml+'</tbody></table></div>'
         + '<button type="button" class="btn ghost" id="add-line" style="margin-top:10px;">+ Adicionar betonada</button>'
         + '</fieldset>'
-      + ctSecaoRastHtml(d, id)
       + '<fieldset><legend>Mapeamento da concretagem <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;">— demarque na planta onde cada BT foi lançado</span></legend>'
         + mapeamentoFieldHtml(d)
         + '</fieldset>'
@@ -3143,8 +3202,17 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + field("Data de fechamento","dataFechamento",d.dataFechamento,"date")
         + '</fieldset>'
       + rastAssinaturasFieldHtml(d, id)
-      + '<fieldset><legend>Ficha FVS vinculada</legend>'+linkHtml+'</fieldset>'
       + lastUpdatedHtml(d) + verHistoricoHtml("rastreabilidade", id)
+      + '</div>'
+      // v1.36: abas da ficha de concretagem — as FVS daquele local e o controle tecnológico
+      + '<div class="rast-painel" data-painel="fvs"'+(rastAbaAtual()!=="fvs"?" hidden":"")+'>'
+        + '<fieldset><legend>Ficha FVS 04 desta concretagem</legend>'+linkHtml+'</fieldset>'
+        + rastFvsDoLocalHtml(d, id)
+      + '</div>'
+      + '<div class="rast-painel" data-painel="ct"'+(rastAbaAtual()!=="ct"?" hidden":"")+'>'
+        + (ctSecaoRastHtml(d, id) || '<div class="hint">Lance as notas fiscais nas betonadas (aba Concretagem) para ver aqui os resultados dos corpos de prova de cada BT.</div>')
+        + rastCtMapaHtml(d, id)
+      + '</div>'
       + '</div>'
       + '<div class="modal-foot">'
         + '<div style="display:flex;gap:10px;">'
@@ -3157,12 +3225,133 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + '</div></div>';
   }
 
+  /* ---- v1.36: abas da ficha de concretagem ----
+     Concretagem (o formulário de sempre) · FVS do local (todas as fichas FVS
+     dos pavimentos desta concretagem, de qualquer tipo, + pendências de
+     desforma) · Controle tecnológico (resultados de cada BT e, para a nota que
+     não atingiu o fck, a planta com só aquela BT). Trocar de aba só mostra/
+     esconde: o que foi digitado continua lá. */
+  function rastAbaAtual(){ return (draft && draft.abaRast) || "concretagem"; }
+  // mesmo pavimento (pelo nível do prédio); trecho diferente só não bate se os dois tiverem trecho
+  function pavimentosCompativeis(a, b){
+    var sa = separarPavimento(a), sb = separarPavimento(b);
+    var ra = pavimentoRank(sa.base || sa.antigo), rb = pavimentoRank(sb.base || sb.antigo);
+    if(ra===9999 || rb===9999) return normNc(a)!=="" && normNc(a)===normNc(b);
+    if(ra!==rb) return false;
+    return !sa.trecho || !sb.trecho || sa.trecho===sb.trecho;
+  }
+  // FVS do local desta concretagem: a vinculada + as de qualquer tipo com pavimento em comum
+  function fvsDoLocal(d, rastId){
+    var pvs = pavimentosDaRast(d), out = [];
+    fvsMap.forEach(function(f, fid){
+      var ligada = (rastId && f.rastreabilidadeId===rastId) || fid===d.fvsId;
+      var mesmoLocal = pvs.length && fvsPavimentosList(f).some(function(p){ return pvs.some(function(q){ return pavimentosCompativeis(p, q); }); });
+      if(ligada || mesmoLocal) out.push({ id:fid, f:f, ligada:!!ligada });
+    });
+    out.sort(function(a, b){
+      if(a.ligada!==b.ligada) return a.ligada ? -1 : 1;
+      var ta = (a.f.tipo||"fvs04")==="fvs04" ? 0 : 1, tb = (b.f.tipo||"fvs04")==="fvs04" ? 0 : 1;
+      if(ta!==tb) return ta-tb;
+      return String(b.f.dataConcretagem||b.f.dataAbertura||"").localeCompare(String(a.f.dataConcretagem||a.f.dataAbertura||""));
+    });
+    return out;
+  }
+  function rastNotasCt(d){
+    var out = [];
+    (d.linhas||[]).forEach(function(l){
+      if(!String(l.notaFiscal||"").trim()) return;
+      var c = ctPorNota(l.notaFiscal);
+      out.push({ linha:l, ct:c, abaixo: !!(c && ctAbaixoMapa(c)) });
+    });
+    return out;
+  }
+  function rastAbasHtml(d, id){
+    var nFvs = fvsDoLocal(d, id).length, notas = rastNotasCt(d), nAbaixo = notas.filter(function(x){ return x.abaixo; }).length;
+    var aba = rastAbaAtual();
+    var b = function(k, rot, n, ruim){ return '<button type="button" role="tab" class="rast-aba" data-rast-aba="'+k+'" aria-selected="'+(aba===k)+'">'+rot+(n ? ' <span class="rast-aba-n'+(ruim?" ruim":"")+'">'+n+'</span>' : '')+'</button>'; };
+    return '<div class="rast-abas" role="tablist">'
+      + b("concretagem", "Concretagem", 0)
+      + b("fvs", "FVS do local", nFvs)
+      + b("ct", "Controle tecnológico", nAbaixo || notas.length, nAbaixo>0)
+    + '</div>';
+  }
+  function rastFvsDoLocalHtml(d, id){
+    var lista = fvsDoLocal(d, id), pvs = pavimentosDaRast(d);
+    var itens = lista.map(function(x){
+      var f = x.f, t = getFvsTipo(f.tipo), abertas = fichaNaoConformidades(f).filter(function(n){ return !n.concluida; }).length;
+      return '<div class="rast-fvs-item'+(x.ligada?" ligada":"")+'"><div class="info">'
+        + '<div class="t">'+escapeHtml((f.codigo||"FVS")+" nº "+(f.numero||"s/ nº"))+' · '+escapeHtml((t && t.titulo) || f.descricao || "Forma, desforma, armação e concretagem")+(x.ligada ? ' <span class="ncx-tag">desta concretagem</span>' : '')+'</div>'
+        + '<div class="s">'+escapeHtml(fvsPavimentosList(f).join(", ")||"sem pavimento")+' · '+escapeHtml(fmtDateBR(f.dataConcretagem||f.dataAbertura))+' · '+statusBadgeFvs(f)
+          + (abertas ? ' <span class="ct-selo abaixo">'+abertas+' NC em aberto</span>' : '')+'</div>'
+        + '</div><button type="button" class="btn small" data-rast-abrir-fvs="'+escapeHtml(x.id)+'">Abrir</button></div>';
+    }).join("");
+    return '<fieldset><legend>Todas as FVS '+(pvs.length ? 'de '+escapeHtml(pvs.join(" e ")) : 'deste local')+'</legend>'
+      + (pvs.length ? '' : '<div class="hint">Escolha o pavimento em “Bloco / Pavimento” (aba Concretagem) para ver as FVS daquele local.</div>')
+      + (itens ? '<div class="rast-fvs-lista">'+itens+'</div>' : (pvs.length ? '<div class="hint">Nenhuma FVS desse pavimento ainda.</div>' : ''))
+      + (pvs.length ? '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">'
+          + (id ? '<button type="button" class="btn primary" data-desforma-rast="'+escapeHtml(id)+'">Pendências da desforma (fotos)</button>' : '')
+          + '<button type="button" class="btn" id="rast-nova-fvs-local">+ Nova FVS deste local</button></div>' : '')
+    + '</fieldset>';
+  }
+  function rastCtMapaHtml(d, id){
+    var abaixo = rastNotasCt(d).filter(function(x){ return x.abaixo; });
+    if(!abaixo.length) return "";
+    return '<fieldset><legend>Onde ficou abaixo do fck</legend>'
+      + abaixo.map(function(x, k){
+          return '<div class="rast-ct-mapa"><div class="ct-mapa-planta-tit"><b>BT '+escapeHtml(x.linha.seq)+' · NF '+escapeHtml(x.linha.notaFiscal)+'</b> — '+escapeHtml(ctResultadoCurtoMain(x.ct))+'</div>'
+            + ctPlantaDaNotaHtml(x.ct, "r"+k).html+'</div>';
+        }).join("")
+    + '</fieldset>';
+  }
+  function ctResultadoCurtoMain(c){
+    var fck = ctNumero(c.fck), partes = [];
+    [["28", ctMelhor28(c)], ["63", ctMelhor63(c)]].forEach(function(p){
+      if(p[1]!=null) partes.push(p[0]+" dias: "+String(p[1]).replace(".", ",")+" MPa"+(fck!=null && p[1]<fck ? " (abaixo do fck "+String(fck).replace(".", ",")+")" : ""));
+    });
+    return partes.join(" · ");
+  }
+  function rastDesenharCtMapa(m){
+    var painel = m.querySelector('[data-painel="ct"]');
+    if(!painel || painel.hidden || !draft) return;
+    rastNotasCt(draft.data).filter(function(x){ return x.abaixo; }).forEach(function(x, k){
+      ctDesenharPlantasDaNota(painel, x.ct, "r"+k, ctPlantaDaNotaHtml(x.ct, "r"+k).onde);
+    });
+  }
+  function wireRastAbas(m){
+    m.querySelectorAll("[data-rast-aba]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var k = b.getAttribute("data-rast-aba");
+        draft.abaRast = k;
+        m.querySelectorAll("[data-rast-aba]").forEach(function(x){ x.setAttribute("aria-selected", String(x===b)); });
+        m.querySelectorAll(".rast-painel").forEach(function(p){ p.hidden = p.getAttribute("data-painel")!==k; });
+        if(k==="ct") rastDesenharCtMapa(m);
+        var corpo = m.querySelector(".modal-body"); if(corpo) corpo.scrollTop = 0;
+      });
+    });
+    m.querySelectorAll("[data-rast-abrir-fvs]").forEach(function(b){
+      b.addEventListener("click", function(){ var fid = b.getAttribute("data-rast-abrir-fvs"); if(!tentarFecharModal()) return; openModal("fvs", fid); });
+    });
+    m.querySelectorAll(".rast-painel [data-open-rast]").forEach(function(b){
+      b.addEventListener("click", function(){ var rid = b.getAttribute("data-open-rast"); if(draft && rid===draft.id) return; if(!tentarFecharModal()) return; openModal("rast", rid); });
+    });
+    var nova = m.querySelector("#rast-nova-fvs-local");
+    if(nova) nova.addEventListener("click", function(){
+      var pv = pavimentosDaRast(draft.data)[0] || "";
+      if(!tentarFecharModal()) return;
+      openTipoChooser(function(tipo){ openModal("fvs", null, tipo, { pavimento:pv }); });
+    });
+    m.querySelectorAll("[data-desforma-rast]").forEach(function(b){
+      b.addEventListener("click", function(){ abrirDesforma({ rastId:b.getAttribute("data-desforma-rast") }); });
+    });
+    rastDesenharCtMapa(m);
+  }
+
   // Monta o rótulo + linha da legenda de uma área demarcada, reaproveitado
   // tanto no HTML inicial do modal quanto na atualização ao vivo (sem
   // recriar o modal inteiro) depois de fechar/remover uma área.
-  function mapaLegendaLinhaHtml(a, ai, linhasFicha){
+  function mapaLegendaLinhaHtml(a, ai, linhasFicha, cor){
     var linha = (linhasFicha||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
-    return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+a.cor+';"></span>'
+    return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+(cor||a.cor)+';"></span>'
       + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+'</span>'
         + (linha && linha.notaFiscal ? '<span class="mapa-legenda-nf">NF '+escapeHtml(linha.notaFiscal)+'</span>' : '')
       + '</span>'
@@ -3171,7 +3360,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function mapaLegendaHtml(d){
     var areas = (d.mapeamento && d.mapeamento.areas) || [];
     if(areas.length===0) return '<div class="hint">Nenhuma área demarcada ainda. Toque em "+ Nova área" e marque os cantos do trecho concretado.</div>';
-    return '<div class="mapa-legenda">' + areas.map(function(a, ai){ return mapaLegendaLinhaHtml(a, ai, d.linhas); }).join("") + '</div>';
+    var cores = coresDoMapa(d.mapeamento);
+    return '<div class="mapa-legenda">' + areas.map(function(a, ai){ return mapaLegendaLinhaHtml(a, ai, d.linhas, corDaArea(cores, a)); }).join("") + '</div>';
   }
   // Bloco de "mapeamento de concretagem": anexa a planta de forma (PDF) da
   // rastreabilidade e, uma vez anexada, mostra a ferramenta de desenho
@@ -3590,8 +3780,15 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(unlinkFvs) unlinkFvs.addEventListener("click", async function(){ await removeLink("rast", draft.id, draft.data.fvsId); });
       var openLinkedF=m.querySelector("#open-linked-fvs");
       if(openLinkedF) openLinkedF.addEventListener("click", function(){ var fid=draft.data.fvsId; if(!tentarFecharModal()) return; openModal("fvs", fid); });
+      wireRastAbas(m);
     }
 
+    var bDesf = m.querySelector("#fvs-desforma");
+    if(bDesf) bDesf.addEventListener("click", async function(){
+      if(!draft.data.rastreabilidadeId){ alert("Esta FVS ainda não está ligada à rastreabilidade da concretagem. Ligue em “Rastreabilidade de concreto vinculada”, mais abaixo, e tente de novo."); return; }
+      if(draftAlterado() && !draft.data.travada && !await saveDraft(true)) return;
+      abrirDesforma({ fvsId:draft.id, rastId:draft.data.rastreabilidadeId });
+    });
     m.querySelector("#btn-save").addEventListener("click", function(){ saveDraft(false); });
     m.querySelector("#btn-export").addEventListener("click", async function(){
       try{ await garantirLibs(); }catch(ex){ alert("Não foi possível carregar o gerador de Excel (verifique a internet)."); return; }
@@ -3992,18 +4189,22 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     while(svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
     function pt(p){ return (p[0]*vw)+","+(p[1]*vh); }
 
-    ((draft.data.mapeamento && draft.data.mapeamento.areas) || []).forEach(function(a){
+    var areasSvg = (draft.data.mapeamento && draft.data.mapeamento.areas) || [];
+    var coresSvg = coresDoMapa(draft.data.mapeamento);
+    areasSvg.forEach(function(a){
       if(!a.pontos || a.pontos.length<3) return;
       var poly = document.createElementNS(ns, "polygon");
       poly.setAttribute("points", a.pontos.map(pt).join(" "));
-      poly.setAttribute("fill", a.cor);
+      poly.setAttribute("fill", corDaArea(coresSvg, a));
       poly.setAttribute("fill-opacity", "0.32");
-      poly.setAttribute("stroke", a.cor);
+      poly.setAttribute("stroke", corDaArea(coresSvg, a));
       poly.setAttribute("stroke-width", Math.max(2, vw*0.003));
       svgEl.appendChild(poly);
-      // v1.15: rótulo no centro visual, tamanho igual ao do editor e do PNG
-      var textos = { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) };
-      rotuloSvg(svgEl, rotuloArea(a.pontos, vw, vh, textos), textos, a.cor);
+    });
+    // v1.15/v1.36: rótulos por cima de todas as áreas; o que não cabe vai para fora, com linha
+    var textosSvg = function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; };
+    planejarRotulos(areasSvg, vw, vh, textosSvg).forEach(function(r, i){
+      if(r) rotuloSvg(svgEl, r, textosSvg(areasSvg[i]), corDaArea(coresSvg, areasSvg[i]));
     });
 
     if(mapaEstado && mapaEstado.desenhando && mapaEstado.pontosAtual.length>0){
@@ -4093,6 +4294,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       var mod = await import("./modulos/rastreabilidade/mapa-pdf.js");
       var areas = (mp.areas||[]).filter(function(a){ return a.pontos && a.pontos.length>=3; });
       var nfDe = function(a){ var l = (draft.data.linhas||[]).find(function(x){ return String(x.seq)===String(a.linhaSeq); }); return l && l.notaFiscal ? String(l.notaFiscal).trim() : ""; };
+      var coresPdf = coresDoMapa(mp);
+      areas = areas.map(function(a){ return Object.assign({}, a, { cor:corDaArea(coresPdf, a) }); });
       var out = await mod.mapaEmPdf({ bytes:bytes, pagina:pagina, pdfjsPage:page, areas:areas,
         textos:function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; },
         titulo:"Mapeamento da concretagem — "+rastRotulo(draft.data),
@@ -4115,7 +4318,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }
     if(statusEl) statusEl.textContent = "Gerando a imagem em alta resolução…";
     var planta = await plantaAltaResolucao(mp, canvasBase);
-    var areas = mp.areas || [];
+    var coresPng = coresDoMapa(mp);
+    var areas = (mp.areas || []).map(function(a){ return Object.assign({}, a, { cor:corDaArea(coresPng, a) }); });
     var vw = planta.width, vh = planta.height;
     // cabeçalho e legenda crescem junto com a planta (k = 1 numa planta de 2000 px)
     var k = Math.max(1, vw/2000);
@@ -4155,11 +4359,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       ctx.globalAlpha = 0.32; ctx.fillStyle = a.cor; ctx.fill(); ctx.globalAlpha = 1;
       ctx.strokeStyle = a.cor; ctx.lineWidth = Math.max(2, vw*0.003); ctx.lineJoin = "round"; ctx.stroke();
     });
-    // rótulos por cima de todas as áreas (mesma regra do editor: centro visual, tamanho pela planta)
-    areas.forEach(function(a){
-      if(!a.pontos || a.pontos.length<3) return;
-      var textos = { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) };
-      rotuloCanvas(ctx, rotuloArea(a.pontos, vw, vh, textos), textos, a.cor, padMargem, padTopo, 1);
+    // rótulos por cima de todas as áreas (mesma regra do editor: centro visual, tamanho pela
+    // planta; v1.36: o que não cabe vai para fora, com linha)
+    var textosPng = function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; };
+    planejarRotulos(areas, vw, vh, textosPng).forEach(function(r, i){
+      if(r) rotuloCanvas(ctx, r, textosPng(areas[i]), areas[i].cor, padMargem, padTopo, 1);
     });
 
     var yLeg = padTopo + vh + Math.round(28*k);
@@ -4373,6 +4577,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function wireGlobal(){
     document.getElementById("btn-new-fvs").addEventListener("click", function(){ openTipoChooser(); });
     document.getElementById("btn-new-rast").addEventListener("click", function(){ openModal("rast", null); });
+    document.getElementById("btn-new-desforma").addEventListener("click", function(){ abrirDesforma({}); });
     document.getElementById("btn-view-pavimento").addEventListener("click", function(){ showViewPavimento(); });
     document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
@@ -4462,6 +4667,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       out.push({ grupo:"Telas", titulo:"Minha assinatura", icone:"pen", busca:"assinatura assinar", abrir:abrirMinhaAssinatura });
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
+      out.push({ grupo:"Ações", titulo:"Pendências da desforma (fotos)", icone:"alert", busca:"desforma pendencia foto freiba forma relatorio fotografico", abrir:function(){ abrirDesforma({}); } });
       var fichas = [];
       fvsMap.forEach(function(f, id){ fichas.push({ id:id, f:f }); });
       fichas.sort(function(a,b){ return (b.f.dataConcretagem||b.f.dataAbertura||"").localeCompare(a.f.dataConcretagem||a.f.dataAbertura||""); });
