@@ -3385,19 +3385,24 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // Monta o rótulo + linha da legenda de uma área demarcada, reaproveitado
   // tanto no HTML inicial do modal quanto na atualização ao vivo (sem
   // recriar o modal inteiro) depois de fechar/remover uma área.
-  function mapaLegendaLinhaHtml(a, ai, linhasFicha, cor){
+  function mapaLegendaLinhaHtml(a, seq, linhasFicha, cor, qtd){
     var linha = (linhasFicha||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
     return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+(cor||a.cor)+';"></span>'
-      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+'</span>'
+      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+(qtd>1 ? ' <small>('+qtd+' áreas)</small>' : '')+'</span>'
         + (linha && linha.notaFiscal ? '<span class="mapa-legenda-nf">NF '+escapeHtml(linha.notaFiscal)+'</span>' : '')
       + '</span>'
-      + '<button type="button" class="mapa-rm-area" data-rm-area="'+ai+'" title="Remover área">✕</button></div>';
+      + '<button type="button" class="mapa-rm-area" data-rm-area="'+escapeHtml(seq)+'" title="Remover as áreas desta BT">✕</button></div>';
   }
   function mapaLegendaHtml(d){
     var areas = (d.mapeamento && d.mapeamento.areas) || [];
     if(areas.length===0) return '<div class="hint">Nenhuma área demarcada ainda. Toque em "+ Nova área" e marque os cantos do trecho concretado.</div>';
     var cores = coresDoMapa(d.mapeamento);
-    return '<div class="mapa-legenda">' + areas.map(function(a, ai){ return mapaLegendaLinhaHtml(a, ai, d.linhas, corDaArea(cores, a)); }).join("") + '</div>';
+    // v1.37: uma linha por BT, mesmo com várias áreas da mesma BT
+    var grupos = [];
+    areas.forEach(function(a){ var g = grupos.find(function(x){ return String(x.a.linhaSeq)===String(a.linhaSeq); }); if(g) g.n++; else grupos.push({ a:a, n:1 }); });
+    return '<div class="mapa-legenda">' + grupos.map(function(g){
+      return mapaLegendaLinhaHtml(g.a, g.a.linhaSeq, d.linhas, corDaArea(cores, g.a), g.n);
+    }).join("") + '</div>';
   }
   // Bloco de "mapeamento de concretagem": anexa a planta de forma (PDF) da
   // rastreabilidade e, uma vez anexada, mostra a ferramenta de desenho
@@ -4328,8 +4333,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function wireLegendaAreas(m){
     m.querySelectorAll("[data-rm-area]").forEach(function(btn){
       btn.onclick = function(){
-        var idx = +btn.getAttribute("data-rm-area");
-        draft.data.mapeamento.areas.splice(idx,1);
+        var seq = btn.getAttribute("data-rm-area"), mpL = draft.data.mapeamento;
+        var n = mpL.areas.filter(function(a){ return String(a.linhaSeq)===seq; }).length;
+        if(!confirm(n>1 ? "Remover as "+n+" áreas da BT "+seq+"?" : "Remover a área da BT "+seq+"?")) return;
+        mpL.areas = mpL.areas.filter(function(a){ return String(a.linhaSeq)!==seq; });
         atualizarLegendaMapa(m);
         redesenharSvg(m);
       };
@@ -4391,7 +4398,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         textos:function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; },
         titulo:"Mapeamento da concretagem — "+rastRotulo(draft.data),
         subtitulo:"Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"),
-        legenda:areas.map(function(a){ return { cor:a.cor, texto:"BT "+a.linhaSeq+(nfDe(a) ? " · NF "+nfDe(a) : "") }; }) });
+        legenda:areas.filter(function(a, i){ return areas.findIndex(function(b){ return String(b.linhaSeq)===String(a.linhaSeq); })===i; })
+          .map(function(a){ return { cor:a.cor, texto:"BT "+a.linhaSeq+(nfDe(a) ? " · NF "+nfDe(a) : "") }; }) });
       triggerDownload(new Blob([out], { type:"application/pdf" }), "mapeamento_"+(draft.data.data||"sem_data")+"_"+safeName(draft.data.blocoPav||"").slice(0,30)+".pdf");
       if(statusEl) statusEl.textContent = "PDF gerado ("+Math.round(out.length/1024)+" KB) — mesma qualidade da planta original.";
     }catch(ex){
@@ -4415,7 +4423,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // cabeçalho e legenda crescem junto com a planta (k = 1 numa planta de 2000 px)
     var k = Math.max(1, vw/2000);
     var padMargem = Math.round(24*k), padTopo = Math.round(74*k), linhaLegenda = Math.round(28*k);
-    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + Math.round(20*k)) : Math.round(36*k);
+    var legendaBts = []; areas.forEach(function(a){ if(!legendaBts.some(function(x){ return String(x.linhaSeq)===String(a.linhaSeq); })) legendaBts.push(a); }); // v1.37: uma linha por BT
+    var alturaLegenda = legendaBts.length ? (linhaLegenda*legendaBts.length + Math.round(20*k)) : Math.round(36*k);
     var out = document.createElement("canvas");
     out.width = vw + padMargem*2;
     out.height = padTopo + vh + alturaLegenda + padMargem;
@@ -4462,7 +4471,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       ctx.fillStyle = "#666666"; ctx.font = Math.round(13*k)+"px Arial, Helvetica, sans-serif";
       ctx.fillText("Nenhuma área demarcada.", padMargem, yLeg);
     }else{
-      areas.forEach(function(a, ai){
+      legendaBts.forEach(function(a, ai){
         var linha = (draft.data.linhas||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
         var y = yLeg + ai*linhaLegenda;
         ctx.fillStyle = a.cor;

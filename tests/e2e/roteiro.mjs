@@ -188,8 +188,26 @@ try {
   await m.click('.edmapa [data-bt="1"]');
   ok(await esperar(async () => /, P30$/.test((await db.doc("rastreabilidade/r3").get()).data().linhas[0].pecas || "")), "demarcar área: a P30 (desenhada na planta) entra nas peças da BT 1");
   await foto(m, "editor-pecas");
+  // v1.37: editar a área (arrastar um canto) e lista sem repetir a BT
+  ok((await m.$$eval(".edmapa-chip-nome", (l) => l.map((x) => x.textContent.trim()))).filter((t) => /^BT 1\b/.test(t)).length === 1, "editor: a BT 1 com duas áreas aparece uma vez só na lista");
+  const antes = JSON.stringify((await db.doc("rastreabilidade/r3").get()).data().mapeamento.areas.map((a) => a.pontos));
+  await m.click(".edmapa-chip-nome");
+  await m.waitForSelector('.edmapa [data-acao="pronto"]', { timeout: 5000 });
+  const cx1 = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  const canto = await m.$eval(".edmapa [data-svg] circle:last-of-type", (c) => ({ x: +c.getAttribute("cx"), y: +c.getAttribute("cy") }));
+  const vb = await m.$eval(".edmapa [data-svg]", (s) => ({ width: s.viewBox.baseVal.width, height: s.viewBox.baseVal.height }));
+  const sx = cx1.x + (canto.x / vb.width) * cx1.w, sy = cx1.y + (canto.y / vb.height) * cx1.h;
+  await m.mouse.move(sx, sy); await m.mouse.down(); await m.mouse.move(sx + 40, sy + 30, { steps: 6 }); await m.mouse.up();
+  ok(await esperar(async () => JSON.stringify((await db.doc("rastreabilidade/r3").get()).data().mapeamento.areas.map((a) => a.pontos)) !== antes), "editor: arrastar o canto da área grava o contorno novo");
+  await m.click('.edmapa [data-acao="pronto"]');
+  await m.click('.edmapa [data-acao="rotulos"]');
+  ok((await m.$$(".edmapa [data-svg] text")).length === 0, "editor: botão Aa oculta os rótulos");
+  await m.click('.edmapa [data-acao="rotulos"]');
   await m.click(".edmapa [data-acao=sair], .edmapa [data-acao=fechar]").catch(() => {});
   await m.waitForTimeout(500);
+
+  ok((await m.$$eval("#mapa-legenda-host .mapa-legenda-bt", (l) => l.map((x) => x.textContent))).filter((t) => /^BT 1\b/.test(t)).length === 1, "ficha: legenda com uma linha por BT (BT 1 com duas áreas)");
+  ok(!(await m.$('header [data-clicar="btn-new-fvs"]')), "topo sem o botão “Nova FVS” (fica na barra lateral)");
 
   // 2f) v1.36: pendências da desforma → não conformidade na FVS 04 da concretagem (criada e ligada)
   await m.click('[data-rast-aba="fvs"]');

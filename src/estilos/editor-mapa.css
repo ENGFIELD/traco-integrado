@@ -74,3 +74,5 @@ html.edmapa-aberto, html.edmapa-aberto body { overflow: hidden; }
 .edmapa-mundo canvas.edmapa-detalhe[hidden] { display: none; }
 /* v1.37: aviso das peças preenchidas */
 .edmapa-aviso { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); z-index: 5; max-width: min(92vw, 560px); padding: 10px 14px; border-radius: 10px; background: #1a1a1a; color: #fff; font: 600 14px/1.35 Arial, Helvetica, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+/* v1.37: chip = botão de editar (nome) + remover */
+.edmapa-chip button.edmapa-chip-nome { width: auto; height: auto; border-radius: 0; color: inherit; font: inherit; display: inline-flex; align-items: center; gap: 6px; padding: 0; }
