@@ -10,7 +10,7 @@
  * convertidas para o sistema do PDF com viewport.convertToPdfPoint — funciona
  * também em páginas giradas (/Rotate).
  */
-import { rotuloArea, OPAC_FUNDO } from "./rotulo-mapa.js";
+import { planejarRotulos, pontaDaLinha, OPAC_FUNDO } from "./rotulo-mapa.js";
 
 const corRgb = (lib, hex) => {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(hex || "")) || [0, "33", "33", "33"];
@@ -54,13 +54,22 @@ export async function mapaEmPdf(opts) {
     pag.drawSvgPath(path, { x: 0, y: 0, color: corRgb(lib, a.cor), opacity: 0.3, borderColor: corRgb(lib, a.cor), borderWidth: borda, borderOpacity: 1 });
   });
   // 2) rótulos (por cima de todas as áreas)
-  opts.areas.forEach((a) => {
-    if (!a.pontos || a.pontos.length < 3) return;
-    const t = opts.textos(a), r = rotuloArea(a.pontos, W, H, t);
+  // v1.36: planejados juntos — o rótulo que não cabe na área vai para fora, com linha
+  const plano = planejarRotulos(opts.areas, W, H, opts.textos);
+  opts.areas.forEach((a, i) => {
+    const r = plano[i];
+    if (!r) return;
+    const t = opts.textos(a);
     const c = vp.convertToPdfPoint(r.x, r.y);
     const em = (dx, dy) => { const v = R(dx, dy); return { x: c[0] + v[0], y: c[1] + v[1] }; };
+    if (r.fora) {
+      const pa = vp.convertToPdfPoint(r.ax, r.ay), pp = pontaDaLinha(r), pb = vp.convertToPdfPoint(pp.x, pp.y);
+      pag.drawLine({ start: { x: pa[0], y: pa[1] }, end: { x: pb[0], y: pb[1] }, thickness: r.fs * 0.1, color: corRgb(lib, a.cor) });
+      pag.drawCircle({ x: pa[0], y: pa[1], size: r.fs * 0.22, color: corRgb(lib, a.cor), borderColor: rgb(1, 1, 1), borderWidth: r.fs * 0.06 });
+    }
     const canto = em(-r.w / 2, -r.h / 2);
-    pag.drawRectangle({ x: canto.x, y: canto.y, width: r.w, height: r.h, rotate: degrees(rot), color: rgb(1, 1, 1), opacity: OPAC_FUNDO });
+    pag.drawRectangle({ x: canto.x, y: canto.y, width: r.w, height: r.h, rotate: degrees(rot), color: rgb(1, 1, 1), opacity: r.fora ? 0.95 : OPAC_FUNDO,
+      ...(r.fora ? { borderColor: corRgb(lib, a.cor), borderWidth: r.fs * 0.08 } : {}) });
     const bt = limpar(t.bt), nf = limpar(t.nf || "");
     const wBt = negrito.widthOfTextAtSize(bt, r.fs);
     const p1 = em(-wBt / 2, (nf ? 0.55 * r.fs : 0) - 0.35 * r.fs);

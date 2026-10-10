@@ -20,7 +20,7 @@
  */
 import "../../estilos/editor-mapa.css";
 import { garantirPdf } from "../../libs.js";
-import { rotuloArea, rotuloSvg } from "./rotulo-mapa.js";
+import { planejarRotulos, rotuloSvg, coresDistintas } from "./rotulo-mapa.js";
 
 const ZOOM_MAX = 30;          // em relação ao "caber na tela" (v1.17: 12 → 30, o zoom agora fica nítido)
 const TOQUE_MAX_MOV = 10;     // px — acima disso é arrasto, não toque
@@ -221,25 +221,34 @@ export async function abrirEditorMapa(opts) {
     for (const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
   }
-  const cacheRotulo = new WeakMap();
+  // v1.36: rótulos planejados juntos (os que não cabem vão para fora, com linha)
+  // e cores que não se confundem entre vizinhas — refeitos só quando algo muda
+  let cacheMapa = { chave: null, rotulos: [], cores: new Map() };
+  function textosDe(a) {
+    const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
+    return { bt: "BT " + a.linhaSeq, nf: lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "" };
+  }
+  function planoMapa() {
+    const chave = W + "x" + H + "|" + mp.areas.map((a) => { const t = textosDe(a); return t.bt + "|" + t.nf + "|" + (a.pontos || []).join(";"); }).join("#");
+    if (cacheMapa.chave !== chave) {
+      cacheMapa = { chave, rotulos: planejarRotulos(mp.areas, W, H, textosDe), cores: coresDistintas(mp.areas, opts.cor) };
+    }
+    return cacheMapa;
+  }
+  const corDe = (a) => planoMapa().cores.get(String(a.linhaSeq)) || a.cor;
   function desenhar() {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     const px = 1 / s; // 1 pixel de tela em unidades da planta
     if (!isFinite(px) || px <= 0) return;
     const pt = (p) => `${p[0] * W},${p[1] * H}`;
+    const plano = planoMapa();
     mp.areas.forEach((a) => {
       if (!a.pontos || a.pontos.length < 3) return;
-      svg.appendChild(el("polygon", { points: a.pontos.map(pt).join(" "), fill: a.cor, "fill-opacity": 0.32, stroke: a.cor, "stroke-width": 2.5 * px }));
-      // rótulo: "BT 1" e, embaixo, a nota fiscal da betonada ("NF: 12345").
-      // v1.15: no centro visual da área e com tamanho em unidades da planta —
-      // igual ao do PNG exportado (ver rotulo-mapa.js).
-      const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
-      const textos = { bt: "BT " + a.linhaSeq, nf: lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "" };
-      // o cálculo do centro só é refeito quando a área ou o texto mudam (desenhar() roda a cada quadro do arrasto)
-      const chave = textos.bt + "|" + textos.nf + "|" + a.pontos.join(";");
-      let r = cacheRotulo.get(a);
-      if (!r || r.chave !== chave) { r = { chave, v: rotuloArea(a.pontos, W, H, textos) }; cacheRotulo.set(a, r); }
-      rotuloSvg(svg, r.v, textos, a.cor);
+      svg.appendChild(el("polygon", { points: a.pontos.map(pt).join(" "), fill: corDe(a), "fill-opacity": 0.32, stroke: corDe(a), "stroke-width": 2.5 * px }));
+    });
+    // rótulos por cima de todas as áreas: "BT 1" e, embaixo, a NF da betonada
+    mp.areas.forEach((a, i) => {
+      if (plano.rotulos[i]) rotuloSvg(svg, plano.rotulos[i], textosDe(a), corDe(a));
     });
     if (pontos.length) {
       if (pontos.length > 1) {
@@ -283,7 +292,7 @@ export async function abrirEditorMapa(opts) {
         <div class="edmapa-areas">
           ${mp.areas.length ? mp.areas.map((a, i) => {
             const l = (opts.linhas() || []).find((x) => String(x.seq) === String(a.linhaSeq));
-            return `<span class="edmapa-chip" style="--cor:${a.cor}"><i></i>BT ${esc(a.linhaSeq)}${l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}
+            return `<span class="edmapa-chip" style="--cor:${corDe(a)}"><i></i>BT ${esc(a.linhaSeq)}${l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}
               <button type="button" data-remover="${i}" aria-label="Remover área">✕</button></span>`;
           }).join("") : `<span class="edmapa-dica">Nenhuma área demarcada ainda.</span>`}
         </div>`;
@@ -367,7 +376,7 @@ export async function abrirEditorMapa(opts) {
     mp.areas.forEach((a) => {
       if (!a.pontos || a.pontos.length < 3) return;
       c.beginPath(); a.pontos.forEach((p, i) => { const q = P(p); i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); }); c.closePath();
-      c.globalAlpha = 0.25; c.fillStyle = a.cor; c.fill(); c.globalAlpha = 1; c.strokeStyle = a.cor; c.stroke();
+      c.globalAlpha = 0.25; c.fillStyle = corDe(a); c.fill(); c.globalAlpha = 1; c.strokeStyle = corDe(a); c.stroke();
     });
     if (pontos.length) {
       c.strokeStyle = "#c0392b"; c.setLineDash([6 * dpr, 4 * dpr]);

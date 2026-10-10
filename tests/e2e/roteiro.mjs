@@ -53,6 +53,13 @@ await db.doc("assinaturas/" + uidMatheus).set({ nome: "Matheus Alves", papel: "e
 // v1.32: 7 dias vencido e sem resultado (concretagem há 9 dias) tem que aparecer como pendente
 const diasAtras = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
 await db.doc("controleTecnologico/nf_07001").set({ notaRemessa: "07001", dataConcretagem: diasAtras(9), data7: diasAtras(2), data28: diasAtras(-19), data63: diasAtras(-54), fck: 40, local: "Laje teste 7 dias", anteriorAoSistema: false, atualizadoEm: T });
+// v1.36: concretagem com planta demarcada; a NF da BT 2 ficou abaixo do fck aos 28 dias
+const PLANTA = "data:image/svg+xml;charset=utf-8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="560"><rect width="800" height="560" fill="#fff"/><rect x="40" y="40" width="720" height="480" fill="none" stroke="#000" stroke-width="3"/></svg>');
+const quad = (x, y, l, a) => [{ x, y }, { x: x + l, y }, { x: x + l, y: y + a }, { x, y: y + a }];
+await db.doc("rastreabilidade/r3").set({ data: diasAtras(40), blocoPav: "Piso do 6º Pavimento Tipo", pavimentos: ["Piso do 6º Pavimento Tipo"], obra: "Belavista Ipanema", fckSolicitado: "40 MPa",
+  linhas: [linha(1, "08001", "L6"), linha(2, "08002", "V3")], fechado: false, createdAt: T, updatedAt: T,
+  mapeamento: { plantaUrl: PLANTA, plantaNome: "Forma 6º pav", tipo: "imagem", pagina: 1, areas: [{ pontos: quad(0.1, 0.1, 0.4, 0.4), linhaSeq: 1, cor: "#2E5AAC" }, { pontos: quad(0.5, 0.1, 0.012, 0.05), linhaSeq: 2, cor: "#2E7D46" }] } });
+await db.doc("controleTecnologico/nf_08002").set({ notaRemessa: "08002", dataConcretagem: diasAtras(40), fck: 40, r28: 32, data28: diasAtras(12), local: "6º pav V3", anteriorAoSistema: false, atualizadoEm: T });
 await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "Matheus Alves", status: "aberta", criadoPor: "suellen.alves@sig.eng.br", criadoEm: T, atualizadoEm: T });
 
 // ---------- navegador ----------
@@ -71,6 +78,8 @@ async function entrar(email, viewport) {
   return p;
 }
 const irPara = (p, id) => p.evaluate((i) => document.getElementById(i).click(), id).then(() => p.waitForTimeout(600));
+// FOTOS=pasta → guarda capturas de tela das telas novas (para conferir o visual)
+const foto = async (p, nome) => { if (process.env.FOTOS) await p.screenshot({ path: process.env.FOTOS + "/" + nome + ".png" }); };
 const esperar = async (fn, ms = 10000) => { const fim = Date.now() + ms; while (Date.now() < fim) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
 
 try {
@@ -128,6 +137,45 @@ try {
   await m.fill('[data-ctf="r28"]', "45"); await m.click("[data-ct-salvar]");
   const ct = await esperar(async () => { const x = (await db.doc("controleTecnologico/nf_05538").get()).data(); return String(x.r28) === "45" && x.atualizadoPor === "matheus.alves@sig.eng.br"; });
   ok(ct, "controle tecnológico: resultado gravado e carimbado");
+
+  // 2d) v1.36: CT → "No mapa: abaixo do fck" mostra a planta só com a BT da nota
+  await irPara(m, "btn-view-ct");
+  await m.click('[data-ct-aba="mapa"]');
+  ok(await esperar(async () => (await m.$$(".ct-mapa-host svg polygon")).length === 1), "CT no mapa: a planta aparece só com a BT da nota abaixo do fck");
+  ok(/BT 2 · NF 08002/.test(await m.$eval(".ct-mapa-host svg", (s) => s.textContent)), "CT no mapa: rótulo “BT 2 · NF 08002” com o resultado");
+  ok(await m.$eval(".ct-mapa-host svg", (s) => !!s.querySelector("line")), "BT miúda: rótulo fora da área, com linha");
+  await foto(m, "ct-mapa");
+  await m.click('[data-ct-aba="notas"]');
+
+  // 2e) v1.36: ficha de concretagem com abas — FVS do local e controle tecnológico
+  await irPara(m, "btn-nav-board");
+  await m.click('.row[data-rast="r3"] [data-open-rast="r3"]'); await m.waitForSelector('[data-rast-aba="fvs"]', { timeout: 8000 });
+  await m.click('[data-rast-aba="fvs"]');
+  ok(await m.isVisible('[data-rast-abrir-fvs="f3"]'), "aba FVS do local: lista a FVS do mesmo pavimento");
+  await foto(m, "rast-aba-fvs");
+  await m.click('[data-rast-aba="ct"]');
+  ok(await esperar(async () => (await m.$$('[data-painel="ct"] .ct-mapa-host svg polygon')).length === 1), "aba Controle tecnológico: planta com a BT abaixo do fck");
+  await m.click('[data-rast-aba="concretagem"]');
+  ok(await m.isVisible('[data-line-field="pecas"][data-line-idx="0"]'), "aba Concretagem: formulário de sempre");
+
+  // 2f) v1.36: pendências da desforma → não conformidade na FVS 04 da concretagem (criada e ligada)
+  await m.click('[data-rast-aba="fvs"]');
+  await m.click('[data-desforma-rast="r3"]'); await m.waitForSelector(".dsf [data-sem-foto]", { timeout: 8000 });
+  await m.click(".dsf [data-sem-foto]");
+  await m.selectOption(".dsf-item [data-campo=elemento]", "Pilar");
+  await m.fill(".dsf-item [data-campo=descricao]", "Bicheira no pilar P12");
+  await foto(m, "desforma-fotos");
+  await m.click(".dsf [data-gravar]");
+  const desf = await esperar(async () => {
+    const q = await db.collection("fvs").where("rastreabilidadeId", "==", "r3").get();
+    const r3 = (await db.doc("rastreabilidade/r3").get()).data();
+    return q.size === 1 && q.docs[0].data().naoConformidades[0].descricao === "Pilar: Bicheira no pilar P12" && q.docs[0].data().naoConformidades[0].origem === "desforma" && r3.fvsId === q.docs[0].id;
+  });
+  ok(desf, "desforma: pendência gravada na FVS 04 criada e ligada à concretagem");
+  ok(await m.isVisible(".dsf [data-enviar]"), "desforma: botão de enviar no WhatsApp");
+  await foto(m, "desforma-enviar");
+  await m.click(".dsf [data-fechar]"); await m.waitForTimeout(300);
+  await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
 
   // 3) excluir FVS = lixeira (continua no banco, some do app)
   await irPara(m, "btn-nav-board");
