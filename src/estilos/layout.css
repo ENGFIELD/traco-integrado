@@ -851,3 +851,4 @@ body[data-perfil="admin"] .so-assinar { display: none !important; }
 .planta-filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin: 12px 0; }
 .planta-filtros .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .planta-disc { max-width: 140px; }
+.planta-pecas { font-size: 12px; color: var(--good); font-weight: 700; }

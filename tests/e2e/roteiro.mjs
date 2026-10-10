@@ -60,7 +60,8 @@ await db.doc("rastreabilidade/r3").set({ data: diasAtras(40), blocoPav: "Piso do
   linhas: [linha(1, "08001", "L6"), linha(2, "08002", "V3")], fechado: false, createdAt: T, updatedAt: T,
   mapeamento: { plantaUrl: PLANTA, plantaNome: "Forma 6º pav", tipo: "imagem", pagina: 1, areas: [{ pontos: quad(0.1, 0.1, 0.4, 0.4), linhaSeq: 1, cor: "#2E5AAC" }, { pontos: quad(0.5, 0.1, 0.012, 0.05), linhaSeq: 2, cor: "#2E7D46" }] } });
 await db.doc("controleTecnologico/nf_08002").set({ notaRemessa: "08002", dataConcretagem: diasAtras(40), fck: 40, r28: 32, data28: diasAtras(12), local: "6º pav V3", anteriorAoSistema: false, atualizadoEm: T });
-await db.doc("plantas/p1").set({ nome: "Forma 6º pav", pavimento: "Piso do 6º Pavimento Tipo", url: PLANTA, tipo: "imagem", criadoEm: T });
+await db.doc("plantas/p1").set({ nome: "Forma 6º pav", pavimento: "Piso do 6º Pavimento Tipo", url: PLANTA, tipo: "imagem", criadoEm: T,
+  pecas: [{ n: "P30", x: 0.72, y: 0.7 }, { n: "V31", x: 0.78, y: 0.75 }, { n: "L9", x: 0.3, y: 0.3 }] });
 await db.doc("plantas/p2").set({ nome: "Arquitetura 6º pav", pavimento: "Piso do 6º Pavimento Tipo", disciplina: "Arquitetura", url: PLANTA, tipo: "imagem", criadoEm: T });
 await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "Matheus Alves", status: "aberta", criadoPor: "suellen.alves@sig.eng.br", criadoEm: T, atualizadoEm: T });
 
@@ -159,6 +160,19 @@ try {
   ok(await esperar(async () => (await m.$$('[data-painel="ct"] .ct-mapa-host svg polygon')).length === 1), "aba Controle tecnológico: planta com a BT abaixo do fck");
   await m.click('[data-rast-aba="concretagem"]');
   ok(await m.isVisible('[data-line-field="pecas"][data-line-idx="0"]'), "aba Concretagem: formulário de sempre");
+
+  // 2e2) v1.37: ao demarcar uma área, as peças da planta que ficam dentro entram na BT
+  await m.click("#mapa-abrir-editor"); await m.waitForSelector(".edmapa [data-acao=nova-area]", { timeout: 10000 });
+  await m.waitForFunction(() => { const c = document.querySelector(".edmapa [data-carregando]"); return !c || c.hidden || getComputedStyle(c).display === "none"; }, null, { timeout: 10000 }).catch(() => {});
+  await m.click(".edmapa [data-acao=nova-area]");
+  const caixa = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  for (const [u, v] of [[0.65, 0.62], [0.85, 0.62], [0.85, 0.85], [0.65, 0.85]]) { await m.mouse.click(caixa.x + u * caixa.w, caixa.y + v * caixa.h); await m.waitForTimeout(150); }
+  await m.click(".edmapa [data-acao=fechar-area]");
+  await m.click('.edmapa [data-bt="1"]');
+  ok(await esperar(async () => /P30, V31/.test((await db.doc("rastreabilidade/r3").get()).data().linhas[0].pecas || "")), "demarcar área: P30 e V31 entram nas peças da BT 1 (e a L9, fora da área, não)");
+  await foto(m, "editor-pecas");
+  await m.click(".edmapa [data-acao=sair], .edmapa [data-acao=fechar]").catch(() => {});
+  await m.waitForTimeout(500);
 
   // 2f) v1.36: pendências da desforma → não conformidade na FVS 04 da concretagem (criada e ligada)
   await m.click('[data-rast-aba="fvs"]');

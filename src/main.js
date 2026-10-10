@@ -23,6 +23,7 @@ import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
+import { lerPecasDaPagina, pecasNaArea } from "./modulos/rastreabilidade/pecas-planta.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
@@ -2078,6 +2079,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
                 + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
                 + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
                 + '<select class="planta-disc" data-disc-planta="'+escapeHtml(p.id)+'" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option'+(disciplinaDa(p)===d?" selected":"")+'>'+d+'</option>'; }).join("")+'</select>'
+                + (disciplinaDa(p)==="Forma" ? (Array.isArray(p.pecas) && p.pecas.length
+                    ? '<span class="planta-pecas" title="Nomes das peças lidos do PDF — preenchem as peças concretadas ao demarcar">'+p.pecas.length+' peças</span>'
+                    : '<label class="btn ghost small" title="Escolha o PDF original desta planta para o app ler os nomes das peças (P, V, L…)">Ler peças do PDF<input type="file" accept="application/pdf" hidden data-ler-pecas="'+escapeHtml(p.id)+'"></label>') : '')
                 + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
                 + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
               + '</div>';
@@ -2126,6 +2130,21 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     });
     var fPav = document.getElementById("planta-filtro-pav");
     if(fPav) fPav.addEventListener("change", function(){ filtroPlantas.pav = fPav.value; renderViewPlantas(); });
+    container.querySelectorAll("[data-ler-pecas]").forEach(function(inp){
+      inp.addEventListener("change", async function(){
+        var f = inp.files && inp.files[0]; inp.value = "";
+        if(!f) return;
+        if(msgEl) msgEl.textContent = "Lendo as peças de "+f.name+"…";
+        try{
+          await garantirPdf();
+          var pdf = await pdfjsLib.getDocument({ data:await f.arrayBuffer() }).promise;
+          var pecas = await lerPecasDaPagina(await pdf.getPage(1));
+          if(!pecas.length){ if(msgEl) msgEl.textContent = "Não achei nomes de peças escritos como texto neste PDF (alguns programas exportam o texto como desenho). Nesse caso as peças continuam sendo digitadas."; return; }
+          await plantasCol.doc(inp.getAttribute("data-ler-pecas")).set({ pecas:pecas, pecasLidasEm:nowISO() }, { merge:true });
+          if(msgEl) msgEl.textContent = pecas.length+" peças lidas de "+f.name+".";
+        }catch(ex){ console.error(ex); if(msgEl) msgEl.textContent = "Não consegui ler "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido"); }
+      });
+    });
     container.querySelectorAll("[data-disc-planta]").forEach(function(sel){
       sel.addEventListener("change", async function(){
         try{ await plantasCol.doc(sel.getAttribute("data-disc-planta")).set({ disciplina:sel.value }, { merge:true }); }
@@ -2462,7 +2481,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     await page.render({ canvasContext:ctx, viewport:viewport }).promise;
     var blob = await new Promise(function(resolve){ canvas.toBlob(resolve, "image/jpeg", 0.82); });
     if(!blob) throw new Error("não foi possível gerar a versão comprimida da planta");
-    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height };
+    // v1.37: os nomes das peças (P12, V105, L3…) escritos no PDF, com a posição
+    var pecas = [];
+    try{ pecas = await lerPecasDaPagina(page); }catch(ex){ console.warn("peças da planta", ex); }
+    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height, pecas:pecas };
   }
   // Cadastra uma planta na biblioteca: comprime (ver comprimirPlantaEmImagem
   // acima), envia a imagem já leve pro Cloudinary e grava o registro em
@@ -2476,6 +2498,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       nome: nomeBase,
       pavimento: (pavimento||"").trim(),
       disciplina: disciplina || "Forma",
+      pecas: comp.pecas || [], pecasLidasEm: nowISO(),
       url: url,
       tipo: "imagem",
       larguraPx: comp.larguraPx,
@@ -3936,6 +3959,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!p) return;
       mp.plantaUrl = p.url;
       mp.plantaNome = p.nome;
+      mp.plantaId = id; // v1.37: para achar as peças lidas desta planta
       mp.tipo = p.tipo || "imagem";
       mp.pagina = 1;
       mp.areas = [];
@@ -3973,6 +3997,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         mapeamento: d.data.mapeamento,
         linhas: function(){ return d.data.linhas || []; },
         cor: mapaCorSequencia,
+        aoMarcarArea: function(area){ return pecasDaAreaNaBt(d, area); },
         titulo: "Mapeamento — "+rastRotulo(d.data),
         salvar: async function(){ return draft===d ? await saveDraft(true) : false; },
         aoFechar: function(){ if(draft===d) renderModal(); }
@@ -4184,6 +4209,39 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var addBtn = m.querySelector("#mapa-add-area");
     if(addBtn) addBtn.hidden = false;
     redesenharSvg(m);
+  }
+
+  /* ---- v1.37: peças da planta → "Peças concretadas" da BT ao demarcar ---- */
+  var cachePecasPdf = {};
+  async function pecasDaPlanta(mp){
+    var pl = mp.plantaId ? plantasMap.get(mp.plantaId) : null;
+    if(!pl) plantasMap.forEach(function(p){ if(!pl && p.url===mp.plantaUrl) pl = p; });
+    if(pl && Array.isArray(pl.pecas) && pl.pecas.length) return pl.pecas;
+    if(mp.tipo!=="pdf" || !mp.plantaUrl) return [];
+    var chave = mp.plantaUrl+"#"+(mp.pagina||1);
+    if(!cachePecasPdf[chave]){
+      cachePecasPdf[chave] = (async function(){
+        await garantirPdf();
+        var pdf = await pdfjsLib.getDocument(mp.plantaUrl).promise;
+        return lerPecasDaPagina(await pdf.getPage(Math.min(Math.max(mp.pagina||1, 1), pdf.numPages)));
+      })().catch(function(ex){ console.warn(ex); delete cachePecasPdf[chave]; return []; });
+    }
+    return cachePecasPdf[chave];
+  }
+  async function pecasDaAreaNaBt(d, area){
+    var mp = d.data.mapeamento || {};
+    var pecas = await pecasDaPlanta(mp);
+    if(!pecas.length) return "";
+    var nomes = pecasNaArea(area.pontos, pecas);
+    if(!nomes.length) return "BT "+area.linhaSeq+": nenhum nome de peça dentro desta área.";
+    var linha = (d.data.linhas||[]).find(function(l){ return String(l.seq)===String(area.linhaSeq); });
+    if(!linha) return "";
+    var atuais = String(linha.pecas||"").split(/\s*(?:[,;\/\n]|\se\s)\s*/i).map(function(x){ return x.trim(); }).filter(Boolean);
+    var chave = function(x){ return String(x).toUpperCase().replace(/\s+/g, ""); };
+    var novas = nomes.filter(function(n){ return !atuais.some(function(a){ return chave(a)===chave(n); }); });
+    if(!novas.length) return "BT "+area.linhaSeq+": "+nomes.join(", ")+" — já estavam nas peças.";
+    linha.pecas = atuais.concat(novas).join(", ");
+    return "BT "+area.linhaSeq+": "+novas.join(", ")+" entraram nas peças concretadas.";
   }
 
   function abrirSeletorSequencia(m){

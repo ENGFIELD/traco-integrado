@@ -79,6 +79,12 @@ export async function abrirEditorMapa(opts) {
   const svg = raiz.querySelector("[data-svg]");
   const base = raiz.querySelector("[data-base]");
   const salvoEl = raiz.querySelector("[data-salvo]");
+  // aviso curto no topo (ex.: "BT 3: P12, V105 e L5 entraram nas peças")
+  const avisoEl = document.createElement("div");
+  avisoEl.className = "edmapa-aviso"; avisoEl.hidden = true;
+  raiz.appendChild(avisoEl);
+  let avisoTimer = null;
+  function avisar(t) { avisoEl.textContent = t; avisoEl.hidden = false; clearTimeout(avisoTimer); avisoTimer = setTimeout(() => { avisoEl.hidden = true; }, 6000); }
   const lupa = raiz.querySelector("[data-lupa]");
   const detalhe = raiz.querySelector("[data-detalhe]");
 
@@ -319,11 +325,14 @@ export async function abrirEditorMapa(opts) {
     if (!b || b.disabled) return;
     if (b.dataset.bt != null) {
       const seq = b.dataset.bt;
-      mp.areas.push({ pontos: pontos.slice(), linhaSeq: seq, cor: opts.cor(seq) });
+      const area = { pontos: pontos.slice(), linhaSeq: seq, cor: opts.cor(seq) };
+      mp.areas.push(area);
       pontos = [];
       modo = "ver";
       renderBase(); desenhar();
-      salvarAgora();
+      // v1.37: as peças da planta que caem dentro da área entram na BT antes de salvar
+      Promise.resolve(opts.aoMarcarArea ? opts.aoMarcarArea(area) : "").catch((ex) => { console.error(ex); return ""; })
+        .then((msg) => { if (msg) avisar(msg); renderBase(); salvarAgora(); });
       return;
     }
     if (b.dataset.remover != null) {
