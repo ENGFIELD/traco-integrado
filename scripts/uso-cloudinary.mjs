@@ -45,25 +45,40 @@ for (const tipo of ["image", "raw", "video"]) {
     cursor = r.next_cursor || "";
   } while (cursor);
 }
+// arquivos de exemplo que o Cloudinary cria sozinho em toda conta nova (não são do app)
+const exemplo = (x) => /^(samples\/|cld-sample|main-sample|sample$)/.test(x.id);
+const ex = todos.filter(exemplo), app = todos.filter((x) => !exemplo(x));
+diz("### Do app × exemplos do Cloudinary");
+diz("| Origem | Arquivos | Tamanho |");
+diz("|---|---|---|");
+diz("| Enviados pelo app (fotos, plantas, PDFs) | " + app.length + " | " + mb(app.reduce((t, x) => t + x.bytes, 0)) + " |");
+diz("| Exemplos que vêm com a conta (samples) | " + ex.length + " | " + mb(ex.reduce((t, x) => t + x.bytes, 0)) + " |");
+diz("");
 const grupo = {};
-todos.forEach((x) => { const k = x.tipo === "raw" ? "documento (" + x.formato + ")" : x.tipo + " (" + (x.formato || "?") + ")"; grupo[k] = grupo[k] || { n: 0, b: 0 }; grupo[k].n++; grupo[k].b += x.bytes; });
-diz("### O que está guardado");
+app.forEach((x) => { const k = x.tipo === "raw" ? "documento (" + x.formato + ")" : x.tipo + " (" + (x.formato || "?") + ")"; grupo[k] = grupo[k] || { n: 0, b: 0 }; grupo[k].n++; grupo[k].b += x.bytes; });
+diz("### O que o app guardou, por tipo");
 diz("| Tipo | Arquivos | Tamanho |");
 diz("|---|---|---|");
 Object.entries(grupo).sort((a, b) => b[1].b - a[1].b).forEach(([k, v]) => diz("| " + k + " | " + v.n + " | " + mb(v.b) + " |"));
-diz("| **Total** | **" + todos.length + "** | **" + mb(todos.reduce((t, x) => t + x.bytes, 0)) + "** |");
+diz("| **Total do app** | **" + app.length + "** | **" + mb(app.reduce((t, x) => t + x.bytes, 0)) + "** |");
 diz("");
 const porMes = {};
-todos.forEach((x) => { const m = x.em.slice(0, 7) || "?"; porMes[m] = porMes[m] || { n: 0, b: 0 }; porMes[m].n++; porMes[m].b += x.bytes; });
-diz("### Enviados por mês");
+app.forEach((x) => { const m = x.em.slice(0, 7) || "?"; porMes[m] = porMes[m] || { n: 0, b: 0 }; porMes[m].n++; porMes[m].b += x.bytes; });
+diz("### Enviados pelo app, por mês");
 diz("| Mês | Arquivos | Tamanho |");
 diz("|---|---|---|");
 Object.keys(porMes).sort().forEach((m) => diz("| " + m + " | " + porMes[m].n + " | " + mb(porMes[m].b) + " |"));
 diz("");
-diz("### Os 15 maiores arquivos");
+diz("### Os 15 maiores arquivos do app");
 diz("| Arquivo | Tipo | Tamanho | Enviado em |");
 diz("|---|---|---|---|");
-todos.sort((a, b) => b.bytes - a.bytes).slice(0, 15).forEach((x) => diz("| " + x.id + " | " + x.formato + " | " + mb(x.bytes) + " | " + x.em + " |"));
+app.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 15).forEach((x) => diz("| " + x.id + " | " + x.formato + " | " + mb(x.bytes) + " | " + x.em + " |"));
+
+diz("");
+diz("### Os 10 últimos enviados pelo app");
+diz("| Arquivo | Tipo | Tamanho | Enviado em |");
+diz("|---|---|---|---|");
+app.slice().sort((a, b) => b.em.localeCompare(a.em)).slice(0, 10).forEach((x) => diz("| " + x.id + " | " + x.formato + " | " + mb(x.bytes) + " | " + x.em + " |"));
 
 if (Number(cred.used_percent) >= 80) {
   console.log("::warning::Cloudinary: " + cred.used_percent + "% dos créditos do mês já usados — hora de levar as plantas para o Drive.");
