@@ -1,5 +1,7 @@
 /* Uso do Cloudinary (v1.37): quanto do plano gratuito já foi gasto e o que
- * está guardado lá (fotos das NCs, plantas, PDFs).
+ * está guardado lá (fotos das NCs, plantas, PDFs). Roda toda segunda em
+ * silêncio; só chama atenção (execução com erro → e-mail do GitHub) quando o
+ * uso passar de 80%.
  *
  * SÓ LEITURA: não apaga nem altera nada. A chave vem dos segredos do GitHub
  * (CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET) e nunca é impressa.
@@ -80,8 +82,9 @@ diz("| Arquivo | Tipo | Tamanho | Enviado em |");
 diz("|---|---|---|---|");
 app.slice().sort((a, b) => b.em.localeCompare(a.em)).slice(0, 10).forEach((x) => diz("| " + x.id + " | " + x.formato + " | " + mb(x.bytes) + " | " + x.em + " |"));
 
-if (Number(cred.used_percent) >= 80) {
-  console.log("::warning::Cloudinary: " + cred.used_percent + "% dos créditos do mês já usados — hora de levar as plantas para o Drive.");
-  diz(""); diz("⚠️ **Mais de 80% dos créditos do mês usados.**");
-}
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, linhas.join("\n") + "\n");
+// v1.37: alerta — com 80% ou mais a execução "falha" de propósito e o GitHub manda e-mail
+if (Number(cred.used_percent) >= 80) {
+  console.log("::error::Cloudinary: " + cred.used_percent + "% dos créditos do mês já usados (limite 25). Hora de levar plantas para o Drive.");
+  process.exit(1);
+}

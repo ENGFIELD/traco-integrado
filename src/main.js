@@ -2014,6 +2014,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // escolhida numa lista dentro de cada rastreabilidade, sem reenviar o PDF.
   function showViewPlantas(){ switchView("plantas"); }
   function hideViewPlantas(){ switchView("dashboard"); }
+  // v1.37: disciplina de cada planta (as antigas, sem o campo, são de forma)
+  var DISCIPLINAS_PLANTA = ["Forma", "Armação", "Arquitetura", "Elétrica", "Hidráulica", "Incêndio", "Outras"];
+  function disciplinaDa(p){ return (p && p.disciplina) || "Forma"; }
+  var filtroPlantas = { disc:"", pav:"" };
   function plantasOrdenadasPorPavimento(){
     var todas = [];
     plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
@@ -2030,22 +2034,31 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var lista = plantasOrdenadasPorPavimento();
 
     var uploadHtml = '<div class="ct-upload-bar" id="planta-upload-bar">'
-      + '<div class="info"><div class="t">Cadastrar planta de forma (PDF) na biblioteca</div>'
+      + '<div class="info"><div class="t">Cadastrar planta (PDF) na biblioteca</div>'
         + '<div class="s">A planta é comprimida automaticamente ao cadastrar, pra ocupar bem menos espaço — depois fica disponível pra escolher em qualquer rastreabilidade, sem precisar reenviar o PDF de novo.</div>'
         + '<div class="hint" id="planta-upload-msg"></div>'
       + '</div>'
-      + '<input type="text" id="planta-nova-pavimento" placeholder="Pavimento (ex.: 5º Pavimento Tipo)" style="max-width:220px;">'
+      + '<div class="planta-campos"><div id="planta-nova-pavimento">'+pavSelectsHtml("", "", "Pavimento…")+'</div>'
+      + '<select id="planta-nova-disc" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option>'+d+'</option>'; }).join("")+'</select></div>'
       + '<button class="btn primary" id="planta-btn-cadastrar" type="button">Cadastrar planta…</button>'
       + '<input type="file" id="planta-file-input" accept="application/pdf" hidden>'
     + '</div>';
 
-    var resumoHtml = '<div class="pav-resumo-grid">'
-      + '<div class="pav-resumo-card"><div class="n">'+lista.length+'</div><div class="l">Plantas cadastradas</div></div>'
-    + '</div>';
+    var contDisc = {}; lista.forEach(function(p){ var d = disciplinaDa(p); contDisc[d] = (contDisc[d]||0)+1; });
+    var pavs = []; lista.forEach(function(p){ if(p.pavimento && pavs.indexOf(p.pavimento)===-1) pavs.push(p.pavimento); });
+    var resumoHtml = '<div class="planta-filtros"><div class="chips">'
+      + '<button type="button" class="chip" data-filtro-disc="" aria-pressed="'+(!filtroPlantas.disc)+'">Todas ('+lista.length+')</button>'
+      + DISCIPLINAS_PLANTA.filter(function(d){ return contDisc[d]; }).map(function(d){
+          return '<button type="button" class="chip" data-filtro-disc="'+d+'" aria-pressed="'+(filtroPlantas.disc===d)+'">'+d+' ('+contDisc[d]+')</button>';
+        }).join("")
+      + '</div><select id="planta-filtro-pav" aria-label="Pavimento"><option value="">Todos os pavimentos</option>'
+      + pavs.map(function(v){ return '<option'+(filtroPlantas.pav===v?" selected":"")+'>'+escapeHtml(v)+'</option>'; }).join("")+'</select></div>';
+    var totalPlantas = lista.length;
+    lista = lista.filter(function(p){ return (!filtroPlantas.disc || disciplinaDa(p)===filtroPlantas.disc) && (!filtroPlantas.pav || p.pavimento===filtroPlantas.pav); });
 
     var listaHtml;
     if(lista.length===0){
-      listaHtml = '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
+      listaHtml = totalPlantas ? '<div class="hint">Nenhuma planta com esse filtro.</div>' : '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
     }else{
       var porGrupo = [];
       var grupoAtual = null;
@@ -2064,6 +2077,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               return '<div class="planta-item">'
                 + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
                 + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
+                + '<select class="planta-disc" data-disc-planta="'+escapeHtml(p.id)+'" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option'+(disciplinaDa(p)===d?" selected":"")+'>'+d+'</option>'; }).join("")+'</select>'
                 + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
                 + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
               + '</div>';
@@ -2076,9 +2090,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       '<div class="pav-header">'
         + '<button class="btn" id="btn-voltar-plantas">← Voltar</button>'
         + '<h2>Biblioteca de plantas</h2>'
-        + '<span class="pav-total">'+lista.length+' planta(s)</span>'
+        + '<span class="pav-total">'+totalPlantas+' planta(s)</span>'
       + '</div>'
-      + '<p class="view-desc">Plantas de forma cadastradas uma única vez aqui, pra escolher (sem reenviar) na ferramenta de mapeamento de concretagem de qualquer rastreabilidade.</p>'
+      + '<p class="view-desc">Plantas cadastradas uma única vez aqui, por pavimento e disciplina (forma, arquitetura, instalações…). As de forma aparecem primeiro para escolher no mapeamento de concretagem.</p>'
       + uploadHtml
       + resumoHtml
       + listaHtml;
@@ -2096,15 +2110,27 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         return;
       }
       var pavInput = document.getElementById("planta-nova-pavimento");
-      var pavimento = pavInput ? pavInput.value : "";
+      var pavimento = pavInput ? lerPavSelects(pavInput, "") : "";
+      var discEl = document.getElementById("planta-nova-disc");
       if(msgEl) msgEl.textContent = "Comprimindo e enviando "+f.name+"…";
       try{
-        await bibliotecaAdicionarPlanta(f, pavimento);
+        await bibliotecaAdicionarPlanta(f, pavimento, discEl ? discEl.value : "Forma");
         renderViewPlantas();
       }catch(ex){
         console.error(ex);
         if(msgEl) msgEl.textContent = "Não foi possível cadastrar "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
       }
+    });
+    container.querySelectorAll("[data-filtro-disc]").forEach(function(b){
+      b.addEventListener("click", function(){ filtroPlantas.disc = b.getAttribute("data-filtro-disc"); renderViewPlantas(); });
+    });
+    var fPav = document.getElementById("planta-filtro-pav");
+    if(fPav) fPav.addEventListener("change", function(){ filtroPlantas.pav = fPav.value; renderViewPlantas(); });
+    container.querySelectorAll("[data-disc-planta]").forEach(function(sel){
+      sel.addEventListener("change", async function(){
+        try{ await plantasCol.doc(sel.getAttribute("data-disc-planta")).set({ disciplina:sel.value }, { merge:true }); }
+        catch(ex){ console.error(ex); alert("Não foi possível trocar a disciplina: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
+      });
     });
     container.querySelectorAll("[data-rm-planta]").forEach(function(btn){
       btn.addEventListener("click", async function(){
@@ -2442,13 +2468,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // acima), envia a imagem já leve pro Cloudinary e grava o registro em
   // /plantas — a partir daí ela aparece pra escolher em qualquer
   // rastreabilidade (ver mapeamentoFieldHtml / mapaPlantasOrdenadas).
-  async function bibliotecaAdicionarPlanta(file, pavimento){
+  async function bibliotecaAdicionarPlanta(file, pavimento, disciplina){
     var comp = await comprimirPlantaEmImagem(file);
     var nomeBase = (file.name||"planta").replace(/\.pdf$/i, "");
     var url = await uploadParaCloudinary(comp.blob, nomeBase+".jpg");
     await plantasCol.add({
       nome: nomeBase,
       pavimento: (pavimento||"").trim(),
+      disciplina: disciplina || "Forma",
       url: url,
       tipo: "imagem",
       larguraPx: comp.larguraPx,
@@ -2471,6 +2498,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       p._match = p._rank!==9999 && ranksRecord.indexOf(p._rank)!==-1;
     });
     todas.sort(function(a,b){
+      var fa = disciplinaDa(a)==="Forma", fb = disciplinaDa(b)==="Forma"; // v1.37: plantas de forma primeiro
+      if(fa !== fb) return fa ? -1 : 1;
       if(a._match !== b._match) return a._match ? -1 : 1;
       if(a._rank !== b._rank) return a._rank - b._rank;
       return (a.nome||"").localeCompare(b.nome||"");

@@ -60,6 +60,8 @@ await db.doc("rastreabilidade/r3").set({ data: diasAtras(40), blocoPav: "Piso do
   linhas: [linha(1, "08001", "L6"), linha(2, "08002", "V3")], fechado: false, createdAt: T, updatedAt: T,
   mapeamento: { plantaUrl: PLANTA, plantaNome: "Forma 6º pav", tipo: "imagem", pagina: 1, areas: [{ pontos: quad(0.1, 0.1, 0.4, 0.4), linhaSeq: 1, cor: "#2E5AAC" }, { pontos: quad(0.5, 0.1, 0.012, 0.05), linhaSeq: 2, cor: "#2E7D46" }] } });
 await db.doc("controleTecnologico/nf_08002").set({ notaRemessa: "08002", dataConcretagem: diasAtras(40), fck: 40, r28: 32, data28: diasAtras(12), local: "6º pav V3", anteriorAoSistema: false, atualizadoEm: T });
+await db.doc("plantas/p1").set({ nome: "Forma 6º pav", pavimento: "Piso do 6º Pavimento Tipo", url: PLANTA, tipo: "imagem", criadoEm: T });
+await db.doc("plantas/p2").set({ nome: "Arquitetura 6º pav", pavimento: "Piso do 6º Pavimento Tipo", disciplina: "Arquitetura", url: PLANTA, tipo: "imagem", criadoEm: T });
 await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "Matheus Alves", status: "aberta", criadoPor: "suellen.alves@sig.eng.br", criadoEm: T, atualizadoEm: T });
 
 // ---------- navegador ----------
@@ -176,6 +178,14 @@ try {
   await foto(m, "desforma-enviar");
   await m.click(".dsf [data-fechar]"); await m.waitForTimeout(300);
   await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+
+  // 2g) v1.37: plantas por disciplina (as antigas contam como forma) e troca de disciplina
+  await irPara(m, "btn-view-plantas");
+  await m.click('[data-filtro-disc="Arquitetura"]');
+  ok((await m.$$("[data-disc-planta]")).length === 1 && await m.$('[data-disc-planta="p2"]') !== null, "plantas: filtro por disciplina (Arquitetura)");
+  await m.click('[data-filtro-disc=""]');
+  await m.selectOption('[data-disc-planta="p1"]', "Elétrica");
+  ok(await esperar(async () => (await db.doc("plantas/p1").get()).data().disciplina === "Elétrica"), "plantas: trocar a disciplina grava no banco");
 
   // 3) excluir FVS = lixeira (continua no banco, some do app)
   await irPara(m, "btn-nav-board");
