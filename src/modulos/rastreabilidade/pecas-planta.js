@@ -44,34 +44,42 @@ export function fracaoDentro(peca, area, buracos) {
   return total ? den / total : 0;
 }
 const ehLaje = (n) => /^L/.test(String(n).toUpperCase());
-const ehPilar = (n) => /^P(?!AR)/.test(String(n).toUpperCase());
 function centro(pol) { return [pol.reduce((t, p) => t + p[0], 0) / pol.length, pol.reduce((t, p) => t + p[1], 0) / pol.length]; }
+// dois segmentos se cruzam?
+function cruza(a, b, c, d) {
+  const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+}
+/** Os dois polígonos têm algum pedaço em comum (nem que seja uma pontinha)? */
+export function seTocam(A, B) {
+  if (A.some((p) => dentro(p[0], p[1], B)) || B.some((p) => dentro(p[0], p[1], A))) return true;
+  for (let i = 0, j = A.length - 1; i < A.length; j = i++)
+    for (let k = 0, l = B.length - 1; k < B.length; l = k++) if (cruza(A[j], A[i], B[l], B[k])) return true;
+  return false;
+}
 const ORDEM = (n) => (/^P/.test(n) ? 0 : /^V/.test(n) ? 1 : /^L/.test(n) ? 2 : 3);
 /**
  * Peças dentro da área (pontos 0..1). Cada peça é um nome com posição
- * ({ n, x, y }, lido do PDF) ou uma peça desenhada à mão ({ n, pontos }).
- * Nome: dentro ou até tol da borda (o rótulo da viga fica ao lado dela).
- * Peça desenhada: entra se pelo menos 30% dela estiver dentro da área.
- * Laje (v1.37): a área dos pilares e vigas desenhados dentro dela é descontada
- * (são "buracos" da laje); e os PILARES que ficam dentro de uma laje que
- * entrou não entram junto — são concretados antes, à parte. Pilar só entra
- * quando a área pega o pilar sem pegar a laje em volta.
+ * ({ n, x, y }) ou uma peça desenhada à mão em "Marcar peças" ({ n, pontos }).
+ * v1.38 (regra do dono): a peça desenhada entra se a área demarcada pegar
+ * QUALQUER pedaço dela, nem que seja uma pontinha — pilares, vigas e lajes.
+ * Laje: se a área cai inteira dentro de um pilar/viga desenhado dentro da laje
+ * (o "buraco" da laje), a laje não entra — só a peça.
  */
 export function pecasNaArea(pontos, pecas, tol = 0.006) {
   const nomes = new Set();
   const desenhadas = (pecas || []).filter((p) => p.pontos && p.pontos.length >= 3);
-  const lajesQueEntraram = [];
   (pecas || []).forEach((p) => {
     if (p.pontos && p.pontos.length >= 3) {
-      let buracos = null;
-      if (ehLaje(p.n)) buracos = desenhadas.filter((q) => q !== p && !ehLaje(q.n) && dentro(...centro(q.pontos), p.pontos)).map((q) => q.pontos);
-      if (fracaoDentro(p.pontos, pontos, buracos) >= 0.3) { nomes.add(p.n); if (ehLaje(p.n)) lajesQueEntraram.push(p.pontos); }
+      if (!seTocam(pontos, p.pontos)) return;
+      if (ehLaje(p.n)) {
+        const buracos = desenhadas.filter((q) => q !== p && !ehLaje(q.n) && dentro(...centro(q.pontos), p.pontos));
+        if (buracos.some((b) => pontos.every((v) => dentro(v[0], v[1], b.pontos)))) return;
+      }
+      nomes.add(p.n);
       return;
     }
     if (dentro(p.x, p.y, pontos) || distBorda(p.x, p.y, pontos) <= tol) nomes.add(p.n);
-  });
-  if (lajesQueEntraram.length) desenhadas.forEach((q) => {
-    if (ehPilar(q.n) && lajesQueEntraram.some((l) => dentro(...centro(q.pontos), l))) nomes.delete(q.n);
   });
   return [...nomes].sort((a, b) => ORDEM(a) - ORDEM(b) || a.localeCompare(b, "pt-BR", { numeric: true }));
 }
