@@ -23,7 +23,7 @@ import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
-import { lerPecasDaPagina, pecasNaArea } from "./modulos/rastreabilidade/pecas-planta.js";
+import { pecasNaArea } from "./modulos/rastreabilidade/pecas-planta.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
@@ -2081,7 +2081,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
                 + '<select class="planta-disc" data-disc-planta="'+escapeHtml(p.id)+'" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option'+(disciplinaDa(p)===d?" selected":"")+'>'+d+'</option>'; }).join("")+'</select>'
                 + (disciplinaDa(p)==="Forma"
                     ? '<button type="button" class="btn small" data-marcar-pecas="'+escapeHtml(p.id)+'" title="Desenhe cada peça (pilar, viga, laje) uma vez: ao demarcar a concretagem, as peças dentro da área entram sozinhas na BT">Marcar peças'+((p.pecasAreas||[]).length ? ' ('+p.pecasAreas.length+')' : '')+'</button>'
-                      + (Array.isArray(p.pecas) && p.pecas.length ? '<span class="planta-pecas" title="Nomes das peças lidos do PDF">'+p.pecas.length+' nomes lidos</span>' : '')
                     : '')
                 + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
                 + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
@@ -2133,21 +2132,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     if(fPav) fPav.addEventListener("change", function(){ filtroPlantas.pav = fPav.value; renderViewPlantas(); });
     container.querySelectorAll("[data-marcar-pecas]").forEach(function(b){
       b.addEventListener("click", function(){ abrirMarcarPecas(b.getAttribute("data-marcar-pecas")); });
-    });
-    container.querySelectorAll("[data-ler-pecas]").forEach(function(inp){
-      inp.addEventListener("change", async function(){
-        var f = inp.files && inp.files[0]; inp.value = "";
-        if(!f) return;
-        if(msgEl) msgEl.textContent = "Lendo as peças de "+f.name+"…";
-        try{
-          await garantirPdf();
-          var pdf = await pdfjsLib.getDocument({ data:await f.arrayBuffer() }).promise;
-          var pecas = await lerPecasDaPagina(await pdf.getPage(1));
-          if(!pecas.length){ alert("Não achei nomes de peças escritos como texto em "+f.name+" (alguns programas exportam o texto como desenho). Nesse caso as peças continuam sendo digitadas."); if(msgEl) msgEl.textContent = ""; return; }
-          await plantasCol.doc(inp.getAttribute("data-ler-pecas")).set({ pecas:pecas, pecasLidasEm:nowISO() }, { merge:true });
-          alert(pecas.length+" peças lidas de "+f.name+" (ex.: "+pecas.slice(0, 8).map(function(x){ return x.n; }).join(", ")+").");
-        }catch(ex){ console.error(ex); alert("Não consegui ler "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")); }
-      });
     });
     container.querySelectorAll("[data-disc-planta]").forEach(function(sel){
       sel.addEventListener("change", async function(){
@@ -2485,10 +2469,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     await page.render({ canvasContext:ctx, viewport:viewport }).promise;
     var blob = await new Promise(function(resolve){ canvas.toBlob(resolve, "image/jpeg", 0.82); });
     if(!blob) throw new Error("não foi possível gerar a versão comprimida da planta");
-    // v1.37: os nomes das peças (P12, V105, L3…) escritos no PDF, com a posição
-    var pecas = [];
-    try{ pecas = await lerPecasDaPagina(page); }catch(ex){ console.warn("peças da planta", ex); }
-    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height, pecas:pecas };
+    return { blob:blob, larguraPx:canvas.width, alturaPx:canvas.height };
   }
   // Cadastra uma planta na biblioteca: comprime (ver comprimirPlantaEmImagem
   // acima), envia a imagem já leve pro Cloudinary e grava o registro em
@@ -2502,7 +2483,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       nome: nomeBase,
       pavimento: (pavimento||"").trim(),
       disciplina: disciplina || "Forma",
-      pecas: comp.pecas || [], pecasLidasEm: nowISO(),
       url: url,
       tipo: "imagem",
       larguraPx: comp.larguraPx,
@@ -4004,7 +3984,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         aoMarcarArea: function(area){ return pecasDaAreaNaBt(d, area); },
         aoAbrir: function(){
           return pecasDaPlanta(d.data.mapeamento || {}).then(function(p){
-            return p.length ? p.length+" peças reconhecidas nesta planta (P, V, L…): ao demarcar, as de dentro da área entram sozinhas na BT."
+            return p.length ? p.length+" peças marcadas nesta planta: ao demarcar, as de dentro da área entram sozinhas na BT."
               : "Esta planta ainda não tem as peças marcadas — na tela Plantas, use “Marcar peças” nesta planta; até lá as peças são digitadas.";
           });
         },
@@ -4246,26 +4226,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   }
 
   /* ---- v1.37: peças da planta → "Peças concretadas" da BT ao demarcar ---- */
-  var cachePecasPdf = {};
-  async function pecasDaPlanta(mp){
+  // só as peças desenhadas à mão em "Marcar peças" (a leitura automática do PDF foi retirada)
+  function pecasDaPlanta(mp){
     var pl = mp.plantaId ? plantasMap.get(mp.plantaId) : null;
     if(!pl) plantasMap.forEach(function(p){ if(!pl && p.url===mp.plantaUrl) pl = p; });
-    if(pl){
-      // peças desenhadas à mão valem mais que os nomes lidos do PDF
-      var desenhadas = (pl.pecasAreas||[]).map(function(a){ return { n:a.n, pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; });
-      if(desenhadas.length) return desenhadas;
-      if(Array.isArray(pl.pecas) && pl.pecas.length) return pl.pecas;
-    }
-    if(mp.tipo!=="pdf" || !mp.plantaUrl) return [];
-    var chave = mp.plantaUrl+"#"+(mp.pagina||1);
-    if(!cachePecasPdf[chave]){
-      cachePecasPdf[chave] = (async function(){
-        await garantirPdf();
-        var pdf = await pdfjsLib.getDocument(mp.plantaUrl).promise;
-        return lerPecasDaPagina(await pdf.getPage(Math.min(Math.max(mp.pagina||1, 1), pdf.numPages)));
-      })().catch(function(ex){ console.warn(ex); delete cachePecasPdf[chave]; return []; });
-    }
-    return cachePecasPdf[chave];
+    return Promise.resolve(((pl && pl.pecasAreas) || []).map(function(a){ return { n:a.n, pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; }));
   }
   async function pecasDaAreaNaBt(d, area){
     var mp = d.data.mapeamento || {};
