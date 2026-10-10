@@ -824,3 +824,36 @@ body[data-perfil="admin"] .so-assinar { display: none !important; }
 .planta-filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin: 12px 0; }
 .planta-filtros .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .planta-disc { max-width: 140px; }
+/* v1.38: Meu perfil */
+.perfil-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.perfil-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; }
+.perfil-card h3 { margin: 0 0 12px; font-size: 16px; }
+.perfil-linha { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.perfil-linha input { flex: 1; min-width: 160px; }
+.perfil-valor { padding: 8px 0; font-weight: 600; word-break: break-all; }
+.perfil-selos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.perfil-perfil { font-weight: 700; font-size: 13.5px; }
+.perfil-perms { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.perfil-perms li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; font-size: 13.5px; line-height: 1.35; }
+.perfil-perms li.sim > span:first-child { color: var(--good); font-weight: 800; }
+.perfil-perms li.nao { color: var(--text-muted); }
+.perfil-assin { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.perfil-assin img { max-width: 160px; max-height: 64px; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.perfil-assin small { display: block; color: var(--text-muted); }
+.perfil-ver { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; margin: 6px 0 10px; }
+.perfil-msg { margin-top: 10px; font-size: 13.5px; font-weight: 600; }
+.perfil-msg.ok { color: var(--good); }
+.perfil-msg.erro { color: var(--bad); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.perfil-card .field input[type="password"], .perfil-card .field input[type="text"] { width: 100%; }
+/* v1.38: rótulo "build" não fica por cima da barra de baixo do celular */
+@media (max-width: 900px) { .ti-build { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 2px) !important; } }
+/* v1.38: no celular os 7 indicadores das Fichas ocupavam a tela inteira antes da lista —
+   ficam em 4 colunas compactas (mesmos números, menos rolagem até as fichas) */
+@media (max-width: 640px) {
+  .kpis { grid-template-columns: repeat(4, 1fr) !important; gap: 6px; margin: 12px 0; }
+  .kpis .kpi { padding: 8px 6px; border-radius: 10px; }
+  .kpis .kpi .n { font-size: 19px; }
+  .kpis .kpi .l { font-size: 9.5px; letter-spacing: 0; margin-top: 4px; }
+  .rast-aba { padding: 9px 10px; font-size: 13px; }
+}

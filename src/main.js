@@ -23,6 +23,7 @@ import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
+import { iniciarPerfil, renderViewPerfil } from "./modulos/dados/perfil.js";
 import { pecasNaArea } from "./modulos/rastreabilidade/pecas-planta.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
@@ -124,6 +125,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       openModal(tipo, id);
     } });
   iniciarTelaCt({ get ctCol(){ return ctCol; }, get ctMap(){ return ctMap; }, get currentUserEmail(){ return currentUserEmail; }, get dbf(){ return dbf; }, get modelosCol(){ return modelosCol; }, get openModal(){ return openModal; }, get rastCol(){ return rastCol; }, get rastMap(){ return rastMap; }, get somenteLeitura(){ return somenteLeitura; }, get switchView(){ return switchView; } });
+  iniciarPerfil({ firebase:firebase, auth:auth, get email(){ return currentUserEmail; }, get perfil(){ return perfilAtual; }, get somenteLeitura(){ return somenteLeitura; },
+    get cadastro(){ return cadastroDe(currentUserEmail, equipeMap); }, get minhaAssinatura(){ return minhaAssinatura; },
+    abrirAssinatura:function(){ abrirMinhaAssinatura(); },
+    aoMudarNome:function(nome){ document.getElementById("user-name").textContent = nome; definirUsuario(currentUserEmail); } });
   iniciarModelosExcel({ get fichaNaoConformidades(){ return fichaNaoConformidades; } });
   iniciarRelatorioWord({ get buildRelatorioNc(){ return buildRelatorioNc; }, get currentUserEmail(){ return currentUserEmail; }, get descricaoFiltrosNc(){ return descricaoFiltrosNc; }, get filtrosNc(){ return filtrosNc; }, get ncAnexoEhImagem(){ return ncAnexoEhImagem; } });
 
@@ -875,7 +880,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         + (t.descricao ? '<small>'+escapeHtml(t.descricao)+'</small>' : '')+'</div><button type="button" class="btn small primary" data-tarefa-feita="'+escapeHtml(t._id)+'">✓ Feita</button></div>'; }).join("")
       + '</div>';
   }
-  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira", equipe:"view-equipe", assinar:"view-assinar" };
+  var VIEW_IDS = { engenharia:"view-engenharia", dashboard:"view-dashboard", board:"view-board", pavimento:"view-pavimento", nc:"view-nc", ct:"view-ct", plantas:"view-plantas", aco:"view-aco", cronograma:"view-cronograma", historico:"view-historico", lixeira:"view-lixeira", equipe:"view-equipe", assinar:"view-assinar", perfil:"view-perfil" };
   function switchView(nome){
     Object.keys(VIEW_IDS).forEach(function(k){
       var el = document.getElementById(VIEW_IDS[k]);
@@ -897,6 +902,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     else if(nome==="lixeira") renderViewLixeira();
     else if(nome==="equipe") renderViewEquipe();
     else if(nome==="assinar") renderViewAssinar();
+    else if(nome==="perfil") renderViewPerfil(document.getElementById("view-perfil"));
     // "board" não precisa de um render próprio aqui: KPIs e lista já são
     // mantidos atualizados por render() independente de qual tela está
     // visível no momento.
@@ -1287,11 +1293,11 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var sugest = sugestoesDeHoje();
     var visiveis = window.__hojeTudo ? sugest : principaisDeHoje(sugest, 5);
     var hojeHtml = '<div class="dash-card dash-card-hoje"><div class="dash-card-h"><h3>Hoje você precisa…</h3>'
-      + '<span class="hoje-cont">'+(sugest.length ? sugest.length+" pendência(s)" : "")+'</span></div>'
+      + '<span class="hoje-cont">'+(sugest.length ? sugest.length+" pendência(s) · da mais urgente para a menos" : "")+'</span></div>'
       + (sugest.length ? visiveis.map(function(x, i){
           var alvo = x.abrir.novaFvs ? 'data-nova-fvs="'+escapeHtml(x.abrir.novaFvs)+'"' : x.abrir.fvs ? 'data-abrir-fvs="'+escapeHtml(x.abrir.fvs)+'"' : (x.abrir.rast ? 'data-abrir-rast="'+escapeHtml(x.abrir.rast)+'"'
             : (x.abrir.ct ? 'data-hoje-ct="'+escapeHtml(x.abrir.ct)+'"' : 'data-goto-view="'+x.abrir.view+'"'));
-          return li(alvo, x.icone, x.tom, x.titulo, x.sub, String(i+1), "");
+          return li(alvo, x.icone, x.tom, x.titulo, x.sub, (i+1)+"º", "");  // v1.38: ordem de prioridade (antes só "1, 2, 3")
         }).join("")
         + (sugest.length > 5 ? '<button type="button" class="hoje-mais" data-hoje-tudo>'+(window.__hojeTudo ? "Mostrar só as 5 principais" : "Ver todas as "+sugest.length)+'</button>' : '')
         : '<div class="dash-vazio">Nada urgente por enquanto. 👍</div>')
@@ -4625,7 +4631,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("btn-view-lixeira").addEventListener("click", function(){ switchView("lixeira"); });
     document.getElementById("btn-view-equipe").addEventListener("click", function(){ switchView("equipe"); });
     document.getElementById("btn-view-assinar").addEventListener("click", function(){ filtrosEng.sel = {}; switchView("assinar"); });
-    document.getElementById("btn-minha-assinatura").addEventListener("click", abrirMinhaAssinatura);
+    // v1.38: "Minha assinatura" do rodapé virou "Meu perfil" (a assinatura fica lá dentro)
+    document.getElementById("btn-minha-assinatura").addEventListener("click", function(){ switchView("perfil"); });
+    document.getElementById("btn-view-perfil").addEventListener("click", function(){ switchView("perfil"); });
     initCronograma({ col:cronCol, todayISO:todayISO, nowISO:nowISO, fmtDateBR:fmtDateBR, garantirLibs:garantirLibs,
       usuario:function(){ return currentUserEmail||""; }, erroAcesso:function(){ return cronErroAcesso; } });
     initAco({ col:acoCol, lista:acoListaComConcretagem, fmtDateBR:fmtDateBR, todayISO:todayISO, garantirPdf:garantirPdf,
@@ -4702,6 +4710,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       tela("Plantas", "plantas", "map");
       tela("Entregas de aço", "aco", "truck");
       tela("Cronograma da obra", "cronograma", "clock");
+      tela("Meu perfil (senha, assinatura, permissões)", "perfil", "pessoa");
       out.push({ grupo:"Telas", titulo:"Minha assinatura", icone:"pen", busca:"assinatura assinar", abrir:abrirMinhaAssinatura });
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });

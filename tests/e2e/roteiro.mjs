@@ -41,6 +41,7 @@ const uidMatheus = await usuario("matheus.alves@sig.eng.br", "Matheus Alves");
 const uidSuellen = await usuario("suellen.alves@sig.eng.br", "Suellen Alves");
 await usuario("jessica.araujo@sig.eng.br", "Jessica Araujo");
 await usuario("alice.soares@sig.eng.br", "Alice Soares");
+await usuario("carla.campo@sig.eng.br", "Carla Campo");
 const linha = (seq, nf, pecas) => ({ seq, notaFiscal: nf, betoneira: "", lacre: "", volBetoneira: "8", volAcumulado: "", fornecedor: "Polimix", nSerieCP: "", nCPs: "2", slump: "12", saidaUsina: "08:00", chegadaObra: "08:30", lancInicial: "08:40", lancFinal: "09:10", aguaFolga: "", aguaLanc: "", pecas });
 await db.doc("fvs/f1").set({ tipo: "fvs04", codigo: "FVS 04", numero: "14", pavimentos: ["3º Embasamento"], dataAbertura: "2026-09-20", elementos: {}, checklist: {}, naoConformidades: [{ descricao: "Prumo do pilar P7 fora da tolerância", correcao: "", concluida: false, dataConclusao: "", dataRegistro: "2026-09-21", anexos: [] }], fechado: true, dataFechamento: "2026-09-25", updatedAt: T });
 await db.doc("fvs/f3").set({ tipo: "fvs04", codigo: "FVS 04", numero: "30", pavimentos: ["6º Pavimento Tipo"], dataAbertura: "2026-10-03", elementos: {}, checklist: {}, naoConformidades: [], updatedAt: T });
@@ -318,7 +319,30 @@ try {
   ok(await j.evaluate(() => document.body.classList.contains("somente-leitura")), "Jessica entra como somente leitura");
   const recusou = await j.evaluate(() => window.firebase.firestore().collection("tarefas").doc("t1").set({ titulo: "x" }, { merge: true }).then(() => false, (e) => e.code === "permission-denied"));
   ok(recusou && (await db.doc("tarefas/t1").get()).data().titulo !== "x", "Jessica não consegue gravar (o porteiro recusa)");
+  await j.click("#btn-view-perfil").catch(async () => { await j.evaluate(() => document.getElementById("btn-view-perfil").click()); });
+  await j.waitForSelector("#view-perfil .perfil-perms", { timeout: 8000 });
+  ok(/Só visualiza/.test(await j.textContent("#view-perfil")) && (await j.$$("#view-perfil .perfil-perms li.sim")).length === 1, "Meu perfil (Jessica): “Só visualiza” e só a permissão de ver");
   await j.context().close();
+
+  // 7) v1.38: Meu perfil — nome, permissões e troca de senha (conta sem cadastro na equipe)
+  const bz = await entrar("carla.campo@sig.eng.br", { width: 390, height: 844 });
+  await bz.evaluate(() => document.getElementById("btn-view-perfil").click());
+  await bz.waitForSelector("#pf-nome", { timeout: 8000 });
+  const txtPerfil = await bz.textContent("#view-perfil");
+  ok(/Pode editar/.test(txtPerfil) && /regra antiga/.test(txtPerfil), "Meu perfil: conta fora do cadastro aparece como “Pode editar” (regra antiga) — sem como mudar o próprio perfil");
+  ok(!(await bz.$("#view-perfil select")), "Meu perfil: não há campo para trocar o próprio perfil");
+  await bz.fill("#pf-nome", "Carla C. Campo"); await bz.click("#pf-salvar-nome");
+  ok(await esperar(async () => (await admin.auth().getUserByEmail("carla.campo@sig.eng.br")).displayName === "Carla C. Campo"), "Meu perfil: nome salvo no login");
+  await bz.fill("#pf-atual", "errada123"); await bz.fill("#pf-nova", "NovaSenha123"); await bz.fill("#pf-repetir", "NovaSenha123"); await bz.click("#pf-trocar");
+  ok(await esperar(async () => /não confere/.test(await bz.textContent("[data-msg-senha]"))), "trocar senha: senha atual errada é recusada com mensagem clara");
+  await bz.fill("#pf-atual", SENHA); await bz.fill("#pf-nova", "NovaSenha123"); await bz.fill("#pf-repetir", "NovaSenha123"); await bz.click("#pf-trocar");
+  ok(await esperar(async () => /Senha trocada/.test(await bz.textContent("[data-msg-senha]"))), "trocar senha: com a senha atual certa, troca");
+  await foto(bz, "perfil-celular");
+  await bz.context().close();
+  const bz2 = await (await navegador.newContext({ serviceWorkers: "block" })).newPage();
+  await bz2.goto(URL_APP); await bz2.fill("#login-email", "carla.campo@sig.eng.br"); await bz2.fill("#login-password", "NovaSenha123"); await bz2.click("#login-submit");
+  ok(await bz2.waitForSelector("#app-root:not([hidden])", { timeout: 20000 }).then(() => true, () => false), "entra com a senha nova");
+  await bz2.context().close();
 } catch (e) {
   console.error(e); falhas++;
 } finally {

@@ -75,13 +75,14 @@
       <button class="nav-btn" id="btn-view-historico" data-view="historico" aria-current="false"><svg class="ti-i" data-i="historico"></svg>Histórico</button>
       <button class="nav-btn" id="btn-view-lixeira" data-view="lixeira" aria-current="false"><svg class="ti-i" data-i="lixo"></svg>Lixeira</button>
       <button class="nav-btn so-eng" id="btn-view-equipe" data-view="equipe" aria-current="false"><svg class="ti-i" data-i="equipe"></svg>Equipe</button>
+      <button class="nav-btn" id="btn-view-perfil" data-view="perfil" aria-current="false"><svg class="ti-i" data-i="pessoa"></svg>Meu perfil</button>
     </nav>
     <div class="ti-side-foot">
       <div class="ti-user"><span class="ti-avatar" id="ti-avatar">·</span><span class="ti-user-txt"><b id="user-name"></b><small id="ti-user-sub">Belavista Ipanema</small></span></div>
       <div class="ti-side-acoes">
         <button class="btn ghost" id="theme-toggle" title="Alternar tema claro/escuro"><svg class="ti-i" data-i="moon"></svg>Tema</button>
         <button class="btn ghost" id="btn-install-app" hidden title="Instalar como app no celular/computador"><svg class="ti-i" data-i="device"></svg>Instalar app</button>
-        <button class="btn ghost" id="btn-minha-assinatura" title="Cadastrar ou trocar a assinatura usada nas FVS"><svg class="ti-i" data-i="pen"></svg>Minha assinatura</button>
+        <button class="btn ghost" id="btn-minha-assinatura" title="Dados, permissões, assinatura e senha"><svg class="ti-i" data-i="pessoa"></svg>Meu perfil</button>
         <button class="btn ghost" id="btn-logout"><svg class="ti-i" data-i="sair"></svg>Sair</button>
       </div>
     </div>
@@ -153,6 +154,7 @@
   <div id="view-lixeira" hidden></div>
   <div id="view-equipe" hidden></div>
   <div id="view-assinar" hidden></div>
+  <div id="view-perfil" hidden></div>
     </main>
   </div>
 
@@ -183,6 +185,6 @@
 <!-- Chaves públicas do Firebase (arquivo separado de propósito, ver comentário dentro dele). -->
 <script src="/firebase-config.js"></script>
 <script type="module" src="/src/main.js"></script>
-<div style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-10-10 v1.37</div>
+<div class="ti-build" style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#9993;z-index:9999;pointer-events:none;font-family:monospace;">build 2026-10-10 v1.37</div>
 </body>
 </html>
