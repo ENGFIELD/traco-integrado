@@ -2139,10 +2139,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           await garantirPdf();
           var pdf = await pdfjsLib.getDocument({ data:await f.arrayBuffer() }).promise;
           var pecas = await lerPecasDaPagina(await pdf.getPage(1));
-          if(!pecas.length){ if(msgEl) msgEl.textContent = "Não achei nomes de peças escritos como texto neste PDF (alguns programas exportam o texto como desenho). Nesse caso as peças continuam sendo digitadas."; return; }
+          if(!pecas.length){ alert("Não achei nomes de peças escritos como texto em "+f.name+" (alguns programas exportam o texto como desenho). Nesse caso as peças continuam sendo digitadas."); if(msgEl) msgEl.textContent = ""; return; }
           await plantasCol.doc(inp.getAttribute("data-ler-pecas")).set({ pecas:pecas, pecasLidasEm:nowISO() }, { merge:true });
-          if(msgEl) msgEl.textContent = pecas.length+" peças lidas de "+f.name+".";
-        }catch(ex){ console.error(ex); if(msgEl) msgEl.textContent = "Não consegui ler "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido"); }
+          alert(pecas.length+" peças lidas de "+f.name+" (ex.: "+pecas.slice(0, 8).map(function(x){ return x.n; }).join(", ")+").");
+        }catch(ex){ console.error(ex); alert("Não consegui ler "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")); }
       });
     });
     container.querySelectorAll("[data-disc-planta]").forEach(function(sel){
@@ -3998,6 +3998,12 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         linhas: function(){ return d.data.linhas || []; },
         cor: mapaCorSequencia,
         aoMarcarArea: function(area){ return pecasDaAreaNaBt(d, area); },
+        aoAbrir: function(){
+          return pecasDaPlanta(d.data.mapeamento || {}).then(function(p){
+            return p.length ? p.length+" peças reconhecidas nesta planta (P, V, L…): ao demarcar, as de dentro da área entram sozinhas na BT."
+              : "Esta planta não tem os nomes das peças como texto"+((d.data.mapeamento||{}).tipo==="pdf" ? "" : " (na tela Plantas, use “Ler peças do PDF”)")+" — as peças continuam sendo digitadas.";
+          });
+        },
         titulo: "Mapeamento — "+rastRotulo(d.data),
         salvar: async function(){ return draft===d ? await saveDraft(true) : false; },
         aoFechar: function(){ if(draft===d) renderModal(); }
@@ -4231,7 +4237,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   async function pecasDaAreaNaBt(d, area){
     var mp = d.data.mapeamento || {};
     var pecas = await pecasDaPlanta(mp);
-    if(!pecas.length) return "";
+    if(!pecas.length) return "";  // o aviso de “planta sem nomes de peças” já apareceu ao abrir
     var nomes = pecasNaArea(area.pontos, pecas);
     if(!nomes.length) return "BT "+area.linhaSeq+": nenhum nome de peça dentro desta área.";
     var linha = (d.data.linhas||[]).find(function(l){ return String(l.seq)===String(area.linhaSeq); });

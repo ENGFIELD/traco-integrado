@@ -134,6 +134,8 @@ export async function abrirEditorMapa(opts) {
     raiz.querySelector("[data-carregando]").textContent = "Não foi possível carregar a planta. Verifique a internet e tente de novo.";
   }
   raiz.querySelector("[data-carregando]").hidden = W > 1;
+  // v1.37: diz logo ao abrir se a planta tem os nomes das peças (P, V, L…) para preencher sozinho
+  if (opts.aoAbrir) Promise.resolve(opts.aoAbrir()).then((msg) => { if (msg) avisar(msg); }).catch((ex) => console.warn(ex));
   mundo.style.width = W + "px";
   mundo.style.height = H + "px";
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
