@@ -1,0 +1,28 @@
+# v1.37: ALERTA de uso do Cloudinary (onde ficam as fotos das NCs e as
+# plantas). Só leitura — não apaga nem altera nada. Roda toda segunda em
+# silêncio; se o uso passar de 80% do plano gratuito, a execução dá erro de
+# propósito e o GitHub avisa por e-mail. Também dá para rodar à mão
+# (Actions → Uso do Cloudinary → Run workflow) e ver o relatório completo.
+name: Uso do Cloudinary
+
+on:
+  schedule:
+    - cron: "13 11 * * 1" # segunda, 08:13 em Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  uso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Relatório de uso
+        env:
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+        run: node scripts/uso-cloudinary.mjs

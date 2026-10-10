@@ -23,6 +23,7 @@ import { garantirLibs, garantirPdf, carregarModelo } from "./libs.js";
 import { preencherPlanilhaCt } from "./modulos/ct/planilha-ct.js";
 import { situacao as ctSituacaoRegra, emAberto as ctEmAbertoRegra, observacaoExportada as ctObsExportada, anterior as ctAnteriorRegra, obsJustificativa as ctObsJustificativa, concluida as ctConcluidaRegra, anterioresAoSistema as ctAnterioresAoSistema, precisaJustificativa as ctPrecisaJust, abaixoEm as ctAbaixoEm, justificada as ctJustificada, justificativaPendente as ctJustPendente, impedimentosConcluir as ctImpedimentosConcluir, observacaoComJustificativa as ctObsComJustificativa } from "./modulos/ct/regras-ct.js";
 import { abrirEditorMapa } from "./modulos/rastreabilidade/editor-mapa.js";
+import { pecasNaArea } from "./modulos/rastreabilidade/pecas-planta.js";
 import { initLayout, definirUsuario, definirContador } from "./ui/layout.js";
 import { initBusca } from "./ui/busca.js";
 import { pintarIcones } from "./ui/icones.js";
@@ -32,7 +33,6 @@ import { rotuloSvg, rotuloCanvas, planejarRotulos, coresDistintas } from "./modu
 import { semRepetidas as pecasSemRepetidas, pecasRepetidas, repetidasNoTexto as pecasRepetidasNoTexto } from "./modulos/rastreabilidade/pecas.js";
 import { PAPEIS as PAPEIS_ASSIN, abrirCadastroAssinatura, assinaturasHtml } from "./modulos/assinatura/assinatura.js";
 import { lerPendencias, sugerirFvs, norm as normNc } from "./modulos/nc/pendencias.js";
-import { iniciarDesforma, abrirDesforma } from "./modulos/nc/desforma.js";
 import { adicionarAssinaturasXlsx, centralizarImagemNaCaixa } from "./modulos/assinatura/xlsx-assinatura.js";
 import { initAco, renderViewAco, proximasEntregas, situacao as acoSituacao, pesoTotal as acoPeso } from "./modulos/aco/aco.js";
 import { acoParaLajes, textoAviso as acoTextoLaje, concretadasPorChave as acoConcretadasPorChave, chegouPelaConcretagem as acoChegouPelaConcretagem } from "./modulos/aco/aco-cronograma.js";
@@ -125,13 +125,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     } });
   iniciarTelaCt({ get ctCol(){ return ctCol; }, get ctMap(){ return ctMap; }, get currentUserEmail(){ return currentUserEmail; }, get dbf(){ return dbf; }, get modelosCol(){ return modelosCol; }, get openModal(){ return openModal; }, get rastCol(){ return rastCol; }, get rastMap(){ return rastMap; }, get somenteLeitura(){ return somenteLeitura; }, get switchView(){ return switchView; } });
   iniciarModelosExcel({ get fichaNaoConformidades(){ return fichaNaoConformidades; } });
-  iniciarDesforma({ get somenteLeitura(){ return somenteLeitura; }, get fvsMap(){ return fvsMap; }, get rastMap(){ return rastMap; }, get currentUserEmail(){ return currentUserEmail; },
-    todayISO:function(){ return todayISO(); }, nowISO:function(){ return nowISO(); },
-    pavimentosCompativeis:function(a, b){ return pavimentosCompativeis(a, b); }, pavimentosDaRast:function(r){ return pavimentosDaRast(r); },
-    pavSelectsHtml:function(v, a, r){ return pavSelectsHtml(v, a, r); }, lerPavSelects:function(c, v){ return lerPavSelects(c, v); },
-    fichaNaoConformidades:function(f){ return fichaNaoConformidades(f); }, ncGravarNaFicha:function(id, fn){ return ncGravarNaFicha(id, fn); },
-    ncUploadAnexo:function(f){ return ncUploadAnexo(f); }, criarFvs04DaRast:function(r, n){ return criarFvs04DaRast(r, n); },
-    aposAlterarFvs:function(id){ aposAlterarFvs(id); } });
   iniciarRelatorioWord({ get buildRelatorioNc(){ return buildRelatorioNc; }, get currentUserEmail(){ return currentUserEmail; }, get descricaoFiltrosNc(){ return descricaoFiltrosNc; }, get filtrosNc(){ return filtrosNc; }, get ncAnexoEhImagem(){ return ncAnexoEhImagem; } });
 
   // pdf.js precisa de um "worker" (script separado que faz o trabalho pesado
@@ -1766,8 +1759,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
           + todosTiposFvs().map(function(t){ return '<option value="'+escapeHtml(t.key)+'"'+(filtrosNc.tipo===t.key?" selected":"")+'>'+escapeHtml(t.codigo+" — "+t.titulo)+'</option>'; }).join("")+'</select>'
       + '</div>'
       + '<div class="ct-acoes">'
-        + '<button class="btn primary" type="button" id="btn-nc-desforma"><svg class="ti-i" data-i="alert"></svg>Pendências da desforma (fotos)</button>'
-        + '<button class="btn" type="button" id="btn-nc-importar"><svg class="ti-i" data-i="file"></svg>Importar lista de pendências</button>'
+        + '<button class="btn primary" type="button" id="btn-nc-importar"><svg class="ti-i" data-i="file"></svg>Importar lista de pendências</button>'
         + '<input type="text" id="nc-f-destinatario" placeholder="Empreiteira / destinatário do relatório (opcional)" value="'+escapeHtml(filtrosNc.destinatario)+'" style="flex:1 1 220px;min-width:0">'
         + '<button class="btn" type="button" id="btn-relatorio-nc"><svg class="ti-i" data-i="download"></svg>Relatório (Word)</button>'
       + '</div>';
@@ -1816,7 +1808,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     document.getElementById("nc-f-destinatario").addEventListener("input", function(e){ filtrosNc.destinatario = e.target.value; });
     document.getElementById("btn-relatorio-nc").addEventListener("click", gerarRelatorioNcWord);
     document.getElementById("btn-nc-importar").addEventListener("click", abrirImportarPendencias);
-    document.getElementById("btn-nc-desforma").addEventListener("click", function(){ abrirDesforma({}); });
     container.querySelectorAll("[data-nc]").forEach(function(card){
       var p = card.getAttribute("data-nc").split("|"), fid = p[0], idx = Number(p[1]);
       var on = function(sel, fn){ var b = card.querySelector(sel); if(b) b.addEventListener("click", fn); };
@@ -1851,45 +1842,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     }
     if(!document.getElementById("view-nc").hidden) renderViewNc();
   }
-
-  /* ---- v1.36: pendências da desforma (modulos/nc/desforma.js) ---- */
   function esperarGravacao(envio){
     return Promise.race([envio.then(function(){ return "ok"; }), new Promise(function(res){ setTimeout(function(){ res("pendente"); }, 10000); })]);
-  }
-  // A concretagem ainda sem FVS 04: cria a ficha (já com as pendências) e liga nas duas pontas
-  async function criarFvs04DaRast(rastId, ncs){
-    var r = rastMap.get(rastId);
-    if(!r) throw new Error("concretagem não encontrada");
-    var nf = blankFvs("fvs04");
-    nf.obra = r.obra || nf.obra; nf.local = r.blocoPav || ""; nf.pavimentos = pavimentosDaRast(r);
-    nf.dataConcretagem = r.data || todayISO(); nf.dataAbertura = r.data || todayISO();
-    nf.rastreabilidadeId = rastId; nf.naoConformidades = ncs || [];
-    var pn = proximoNumeroFvs(nf.codigo, null);
-    nf.numero = pn.numero; nf.numeroSeq = pn.seq; nf.numeroAuto = true;
-    var ref = fvsCol.doc();
-    var r1 = await esperarGravacao(ref.set(nf));
-    var r2 = await esperarGravacao(rastCol.doc(rastId).set({ fvsId:ref.id, updatedAt:nowISO() }, { merge:true }));
-    if(r1==="pendente" || r2==="pendente") alert("Sem conexão no momento — a ficha será enviada quando o sinal voltar. Mantenha o app aberto.");
-    // a rastreabilidade aberta na tela passa a saber da FVS nova (senão, ao salvar, desfazia a ligação)
-    if(draft && draft.type==="rast" && draft.id===rastId){
-      draft.data.fvsId = ref.id;
-      try{ var o = JSON.parse(draft.orig); o.fvsId = ref.id; draft.orig = JSON.stringify(o); }catch(ex){}
-    }
-    return { id:ref.id, rotulo:(nf.codigo||"FVS 04")+" nº "+nf.numero };
-  }
-  // depois de gravar pendências numa FVS: a ficha aberta na tela recebe a lista nova
-  function aposAlterarFvs(fid){
-    setTimeout(function(){
-      if(!draft) return;
-      if(draft.type==="fvs" && draft.id===fid){
-        var f = fvsMap.get(fid); if(!f) return;
-        draft.data.naoConformidades = JSON.parse(JSON.stringify(fichaNaoConformidades(f)));
-        try{ var o = JSON.parse(draft.orig); o.naoConformidades = draft.data.naoConformidades; draft.orig = JSON.stringify(o); }catch(ex){}
-        renderModal();
-      } else if(draft.type==="rast"){
-        renderModal();
-      }
-    }, 400);
   }
 
   /* ---- v1.19: importar lista de pendências para as FVS ---- */
@@ -2014,6 +1968,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // escolhida numa lista dentro de cada rastreabilidade, sem reenviar o PDF.
   function showViewPlantas(){ switchView("plantas"); }
   function hideViewPlantas(){ switchView("dashboard"); }
+  // v1.37: disciplina de cada planta (as antigas, sem o campo, são de forma)
+  var DISCIPLINAS_PLANTA = ["Forma", "Armação", "Arquitetura", "Elétrica", "Hidráulica", "Incêndio", "Outras"];
+  function disciplinaDa(p){ return (p && p.disciplina) || "Forma"; }
+  var filtroPlantas = { disc:"", pav:"" };
   function plantasOrdenadasPorPavimento(){
     var todas = [];
     plantasMap.forEach(function(p, id){ todas.push(Object.assign({ id:id }, p)); });
@@ -2030,22 +1988,31 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     var lista = plantasOrdenadasPorPavimento();
 
     var uploadHtml = '<div class="ct-upload-bar" id="planta-upload-bar">'
-      + '<div class="info"><div class="t">Cadastrar planta de forma (PDF) na biblioteca</div>'
+      + '<div class="info"><div class="t">Cadastrar planta (PDF) na biblioteca</div>'
         + '<div class="s">A planta é comprimida automaticamente ao cadastrar, pra ocupar bem menos espaço — depois fica disponível pra escolher em qualquer rastreabilidade, sem precisar reenviar o PDF de novo.</div>'
         + '<div class="hint" id="planta-upload-msg"></div>'
       + '</div>'
-      + '<input type="text" id="planta-nova-pavimento" placeholder="Pavimento (ex.: 5º Pavimento Tipo)" style="max-width:220px;">'
+      + '<div class="planta-campos"><div id="planta-nova-pavimento">'+pavSelectsHtml("", "", "Pavimento…")+'</div>'
+      + '<select id="planta-nova-disc" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option>'+d+'</option>'; }).join("")+'</select></div>'
       + '<button class="btn primary" id="planta-btn-cadastrar" type="button">Cadastrar planta…</button>'
       + '<input type="file" id="planta-file-input" accept="application/pdf" hidden>'
     + '</div>';
 
-    var resumoHtml = '<div class="pav-resumo-grid">'
-      + '<div class="pav-resumo-card"><div class="n">'+lista.length+'</div><div class="l">Plantas cadastradas</div></div>'
-    + '</div>';
+    var contDisc = {}; lista.forEach(function(p){ var d = disciplinaDa(p); contDisc[d] = (contDisc[d]||0)+1; });
+    var pavs = []; lista.forEach(function(p){ if(p.pavimento && pavs.indexOf(p.pavimento)===-1) pavs.push(p.pavimento); });
+    var resumoHtml = '<div class="planta-filtros"><div class="chips">'
+      + '<button type="button" class="chip" data-filtro-disc="" aria-pressed="'+(!filtroPlantas.disc)+'">Todas ('+lista.length+')</button>'
+      + DISCIPLINAS_PLANTA.filter(function(d){ return contDisc[d]; }).map(function(d){
+          return '<button type="button" class="chip" data-filtro-disc="'+d+'" aria-pressed="'+(filtroPlantas.disc===d)+'">'+d+' ('+contDisc[d]+')</button>';
+        }).join("")
+      + '</div><select id="planta-filtro-pav" aria-label="Pavimento"><option value="">Todos os pavimentos</option>'
+      + pavs.map(function(v){ return '<option'+(filtroPlantas.pav===v?" selected":"")+'>'+escapeHtml(v)+'</option>'; }).join("")+'</select></div>';
+    var totalPlantas = lista.length;
+    lista = lista.filter(function(p){ return (!filtroPlantas.disc || disciplinaDa(p)===filtroPlantas.disc) && (!filtroPlantas.pav || p.pavimento===filtroPlantas.pav); });
 
     var listaHtml;
     if(lista.length===0){
-      listaHtml = '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
+      listaHtml = totalPlantas ? '<div class="hint">Nenhuma planta com esse filtro.</div>' : '<div class="hint">Nenhuma planta cadastrada ainda. Cadastre acima — depois ela aparece pra escolher no mapeamento de concretagem de qualquer rastreabilidade.</div>';
     }else{
       var porGrupo = [];
       var grupoAtual = null;
@@ -2064,6 +2031,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
               return '<div class="planta-item">'
                 + '<span class="nome">'+escapeHtml(p.nome)+'</span>'
                 + (p.pavimento ? '<span class="pav">'+escapeHtml(p.pavimento)+'</span>' : '')
+                + '<select class="planta-disc" data-disc-planta="'+escapeHtml(p.id)+'" aria-label="Disciplina">'+DISCIPLINAS_PLANTA.map(function(d){ return '<option'+(disciplinaDa(p)===d?" selected":"")+'>'+d+'</option>'; }).join("")+'</select>'
+                + (disciplinaDa(p)==="Forma"
+                    ? '<button type="button" class="btn small" data-marcar-pecas="'+escapeHtml(p.id)+'" title="Desenhe cada peça (pilar, viga, laje) uma vez: ao demarcar a concretagem, as peças dentro da área entram sozinhas na BT">Marcar peças'+((p.pecasAreas||[]).length ? ' ('+p.pecasAreas.length+')' : '')+'</button>'
+                    : '')
                 + '<a class="btn ghost small" href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener">Abrir</a>'
                 + '<span class="acoes"><button type="button" class="icon-btn" data-rm-planta="'+escapeHtml(p.id)+'" title="Remover da biblioteca">Remover</button></span>'
               + '</div>';
@@ -2076,9 +2047,9 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       '<div class="pav-header">'
         + '<button class="btn" id="btn-voltar-plantas">← Voltar</button>'
         + '<h2>Biblioteca de plantas</h2>'
-        + '<span class="pav-total">'+lista.length+' planta(s)</span>'
+        + '<span class="pav-total">'+totalPlantas+' planta(s)</span>'
       + '</div>'
-      + '<p class="view-desc">Plantas de forma cadastradas uma única vez aqui, pra escolher (sem reenviar) na ferramenta de mapeamento de concretagem de qualquer rastreabilidade.</p>'
+      + '<p class="view-desc">Plantas cadastradas uma única vez aqui, por pavimento e disciplina (forma, arquitetura, instalações…). As de forma aparecem primeiro para escolher no mapeamento de concretagem.</p>'
       + uploadHtml
       + resumoHtml
       + listaHtml;
@@ -2096,15 +2067,30 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         return;
       }
       var pavInput = document.getElementById("planta-nova-pavimento");
-      var pavimento = pavInput ? pavInput.value : "";
+      var pavimento = pavInput ? lerPavSelects(pavInput, "") : "";
+      var discEl = document.getElementById("planta-nova-disc");
       if(msgEl) msgEl.textContent = "Comprimindo e enviando "+f.name+"…";
       try{
-        await bibliotecaAdicionarPlanta(f, pavimento);
+        await bibliotecaAdicionarPlanta(f, pavimento, discEl ? discEl.value : "Forma");
         renderViewPlantas();
       }catch(ex){
         console.error(ex);
         if(msgEl) msgEl.textContent = "Não foi possível cadastrar "+f.name+": "+(ex&&ex.message?ex.message:"erro desconhecido")+".";
       }
+    });
+    container.querySelectorAll("[data-filtro-disc]").forEach(function(b){
+      b.addEventListener("click", function(){ filtroPlantas.disc = b.getAttribute("data-filtro-disc"); renderViewPlantas(); });
+    });
+    var fPav = document.getElementById("planta-filtro-pav");
+    if(fPav) fPav.addEventListener("change", function(){ filtroPlantas.pav = fPav.value; renderViewPlantas(); });
+    container.querySelectorAll("[data-marcar-pecas]").forEach(function(b){
+      b.addEventListener("click", function(){ abrirMarcarPecas(b.getAttribute("data-marcar-pecas")); });
+    });
+    container.querySelectorAll("[data-disc-planta]").forEach(function(sel){
+      sel.addEventListener("change", async function(){
+        try{ await plantasCol.doc(sel.getAttribute("data-disc-planta")).set({ disciplina:sel.value }, { merge:true }); }
+        catch(ex){ console.error(ex); alert("Não foi possível trocar a disciplina: "+(ex&&ex.message?ex.message:"erro desconhecido")); }
+      });
     });
     container.querySelectorAll("[data-rm-planta]").forEach(function(btn){
       btn.addEventListener("click", async function(){
@@ -2442,13 +2428,14 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   // acima), envia a imagem já leve pro Cloudinary e grava o registro em
   // /plantas — a partir daí ela aparece pra escolher em qualquer
   // rastreabilidade (ver mapeamentoFieldHtml / mapaPlantasOrdenadas).
-  async function bibliotecaAdicionarPlanta(file, pavimento){
+  async function bibliotecaAdicionarPlanta(file, pavimento, disciplina){
     var comp = await comprimirPlantaEmImagem(file);
     var nomeBase = (file.name||"planta").replace(/\.pdf$/i, "");
     var url = await uploadParaCloudinary(comp.blob, nomeBase+".jpg");
     await plantasCol.add({
       nome: nomeBase,
       pavimento: (pavimento||"").trim(),
+      disciplina: disciplina || "Forma",
       url: url,
       tipo: "imagem",
       larguraPx: comp.larguraPx,
@@ -2471,6 +2458,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       p._match = p._rank!==9999 && ranksRecord.indexOf(p._rank)!==-1;
     });
     todas.sort(function(a,b){
+      var fa = disciplinaDa(a)==="Forma", fb = disciplinaDa(b)==="Forma"; // v1.37: plantas de forma primeiro
+      if(fa !== fb) return fa ? -1 : 1;
       if(a._match !== b._match) return a._match ? -1 : 1;
       if(a._rank !== b._rank) return a._rank - b._rank;
       return (a.nome||"").localeCompare(b.nome||"");
@@ -2775,7 +2764,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         m.querySelectorAll(".modal-body input, .modal-body select, .modal-body textarea").forEach(function(el){ el.disabled = true; });
         // botões do corpo também (teclado), menos o bloco de assinaturas, o aviso e "abrir rastreabilidade"
         m.querySelectorAll(".modal-body button").forEach(function(el){
-          if(!el.closest(".fvs-assin-bloco, .fvs-travada-banner") && el.id!=="open-linked-rast" && el.id!=="fvs-desforma") el.disabled = true;
+          if(!el.closest(".fvs-assin-bloco, .fvs-travada-banner") && el.id!=="open-linked-rast") el.disabled = true;
         });
       }
     } else m.classList.remove("ficha-travada");
@@ -3099,9 +3088,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + elementosHtml
       + '<fieldset><legend>Checklist de verificação</legend>'+legendaHtml+checklistHtml+'</fieldset>'
       + '<fieldset><legend>Não conformidades</legend>'
-        // v1.36: fotos da desforma entram aqui como não conformidades (modulos/nc/desforma.js)
-        + (!tipoInfo && id ? '<div class="desforma-barra"><button type="button" class="btn desforma-btn" id="fvs-desforma">📷 Pendências da desforma (fotos)</button>'
-            + '<span class="hint">'+(d.rastreabilidadeId ? 'tire as fotos e mande para a empresa de forma' : 'ligue a rastreabilidade desta concretagem para registrar')+'</span></div>' : '')
         + ncListFieldHtml(d)+'</fieldset>'
       + '<fieldset><legend>Observações</legend>'+field("","observacoes",d.observacoes,"textarea")+'</fieldset>'
       + '<fieldset><legend>Rastreabilidade de concreto vinculada</legend>'+linkHtml+'</fieldset>'
@@ -3227,8 +3213,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
 
   /* ---- v1.36: abas da ficha de concretagem ----
      Concretagem (o formulário de sempre) · FVS do local (todas as fichas FVS
-     dos pavimentos desta concretagem, de qualquer tipo, + pendências de
-     desforma) · Controle tecnológico (resultados de cada BT e, para a nota que
+     dos pavimentos desta concretagem, de qualquer tipo) · Controle tecnológico (resultados de cada BT e, para a nota que
      não atingiu o fck, a planta com só aquela BT). Trocar de aba só mostra/
      esconde: o que foi digitado continua lá. */
   function rastAbaAtual(){ return (draft && draft.abaRast) || "concretagem"; }
@@ -3289,7 +3274,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       + (pvs.length ? '' : '<div class="hint">Escolha o pavimento em “Bloco / Pavimento” (aba Concretagem) para ver as FVS daquele local.</div>')
       + (itens ? '<div class="rast-fvs-lista">'+itens+'</div>' : (pvs.length ? '<div class="hint">Nenhuma FVS desse pavimento ainda.</div>' : ''))
       + (pvs.length ? '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">'
-          + (id ? '<button type="button" class="btn primary" data-desforma-rast="'+escapeHtml(id)+'">Pendências da desforma (fotos)</button>' : '')
           + '<button type="button" class="btn" id="rast-nova-fvs-local">+ Nova FVS deste local</button></div>' : '')
     + '</fieldset>';
   }
@@ -3340,28 +3324,30 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!tentarFecharModal()) return;
       openTipoChooser(function(tipo){ openModal("fvs", null, tipo, { pavimento:pv }); });
     });
-    m.querySelectorAll("[data-desforma-rast]").forEach(function(b){
-      b.addEventListener("click", function(){ abrirDesforma({ rastId:b.getAttribute("data-desforma-rast") }); });
-    });
     rastDesenharCtMapa(m);
   }
 
   // Monta o rótulo + linha da legenda de uma área demarcada, reaproveitado
   // tanto no HTML inicial do modal quanto na atualização ao vivo (sem
   // recriar o modal inteiro) depois de fechar/remover uma área.
-  function mapaLegendaLinhaHtml(a, ai, linhasFicha, cor){
+  function mapaLegendaLinhaHtml(a, seq, linhasFicha, cor, qtd){
     var linha = (linhasFicha||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
     return '<div class="mapa-legenda-item"><span class="mapa-cor" style="background:'+(cor||a.cor)+';"></span>'
-      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+'</span>'
+      + '<span class="mapa-legenda-texto"><span class="mapa-legenda-bt">BT '+escapeHtml(a.linhaSeq)+(qtd>1 ? ' <small>('+qtd+' áreas)</small>' : '')+'</span>'
         + (linha && linha.notaFiscal ? '<span class="mapa-legenda-nf">NF '+escapeHtml(linha.notaFiscal)+'</span>' : '')
       + '</span>'
-      + '<button type="button" class="mapa-rm-area" data-rm-area="'+ai+'" title="Remover área">✕</button></div>';
+      + '<button type="button" class="mapa-rm-area" data-rm-area="'+escapeHtml(seq)+'" title="Remover as áreas desta BT">✕</button></div>';
   }
   function mapaLegendaHtml(d){
     var areas = (d.mapeamento && d.mapeamento.areas) || [];
     if(areas.length===0) return '<div class="hint">Nenhuma área demarcada ainda. Toque em "+ Nova área" e marque os cantos do trecho concretado.</div>';
     var cores = coresDoMapa(d.mapeamento);
-    return '<div class="mapa-legenda">' + areas.map(function(a, ai){ return mapaLegendaLinhaHtml(a, ai, d.linhas, corDaArea(cores, a)); }).join("") + '</div>';
+    // v1.37: uma linha por BT, mesmo com várias áreas da mesma BT
+    var grupos = [];
+    areas.forEach(function(a){ var g = grupos.find(function(x){ return String(x.a.linhaSeq)===String(a.linhaSeq); }); if(g) g.n++; else grupos.push({ a:a, n:1 }); });
+    return '<div class="mapa-legenda">' + grupos.map(function(g){
+      return mapaLegendaLinhaHtml(g.a, g.a.linhaSeq, d.linhas, corDaArea(cores, g.a), g.n);
+    }).join("") + '</div>';
   }
   // Bloco de "mapeamento de concretagem": anexa a planta de forma (PDF) da
   // rastreabilidade e, uma vez anexada, mostra a ferramenta de desenho
@@ -3783,12 +3769,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       wireRastAbas(m);
     }
 
-    var bDesf = m.querySelector("#fvs-desforma");
-    if(bDesf) bDesf.addEventListener("click", async function(){
-      if(!draft.data.rastreabilidadeId){ alert("Esta FVS ainda não está ligada à rastreabilidade da concretagem. Ligue em “Rastreabilidade de concreto vinculada”, mais abaixo, e tente de novo."); return; }
-      if(draftAlterado() && !draft.data.travada && !await saveDraft(true)) return;
-      abrirDesforma({ fvsId:draft.id, rastId:draft.data.rastreabilidadeId });
-    });
     m.querySelector("#btn-save").addEventListener("click", function(){ saveDraft(false); });
     m.querySelector("#btn-export").addEventListener("click", async function(){
       try{ await garantirLibs(); }catch(ex){ alert("Não foi possível carregar o gerador de Excel (verifique a internet)."); return; }
@@ -3907,6 +3887,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       if(!p) return;
       mp.plantaUrl = p.url;
       mp.plantaNome = p.nome;
+      mp.plantaId = id; // v1.37: para achar as peças lidas desta planta
       mp.tipo = p.tipo || "imagem";
       mp.pagina = 1;
       mp.areas = [];
@@ -3944,6 +3925,13 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         mapeamento: d.data.mapeamento,
         linhas: function(){ return d.data.linhas || []; },
         cor: mapaCorSequencia,
+        aoMarcarArea: function(area){ return pecasDaAreaNaBt(d, area); },
+        aoAbrir: function(){
+          return pecasDaPlanta(d.data.mapeamento || {}).then(function(p){
+            return p.length ? p.length+" peças marcadas nesta planta: ao demarcar, as de dentro da área entram sozinhas na BT."
+              : "Esta planta ainda não tem as peças marcadas — na tela Plantas, use “Marcar peças” nesta planta; até lá as peças são digitadas.";
+          });
+        },
         titulo: "Mapeamento — "+rastRotulo(d.data),
         salvar: async function(){ return draft===d ? await saveDraft(true) : false; },
         aoFechar: function(){ if(draft===d) renderModal(); }
@@ -4157,6 +4145,53 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     redesenharSvg(m);
   }
 
+  /* ---- v1.37: peças desenhadas à mão na planta de forma (modo "peças" do editor) ---- */
+  function corPeca(n){ n = String(n||"").toUpperCase(); return /^P(?!AR)/.test(n) ? "#C0392B" : /^V/.test(n) ? "#2E5AAC" : /^L/.test(n) ? "#2E7D46" : "#B8860B"; }
+  function abrirMarcarPecas(id){
+    var p = plantasMap.get(id);
+    if(!p) return;
+    if(somenteLeitura){ alert("Sua conta é só de visualização."); return; }
+    var mp = { plantaUrl:p.url, plantaNome:p.nome, tipo:p.tipo||"imagem", pagina:1,
+      areas:(p.pecasAreas||[]).map(function(a){ return { linhaSeq:a.n, cor:corPeca(a.n), pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; }) };
+    abrirEditorMapa({
+      mapeamento: mp, modoPecas: true,
+      linhas: function(){ return []; },
+      cor: corPeca,
+      titulo: "Peças — "+(p.nome||"planta")+(p.pavimento ? " · "+p.pavimento : ""),
+      salvar: async function(){
+        try{
+          var lista = mp.areas.filter(function(a){ return a.pontos && a.pontos.length>=3; }).map(function(a){ return { n:String(a.linhaSeq), pontos:a.pontos.map(function(q){ return { x:q[0], y:q[1] }; }) }; });
+          await esperarGravacao(plantasCol.doc(id).set({ pecasAreas:lista, pecasAreasEm:nowISO() }, { merge:true }));
+          return true;
+        }catch(ex){ console.error(ex); return false; }
+      },
+      aoFechar: function(){ var v = document.getElementById("view-plantas"); if(v && !v.hidden) renderViewPlantas(); }
+    });
+  }
+
+  /* ---- v1.37: peças da planta → "Peças concretadas" da BT ao demarcar ---- */
+  // só as peças desenhadas à mão em "Marcar peças" (a leitura automática do PDF foi retirada)
+  function pecasDaPlanta(mp){
+    var pl = mp.plantaId ? plantasMap.get(mp.plantaId) : null;
+    if(!pl) plantasMap.forEach(function(p){ if(!pl && p.url===mp.plantaUrl) pl = p; });
+    return Promise.resolve(((pl && pl.pecasAreas) || []).map(function(a){ return { n:a.n, pontos:(a.pontos||[]).map(function(q){ return Array.isArray(q) ? q : [q.x, q.y]; }) }; }));
+  }
+  async function pecasDaAreaNaBt(d, area){
+    var mp = d.data.mapeamento || {};
+    var pecas = await pecasDaPlanta(mp);
+    if(!pecas.length) return "";  // o aviso de “planta sem nomes de peças” já apareceu ao abrir
+    var nomes = pecasNaArea(area.pontos, pecas);
+    if(!nomes.length) return "BT "+area.linhaSeq+": nenhum nome de peça dentro desta área.";
+    var linha = (d.data.linhas||[]).find(function(l){ return String(l.seq)===String(area.linhaSeq); });
+    if(!linha) return "";
+    var atuais = String(linha.pecas||"").split(/\s*(?:[,;\/\n]|\se\s)\s*/i).map(function(x){ return x.trim(); }).filter(Boolean);
+    var chave = function(x){ return String(x).toUpperCase().replace(/\s+/g, ""); };
+    var novas = nomes.filter(function(n){ return !atuais.some(function(a){ return chave(a)===chave(n); }); });
+    if(!novas.length) return "BT "+area.linhaSeq+": "+nomes.join(", ")+" — já estavam nas peças.";
+    linha.pecas = atuais.concat(novas).join(", ");
+    return "BT "+area.linhaSeq+": "+novas.join(", ")+" entraram nas peças concretadas.";
+  }
+
   function abrirSeletorSequencia(m){
     var sel = m.querySelector("#mapa-seq-select");
     if(sel){
@@ -4237,8 +4272,10 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function wireLegendaAreas(m){
     m.querySelectorAll("[data-rm-area]").forEach(function(btn){
       btn.onclick = function(){
-        var idx = +btn.getAttribute("data-rm-area");
-        draft.data.mapeamento.areas.splice(idx,1);
+        var seq = btn.getAttribute("data-rm-area"), mpL = draft.data.mapeamento;
+        var n = mpL.areas.filter(function(a){ return String(a.linhaSeq)===seq; }).length;
+        if(!confirm(n>1 ? "Remover as "+n+" áreas da BT "+seq+"?" : "Remover a área da BT "+seq+"?")) return;
+        mpL.areas = mpL.areas.filter(function(a){ return String(a.linhaSeq)!==seq; });
         atualizarLegendaMapa(m);
         redesenharSvg(m);
       };
@@ -4300,7 +4337,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
         textos:function(a){ return { bt:"BT "+a.linhaSeq, nf:nfDaArea(a) }; },
         titulo:"Mapeamento da concretagem — "+rastRotulo(draft.data),
         subtitulo:"Planta: "+(mp.plantaNome||"—")+"   ·   Data: "+(fmtDateBR(draft.data.data||"")||"—"),
-        legenda:areas.map(function(a){ return { cor:a.cor, texto:"BT "+a.linhaSeq+(nfDe(a) ? " · NF "+nfDe(a) : "") }; }) });
+        legenda:areas.filter(function(a, i){ return areas.findIndex(function(b){ return String(b.linhaSeq)===String(a.linhaSeq); })===i; })
+          .map(function(a){ return { cor:a.cor, texto:"BT "+a.linhaSeq+(nfDe(a) ? " · NF "+nfDe(a) : "") }; }) });
       triggerDownload(new Blob([out], { type:"application/pdf" }), "mapeamento_"+(draft.data.data||"sem_data")+"_"+safeName(draft.data.blocoPav||"").slice(0,30)+".pdf");
       if(statusEl) statusEl.textContent = "PDF gerado ("+Math.round(out.length/1024)+" KB) — mesma qualidade da planta original.";
     }catch(ex){
@@ -4324,7 +4362,8 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
     // cabeçalho e legenda crescem junto com a planta (k = 1 numa planta de 2000 px)
     var k = Math.max(1, vw/2000);
     var padMargem = Math.round(24*k), padTopo = Math.round(74*k), linhaLegenda = Math.round(28*k);
-    var alturaLegenda = areas.length ? (linhaLegenda*areas.length + Math.round(20*k)) : Math.round(36*k);
+    var legendaBts = []; areas.forEach(function(a){ if(!legendaBts.some(function(x){ return String(x.linhaSeq)===String(a.linhaSeq); })) legendaBts.push(a); }); // v1.37: uma linha por BT
+    var alturaLegenda = legendaBts.length ? (linhaLegenda*legendaBts.length + Math.round(20*k)) : Math.round(36*k);
     var out = document.createElement("canvas");
     out.width = vw + padMargem*2;
     out.height = padTopo + vh + alturaLegenda + padMargem;
@@ -4371,7 +4410,7 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       ctx.fillStyle = "#666666"; ctx.font = Math.round(13*k)+"px Arial, Helvetica, sans-serif";
       ctx.fillText("Nenhuma área demarcada.", padMargem, yLeg);
     }else{
-      areas.forEach(function(a, ai){
+      legendaBts.forEach(function(a, ai){
         var linha = (draft.data.linhas||[]).find(function(l){ return String(l.seq)===String(a.linhaSeq); });
         var y = yLeg + ai*linhaLegenda;
         ctx.fillStyle = a.cor;
@@ -4577,7 +4616,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
   function wireGlobal(){
     document.getElementById("btn-new-fvs").addEventListener("click", function(){ openTipoChooser(); });
     document.getElementById("btn-new-rast").addEventListener("click", function(){ openModal("rast", null); });
-    document.getElementById("btn-new-desforma").addEventListener("click", function(){ abrirDesforma({}); });
     document.getElementById("btn-view-pavimento").addEventListener("click", function(){ showViewPavimento(); });
     document.getElementById("btn-view-ct").addEventListener("click", function(){ showViewCt(); });
     document.getElementById("btn-view-plantas").addEventListener("click", function(){ showViewPlantas(); });
@@ -4667,7 +4705,6 @@ dbf.enablePersistence({ synchronizeTabs: true }).catch(function(e){ console.warn
       out.push({ grupo:"Telas", titulo:"Minha assinatura", icone:"pen", busca:"assinatura assinar", abrir:abrirMinhaAssinatura });
       out.push({ grupo:"Ações", titulo:"Nova ficha FVS", icone:"plus", busca:"nova ficha fvs criar", abrir:function(){ openTipoChooser(); } });
       out.push({ grupo:"Ações", titulo:"Nova rastreabilidade de concreto", icone:"plus", busca:"nova rastreabilidade concreto criar betonada", abrir:function(){ openModal("rast", null); } });
-      out.push({ grupo:"Ações", titulo:"Pendências da desforma (fotos)", icone:"alert", busca:"desforma pendencia foto freiba forma relatorio fotografico", abrir:function(){ abrirDesforma({}); } });
       var fichas = [];
       fvsMap.forEach(function(f, id){ fichas.push({ id:id, f:f }); });
       fichas.sort(function(a,b){ return (b.f.dataConcretagem||b.f.dataAbertura||"").localeCompare(a.f.dataConcretagem||a.f.dataAbertura||""); });

@@ -41,10 +41,14 @@ function esc(s) {
  *  salvar: async () => boolean   (grava a ficha; true se ok)
  *  titulo: texto do cabeçalho
  *  aoFechar: () => void
+ *  modoPecas: true = desenhar as PEÇAS da planta (P12, V105…) em vez das BTs (v1.37):
+ *             cada área recebe um nome digitado (guardado em linhaSeq)
  */
 export async function abrirEditorMapa(opts) {
   const mp = opts.mapeamento;
   if (!mp.areas) mp.areas = [];
+  const PECAS = !!opts.modoPecas;
+  const nomeArea = (a) => (PECAS ? String(a.linhaSeq) : "BT " + a.linhaSeq);
 
   const raiz = document.createElement("div");
   raiz.className = "edmapa";
@@ -66,6 +70,7 @@ export async function abrirEditorMapa(opts) {
       <button type="button" class="edmapa-btn redondo" data-acao="zoom-mais" aria-label="Aproximar">+</button>
       <button type="button" class="edmapa-btn redondo" data-acao="zoom-menos" aria-label="Afastar">−</button>
       <button type="button" class="edmapa-btn redondo" data-acao="ajustar" aria-label="Ajustar à tela">⤢</button>
+      <button type="button" class="edmapa-btn redondo" data-acao="rotulos" aria-label="Mostrar ou ocultar os rótulos" title="Mostrar / ocultar rótulos">Aa</button>
     </div>
     <div class="edmapa-base" data-base></div>
     <canvas class="edmapa-lupa" data-lupa hidden aria-hidden="true"></canvas>
@@ -79,6 +84,12 @@ export async function abrirEditorMapa(opts) {
   const svg = raiz.querySelector("[data-svg]");
   const base = raiz.querySelector("[data-base]");
   const salvoEl = raiz.querySelector("[data-salvo]");
+  // aviso curto no topo (ex.: "BT 3: P12, V105 e L5 entraram nas peças")
+  const avisoEl = document.createElement("div");
+  avisoEl.className = "edmapa-aviso"; avisoEl.hidden = true;
+  raiz.appendChild(avisoEl);
+  let avisoTimer = null;
+  function avisar(t) { avisoEl.textContent = t; avisoEl.hidden = false; clearTimeout(avisoTimer); avisoTimer = setTimeout(() => { avisoEl.hidden = true; }, 6000); }
   const lupa = raiz.querySelector("[data-lupa]");
   const detalhe = raiz.querySelector("[data-detalhe]");
 
@@ -87,6 +98,10 @@ export async function abrirEditorMapa(opts) {
   let s = 1, tx = 0, ty = 0, sFit = 1; // transformação mundo → tela
   let modo = "ver";                    // "ver" | "desenhar" | "escolher-bt"
   let pontos = [];                     // área em desenho (normalizada)
+  // v1.37: editar uma área já feita (arrastar os cantos, trocar BT/nome, redesenhar) e rótulos ocultáveis
+  let editIdx = -1, trocando = false, redesenhando = -1;
+  let mostrarRotulos = true;
+  try { mostrarRotulos = localStorage.getItem("traco-edmapa-rotulos") !== "0"; } catch (ex) { /* sem armazenamento */ }
   let salvando = false, salvarDeNovo = false;
   // v1.17: zoom nítido — página do PDF guardada para redesenhar só o trecho visível
   let pagPdf = null, escalaBase = 1, detInfo = null, detTimer = null, detTarefa = null, detGeracao = 0;
@@ -128,6 +143,8 @@ export async function abrirEditorMapa(opts) {
     raiz.querySelector("[data-carregando]").textContent = "Não foi possível carregar a planta. Verifique a internet e tente de novo.";
   }
   raiz.querySelector("[data-carregando]").hidden = W > 1;
+  // v1.37: diz logo ao abrir se a planta tem os nomes das peças (P, V, L…) para preencher sozinho
+  if (opts.aoAbrir) Promise.resolve(opts.aoAbrir()).then((msg) => { if (msg) avisar(msg); }).catch((ex) => console.warn(ex));
   mundo.style.width = W + "px";
   mundo.style.height = H + "px";
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -225,6 +242,7 @@ export async function abrirEditorMapa(opts) {
   // e cores que não se confundem entre vizinhas — refeitos só quando algo muda
   let cacheMapa = { chave: null, rotulos: [], cores: new Map() };
   function textosDe(a) {
+    if (PECAS) return { bt: String(a.linhaSeq), nf: "" };
     const lin = (opts.linhas() || []).find((l) => String(l.seq) === String(a.linhaSeq));
     return { bt: "BT " + a.linhaSeq, nf: lin && String(lin.notaFiscal || "").trim() ? "NF: " + String(lin.notaFiscal).trim() : "" };
   }
@@ -247,9 +265,16 @@ export async function abrirEditorMapa(opts) {
       svg.appendChild(el("polygon", { points: a.pontos.map(pt).join(" "), fill: corDe(a), "fill-opacity": 0.32, stroke: corDe(a), "stroke-width": 2.5 * px }));
     });
     // rótulos por cima de todas as áreas: "BT 1" e, embaixo, a NF da betonada
-    mp.areas.forEach((a, i) => {
+    if (mostrarRotulos) mp.areas.forEach((a, i) => {
       if (plano.rotulos[i]) rotuloSvg(svg, plano.rotulos[i], textosDe(a), corDe(a));
     });
+    // área em edição: contorno destacado e uma bolinha em cada canto (arrastar para ajustar)
+    const ed = modo === "editar" && mp.areas[editIdx];
+    if (ed) {
+      svg.appendChild(el("polygon", { points: ed.pontos.map(pt).join(" "), fill: "none", stroke: "#fff", "stroke-width": 6 * px }));
+      svg.appendChild(el("polygon", { points: ed.pontos.map(pt).join(" "), fill: corDe(ed), "fill-opacity": 0.2, stroke: corDe(ed), "stroke-width": 3 * px, "stroke-dasharray": `${8 * px},${5 * px}` }));
+      ed.pontos.forEach((p) => svg.appendChild(el("circle", { cx: p[0] * W, cy: p[1] * H, r: 10 * px, fill: "#fff", stroke: corDe(ed), "stroke-width": 3.5 * px })));
+    }
     if (pontos.length) {
       if (pontos.length > 1) {
         svg.appendChild(el("polyline", { points: pontos.map(pt).join(" ") + (pontos.length > 2 ? " " + pt(pontos[0]) : ""), fill: pontos.length > 2 ? "rgba(192,57,43,.15)" : "none", stroke: "#c0392b", "stroke-width": 2.5 * px, "stroke-dasharray": `${8 * px},${5 * px}` }));
@@ -267,13 +292,27 @@ export async function abrirEditorMapa(opts) {
   function renderBase() {
     if (modo === "desenhar") {
       base.innerHTML = `
-        <div class="edmapa-dica">Toque nos <b>cantos</b> da área concretada. <b>Segure o dedo</b> para abrir a lupa e acertar a linha. Arraste para mover, dois dedos para zoom.</div>
+        <div class="edmapa-dica">Toque nos <b>cantos</b> ${PECAS ? "da peça" : "da área concretada"}. <b>Segure o dedo</b> para abrir a lupa e acertar a linha. Arraste para mover, dois dedos para zoom.</div>
         <div class="edmapa-linha">
           <span class="edmapa-cont">${pontos.length} ponto(s)</span>
           <button type="button" class="edmapa-btn" data-acao="desfazer" ${pontos.length ? "" : "disabled"}>↶ Desfazer</button>
           <button type="button" class="edmapa-btn" data-acao="cancelar">Cancelar</button>
           <button type="button" class="edmapa-btn primario" data-acao="fechar-area" ${pontos.length >= 3 ? "" : "disabled"}>Fechar área</button>
         </div>`;
+    } else if (modo === "escolher-bt" && PECAS) {
+      base.innerHTML = `
+        <div class="edmapa-dica">Qual é esta peça? (ex.: P12, V105, L3)</div>
+        <div class="edmapa-linha">
+          ${["P", "V", "L", "PAR", "ESC"].map((x) => `<button type="button" class="edmapa-btn" data-prefixo="${x}">${x}</button>`).join("")}
+          <input type="text" class="edmapa-nome-peca" data-nome-peca autocomplete="off" autocapitalize="characters" placeholder="nome da peça" style="flex:1;min-width:110px;font-size:16px;padding:8px;border-radius:8px;border:0;">
+        </div>
+        <div class="edmapa-linha">
+          <button type="button" class="edmapa-btn" data-acao="voltar-desenho">← Voltar aos pontos</button>
+          <button type="button" class="edmapa-btn primario" data-acao="confirmar-peca">Guardar peça</button>
+        </div>`;
+      const inp = base.querySelector("[data-nome-peca]");
+      setTimeout(() => inp.focus(), 50);
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") base.querySelector('[data-acao="confirmar-peca"]').click(); });
     } else if (modo === "escolher-bt") {
       const bts = linhasBT();
       base.innerHTML = `
@@ -284,19 +323,62 @@ export async function abrirEditorMapa(opts) {
             : `<div class="edmapa-dica">Nenhuma betonada (BT) lançada nesta ficha ainda. Cadastre as betonadas no formulário e volte aqui.</div>`}
         </div>
         <div class="edmapa-linha"><button type="button" class="edmapa-btn" data-acao="voltar-desenho">← Voltar aos pontos</button></div>`;
+    } else if (modo === "editar" && mp.areas[editIdx]) {
+      const a = mp.areas[editIdx];
+      const irmas = mp.areas.filter((x) => String(x.linhaSeq) === String(a.linhaSeq)).length;
+      base.innerHTML = `
+        <div class="edmapa-dica">Editando <b>${esc(nomeArea(a))}</b>${irmas > 1 ? " (" + irmas + " áreas — toque na outra para editá-la)" : ""}: arraste as bolinhas para ajustar os cantos.</div>
+        <div class="edmapa-linha">
+          <button type="button" class="edmapa-btn" data-acao="trocar">${PECAS ? "Trocar nome" : "Trocar BT"}</button>
+          <button type="button" class="edmapa-btn" data-acao="redesenhar">Redesenhar</button>
+          <button type="button" class="edmapa-btn" data-acao="excluir-area">Excluir</button>
+          <button type="button" class="edmapa-btn primario" data-acao="pronto">✓ Pronto</button>
+        </div>`;
     } else {
+      // v1.37: uma linha por BT (ou peça), mesmo com várias áreas; tocar edita
+      const grupos = [];
+      mp.areas.forEach((a, i) => {
+        const g = grupos.find((x) => String(x.seq) === String(a.linhaSeq));
+        if (g) g.idx.push(i); else grupos.push({ seq: a.linhaSeq, idx: [i] });
+      });
       base.innerHTML = `
         <div class="edmapa-linha">
-          <button type="button" class="edmapa-btn primario grande" data-acao="nova-area">+ Nova área</button>
+          <button type="button" class="edmapa-btn primario grande" data-acao="nova-area">${PECAS ? "+ Nova peça" : "+ Nova área"}</button>
         </div>
+        ${mp.areas.length ? `<div class="edmapa-dica">Toque numa ${PECAS ? "peça" : "área"} (aqui ou na planta) para editar.</div>` : ""}
         <div class="edmapa-areas">
-          ${mp.areas.length ? mp.areas.map((a, i) => {
+          ${grupos.length ? grupos.map((g) => {
+            const a = mp.areas[g.idx[0]];
             const l = (opts.linhas() || []).find((x) => String(x.seq) === String(a.linhaSeq));
-            return `<span class="edmapa-chip" style="--cor:${corDe(a)}"><i></i>BT ${esc(a.linhaSeq)}${l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}
-              <button type="button" data-remover="${i}" aria-label="Remover área">✕</button></span>`;
-          }).join("") : `<span class="edmapa-dica">Nenhuma área demarcada ainda.</span>`}
+            return `<span class="edmapa-chip" style="--cor:${corDe(a)}"><button type="button" class="edmapa-chip-nome" data-editar="${g.idx[0]}"><i></i>${esc(nomeArea(a))}${!PECAS && l && l.notaFiscal ? " · NF " + esc(l.notaFiscal) : ""}${g.idx.length > 1 ? " (" + g.idx.length + " áreas)" : ""}</button>
+              <button type="button" data-remover="${g.idx.join(",")}" aria-label="Remover">✕</button></span>`;
+          }).join("") : `<span class="edmapa-dica">Nenhuma ${PECAS ? "peça marcada" : "área demarcada"} ainda.</span>`}
         </div>`;
     }
+  }
+
+  let vertMexido = false, editIdxAnterior = -1;
+  function editar(i) {
+    if (!mp.areas[i]) return;
+    editIdx = i; editIdxAnterior = i; trocando = false; modo = "editar";
+    renderBase(); desenhar();
+  }
+  // área da planta no ponto (a menor que contém o ponto — a de cima)
+  function areaNoPonto(u, v) {
+    let melhor = -1, menor = Infinity;
+    mp.areas.forEach((a, i) => {
+      if (!a.pontos || a.pontos.length < 3) return;
+      let d = false;
+      for (let k = 0, j = a.pontos.length - 1; k < a.pontos.length; j = k++) {
+        const p = a.pontos[k], q = a.pontos[j];
+        if ((p[1] > v) !== (q[1] > v) && u < (q[0] - p[0]) * (v - p[1]) / (q[1] - p[1]) + p[0]) d = !d;
+      }
+      if (!d) return;
+      let ar = 0;
+      for (let k = 0, j = a.pontos.length - 1; k < a.pontos.length; j = k++) ar += (a.pontos[j][0] + a.pontos[k][0]) * (a.pontos[j][1] - a.pontos[k][1]);
+      if (Math.abs(ar) < menor) { menor = Math.abs(ar); melhor = i; }
+    });
+    return melhor;
   }
 
   // ---------- salvar ----------
@@ -315,21 +397,54 @@ export async function abrirEditorMapa(opts) {
 
   // ---------- ações ----------
   raiz.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-acao],[data-bt],[data-remover]");
+    const b = e.target.closest("[data-acao],[data-bt],[data-remover],[data-prefixo],[data-editar]");
     if (!b || b.disabled) return;
+    if (b.dataset.prefixo != null) {
+      const inp = base.querySelector("[data-nome-peca]");
+      if (inp) { inp.value = b.dataset.prefixo; inp.focus(); }
+      return;
+    }
+    if (b.dataset.editar != null) { editar(+b.dataset.editar); return; }
+    if (b.dataset.acao === "confirmar-peca") {
+      const inp = base.querySelector("[data-nome-peca]");
+      const nome = String(inp ? inp.value : "").trim().toUpperCase().replace(/\s+/g, "");
+      if (!nome) { if (inp) inp.focus(); return; }
+      if (trocando && mp.areas[editIdx]) {
+        trocando = false; Object.assign(mp.areas[editIdx], { linhaSeq: nome, cor: opts.cor(nome) });
+        modo = "editar"; renderBase(); desenhar(); salvarAgora();
+        return;
+      }
+      mp.areas.push({ pontos: pontos.slice(), linhaSeq: nome, cor: opts.cor(nome) });
+      pontos = []; modo = "ver";
+      renderBase(); desenhar(); salvarAgora();
+      return;
+    }
+    if (b.dataset.bt != null && trocando && mp.areas[editIdx]) {
+      const seq = b.dataset.bt, area = mp.areas[editIdx];
+      trocando = false; Object.assign(area, { linhaSeq: seq, cor: opts.cor(seq) });
+      modo = "editar"; renderBase(); desenhar();
+      Promise.resolve(opts.aoMarcarArea ? opts.aoMarcarArea(area) : "").catch(() => "").then((msg) => { if (msg) avisar(msg); salvarAgora(); });
+      return;
+    }
     if (b.dataset.bt != null) {
       const seq = b.dataset.bt;
-      mp.areas.push({ pontos: pontos.slice(), linhaSeq: seq, cor: opts.cor(seq) });
+      const area = { pontos: pontos.slice(), linhaSeq: seq, cor: opts.cor(seq) };
+      mp.areas.push(area);
       pontos = [];
       modo = "ver";
       renderBase(); desenhar();
-      salvarAgora();
+      // v1.37: as peças da planta que caem dentro da área entram na BT antes de salvar
+      Promise.resolve(opts.aoMarcarArea ? opts.aoMarcarArea(area) : "").catch((ex) => { console.error(ex); return ""; })
+        .then((msg) => { if (msg) avisar(msg); renderBase(); salvarAgora(); });
       return;
     }
     if (b.dataset.remover != null) {
-      const i = +b.dataset.remover;
-      if (!confirm("Remover a área do BT " + mp.areas[i].linhaSeq + "?")) return;
-      mp.areas.splice(i, 1);
+      const idx = String(b.dataset.remover).split(",").map(Number).filter((i) => mp.areas[i]);
+      if (!idx.length) return;
+      const nome = nomeArea(mp.areas[idx[0]]);
+      if (!confirm(idx.length > 1 ? "Remover as " + idx.length + " áreas de " + nome + "?" : "Remover " + (PECAS ? "a peça " : "a área de ") + nome + "?")) return;
+      idx.sort((x, y) => y - x).forEach((i) => mp.areas.splice(i, 1));
+      editIdx = -1;
       renderBase(); desenhar();
       salvarAgora();
       return;
@@ -341,9 +456,34 @@ export async function abrirEditorMapa(opts) {
       case "ajustar": ajustar(); break;
       case "nova-area": modo = "desenhar"; pontos = []; renderBase(); desenhar(); break;
       case "desfazer": pontos.pop(); renderBase(); desenhar(); break;
-      case "cancelar": modo = "ver"; pontos = []; renderBase(); desenhar(); break;
-      case "fechar-area": if (pontos.length >= 3) { modo = "escolher-bt"; renderBase(); } break;
-      case "voltar-desenho": modo = "desenhar"; renderBase(); break;
+      case "cancelar":
+        pontos = [];
+        if (redesenhando >= 0) { editIdx = redesenhando; redesenhando = -1; modo = "editar"; } else modo = "ver";
+        renderBase(); desenhar(); break;
+      case "fechar-area":
+        if (pontos.length < 3) break;
+        if (redesenhando >= 0 && mp.areas[redesenhando]) { // redesenhar: mesma BT/peça, contorno novo
+          const area = mp.areas[redesenhando];
+          area.pontos = pontos.slice(); pontos = []; editIdx = redesenhando; redesenhando = -1; modo = "editar";
+          renderBase(); desenhar();
+          Promise.resolve(!PECAS && opts.aoMarcarArea ? opts.aoMarcarArea(area) : "").catch(() => "").then((msg) => { if (msg) avisar(msg); salvarAgora(); });
+          break;
+        }
+        modo = "escolher-bt"; renderBase(); break;
+      case "rotulos":
+        mostrarRotulos = !mostrarRotulos;
+        try { localStorage.setItem("traco-edmapa-rotulos", mostrarRotulos ? "1" : "0"); } catch (ex) { /* sem armazenamento */ }
+        avisar(mostrarRotulos ? "Rótulos à mostra" : "Rótulos ocultos (toque em Aa para mostrar)");
+        desenhar(); break;
+      case "trocar": trocando = true; modo = "escolher-bt"; renderBase(); break;
+      case "redesenhar": redesenhando = editIdx; pontos = []; modo = "desenhar"; renderBase(); desenhar(); break;
+      case "excluir-area":
+        if (!mp.areas[editIdx] || !confirm("Excluir " + (PECAS ? "a peça " : "esta área de ") + nomeArea(mp.areas[editIdx]) + "?")) break;
+        mp.areas.splice(editIdx, 1); editIdx = -1; modo = "ver"; renderBase(); desenhar(); salvarAgora(); break;
+      case "pronto": editIdx = -1; modo = "ver"; renderBase(); desenhar();
+        if (vertMexido) { vertMexido = false; const a = mp.areas[editIdxAnterior]; if (a && !PECAS && opts.aoMarcarArea) Promise.resolve(opts.aoMarcarArea(a)).then((msg) => { if (msg) avisar(msg); salvarAgora(); }); }
+        break;
+      case "voltar-desenho": if (trocando) { trocando = false; modo = "editar"; } else modo = "desenhar"; renderBase(); break;
       case "fechar": fechar(); break;
     }
   });
@@ -416,6 +556,15 @@ export async function abrirEditorMapa(opts) {
     const r = palco.getBoundingClientRect();
     if (dedos.size === 1) {
       gesto = { tipo: "toque", x0: e.clientX, y0: e.clientY, t0: Date.now(), tx0: tx, ty0: ty, x: e.clientX, y: e.clientY };
+      // editando: começar em cima de uma bolinha = arrastar aquele canto
+      if (modo === "editar" && mp.areas[editIdx]) {
+        let vi = -1, dmin = 26;
+        mp.areas[editIdx].pontos.forEach((p, k) => {
+          const d = Math.hypot(r.left + tx + p[0] * W * s - e.clientX, r.top + ty + p[1] * H * s - e.clientY);
+          if (d < dmin) { dmin = d; vi = k; }
+        });
+        if (vi >= 0) { gesto.tipo = "vertice"; gesto.vi = vi; }
+      }
       // segurar parado no modo "Nova área" (dedo ou caneta) → lupa
       if (modo === "desenhar" && e.pointerType !== "mouse") {
         const g = gesto;
@@ -444,6 +593,10 @@ export async function abrirEditorMapa(opts) {
       const wx = (gesto.mx0 - gesto.tx0) / gesto.s0, wy = (gesto.my0 - gesto.ty0) / gesto.s0;
       s = novoS; tx = mx - wx * s; ty = my - wy * s;
       aplicar();
+    } else if (dedos.size === 1 && gesto.tipo === "vertice" && mp.areas[editIdx]) {
+      mp.areas[editIdx].pontos[gesto.vi] = telaParaNorm(e.clientX, e.clientY);
+      vertMexido = true;
+      desenhar();
     } else if (dedos.size === 1 && gesto.tipo === "lupa") {
       gesto.x = e.clientX; gesto.y = e.clientY;
       mostrarLupa(e.clientX, e.clientY);
@@ -468,10 +621,20 @@ export async function abrirEditorMapa(opts) {
       if (dedos.size === 0) gesto = null;
       return;
     }
+    if (gesto && gesto.tipo === "vertice") {
+      if (dedos.size === 0) { gesto = null; salvarAgora(); }
+      return;
+    }
     if (gesto && gesto.tipo === "toque" && dedos.size === 0 && e.type === "pointerup"
         && Date.now() - gesto.t0 < TOQUE_MAX_MS && modo === "desenhar") {
       pontos.push(telaParaNorm(e.clientX, e.clientY));
       renderBase(); desenhar();
+    } else if (gesto && gesto.tipo === "toque" && dedos.size === 0 && e.type === "pointerup"
+        && Date.now() - gesto.t0 < TOQUE_MAX_MS && (modo === "ver" || modo === "editar")) {
+      // tocar numa área (fora das bolinhas) = editar essa área
+      const [u, v] = telaParaNorm(e.clientX, e.clientY);
+      const i = areaNoPonto(u, v);
+      if (i >= 0 && i !== editIdx) editar(i);
     }
     if (dedos.size === 0) gesto = null;
     else if (dedos.size === 1) {
@@ -496,7 +659,7 @@ export async function abrirEditorMapa(opts) {
   window.__edmapaFechar = () => fechar();
 
   function fechar() {
-    if (modo !== "ver" && pontos.length && !confirm("Descartar a área que está sendo desenhada?")) return;
+    if (modo !== "ver" && modo !== "editar" && pontos.length && !confirm("Descartar a área que está sendo desenhada?")) return;
     delete window.__edmapaFechar;
     clearTimeout(detTimer); detGeracao++;
     window.removeEventListener("resize", aoRedimensionar);

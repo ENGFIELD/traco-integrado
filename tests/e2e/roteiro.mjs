@@ -60,6 +60,9 @@ await db.doc("rastreabilidade/r3").set({ data: diasAtras(40), blocoPav: "Piso do
   linhas: [linha(1, "08001", "L6"), linha(2, "08002", "V3")], fechado: false, createdAt: T, updatedAt: T,
   mapeamento: { plantaUrl: PLANTA, plantaNome: "Forma 6º pav", tipo: "imagem", pagina: 1, areas: [{ pontos: quad(0.1, 0.1, 0.4, 0.4), linhaSeq: 1, cor: "#2E5AAC" }, { pontos: quad(0.5, 0.1, 0.012, 0.05), linhaSeq: 2, cor: "#2E7D46" }] } });
 await db.doc("controleTecnologico/nf_08002").set({ notaRemessa: "08002", dataConcretagem: diasAtras(40), fck: 40, r28: 32, data28: diasAtras(12), local: "6º pav V3", anteriorAoSistema: false, atualizadoEm: T });
+await db.doc("plantas/p1").set({ nome: "Forma 6º pav", pavimento: "Piso do 6º Pavimento Tipo", url: PLANTA, tipo: "imagem", criadoEm: T,
+  pecas: [{ n: "P30", x: 0.72, y: 0.7 }, { n: "V31", x: 0.78, y: 0.75 }, { n: "L9", x: 0.3, y: 0.3 }] });
+await db.doc("plantas/p2").set({ nome: "Arquitetura 6º pav", pavimento: "Piso do 6º Pavimento Tipo", disciplina: "Arquitetura", url: PLANTA, tipo: "imagem", criadoEm: T });
 await db.doc("tarefas/t1").set({ titulo: "Completar betonadas de 05/10", para: "Matheus Alves", status: "aberta", criadoPor: "suellen.alves@sig.eng.br", criadoEm: T, atualizadoEm: T });
 
 // ---------- navegador ----------
@@ -158,24 +161,63 @@ try {
   await m.click('[data-rast-aba="concretagem"]');
   ok(await m.isVisible('[data-line-field="pecas"][data-line-idx="0"]'), "aba Concretagem: formulário de sempre");
 
-  // 2f) v1.36: pendências da desforma → não conformidade na FVS 04 da concretagem (criada e ligada)
-  await m.click('[data-rast-aba="fvs"]');
-  await m.click('[data-desforma-rast="r3"]'); await m.waitForSelector(".dsf [data-sem-foto]", { timeout: 8000 });
-  await m.click(".dsf [data-sem-foto]");
-  await m.selectOption(".dsf-item [data-campo=elemento]", "Pilar");
-  await m.fill(".dsf-item [data-campo=descricao]", "Bicheira no pilar P12");
-  await foto(m, "desforma-fotos");
-  await m.click(".dsf [data-gravar]");
-  const desf = await esperar(async () => {
-    const q = await db.collection("fvs").where("rastreabilidadeId", "==", "r3").get();
-    const r3 = (await db.doc("rastreabilidade/r3").get()).data();
-    return q.size === 1 && q.docs[0].data().naoConformidades[0].descricao === "Pilar: Bicheira no pilar P12" && q.docs[0].data().naoConformidades[0].origem === "desforma" && r3.fvsId === q.docs[0].id;
-  });
-  ok(desf, "desforma: pendência gravada na FVS 04 criada e ligada à concretagem");
-  ok(await m.isVisible(".dsf [data-enviar]"), "desforma: botão de enviar no WhatsApp");
-  await foto(m, "desforma-enviar");
-  await m.click(".dsf [data-fechar]"); await m.waitForTimeout(300);
+  // 2e1) v1.37: marcar as peças na planta (uma vez), na tela Plantas
   await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+  await irPara(m, "btn-view-plantas");
+  await m.click('[data-marcar-pecas="p1"]'); await m.waitForSelector(".edmapa [data-acao=nova-area]", { timeout: 10000 });
+  await m.waitForTimeout(800);
+  await m.click(".edmapa [data-acao=nova-area]");
+  let cx0 = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  for (const [u, v] of [[0.70, 0.68], [0.75, 0.68], [0.75, 0.73], [0.70, 0.73]]) { await m.mouse.click(cx0.x + u * cx0.w, cx0.y + v * cx0.h); await m.waitForTimeout(150); }
+  await m.click(".edmapa [data-acao=fechar-area]");
+  await m.click('.edmapa [data-prefixo="P"]'); await m.keyboard.type("30");
+  await m.click('.edmapa [data-acao="confirmar-peca"]');
+  ok(await esperar(async () => ((await db.doc("plantas/p1").get()).data().pecasAreas || []).some((a) => a.n === "P30" && a.pontos.length === 4)), "marcar peças: P30 desenhada na planta e guardada");
+  await foto(m, "marcar-pecas");
+  await m.click(".edmapa [data-acao=fechar]").catch(() => {}); await m.waitForTimeout(500);
+  await irPara(m, "btn-nav-board");
+  await m.click('.row[data-rast="r3"] [data-open-rast="r3"]'); await m.waitForSelector("#mapa-abrir-editor", { timeout: 8000 });
+
+  // 2e2) v1.37: ao demarcar uma área, as peças da planta que ficam dentro entram na BT
+  await m.click("#mapa-abrir-editor"); await m.waitForSelector(".edmapa [data-acao=nova-area]", { timeout: 10000 });
+  await m.waitForFunction(() => { const c = document.querySelector(".edmapa [data-carregando]"); return !c || c.hidden || getComputedStyle(c).display === "none"; }, null, { timeout: 10000 }).catch(() => {});
+  await m.click(".edmapa [data-acao=nova-area]");
+  const caixa = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  for (const [u, v] of [[0.65, 0.62], [0.85, 0.62], [0.85, 0.85], [0.65, 0.85]]) { await m.mouse.click(caixa.x + u * caixa.w, caixa.y + v * caixa.h); await m.waitForTimeout(150); }
+  await m.click(".edmapa [data-acao=fechar-area]");
+  await m.click('.edmapa [data-bt="1"]');
+  ok(await esperar(async () => /, P30$/.test((await db.doc("rastreabilidade/r3").get()).data().linhas[0].pecas || "")), "demarcar área: a P30 (desenhada na planta) entra nas peças da BT 1");
+  await foto(m, "editor-pecas");
+  // v1.37: editar a área (arrastar um canto) e lista sem repetir a BT
+  ok((await m.$$eval(".edmapa-chip-nome", (l) => l.map((x) => x.textContent.trim()))).filter((t) => /^BT 1\b/.test(t)).length === 1, "editor: a BT 1 com duas áreas aparece uma vez só na lista");
+  const antes = JSON.stringify((await db.doc("rastreabilidade/r3").get()).data().mapeamento.areas.map((a) => a.pontos));
+  await m.click(".edmapa-chip-nome");
+  await m.waitForSelector('.edmapa [data-acao="pronto"]', { timeout: 5000 });
+  const cx1 = await m.$eval(".edmapa [data-svg]", (s) => { const r = s.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  const canto = await m.$eval(".edmapa [data-svg] circle:last-of-type", (c) => ({ x: +c.getAttribute("cx"), y: +c.getAttribute("cy") }));
+  const vb = await m.$eval(".edmapa [data-svg]", (s) => ({ width: s.viewBox.baseVal.width, height: s.viewBox.baseVal.height }));
+  const sx = cx1.x + (canto.x / vb.width) * cx1.w, sy = cx1.y + (canto.y / vb.height) * cx1.h;
+  await m.mouse.move(sx, sy); await m.mouse.down(); await m.mouse.move(sx + 40, sy + 30, { steps: 6 }); await m.mouse.up();
+  ok(await esperar(async () => JSON.stringify((await db.doc("rastreabilidade/r3").get()).data().mapeamento.areas.map((a) => a.pontos)) !== antes), "editor: arrastar o canto da área grava o contorno novo");
+  await m.click('.edmapa [data-acao="pronto"]');
+  await m.click('.edmapa [data-acao="rotulos"]');
+  ok((await m.$$(".edmapa [data-svg] text")).length === 0, "editor: botão Aa oculta os rótulos");
+  await m.click('.edmapa [data-acao="rotulos"]');
+  await m.click(".edmapa [data-acao=sair], .edmapa [data-acao=fechar]").catch(() => {});
+  await m.waitForTimeout(500);
+
+  ok((await m.$$eval("#mapa-legenda-host .mapa-legenda-bt", (l) => l.map((x) => x.textContent))).filter((t) => /^BT 1\b/.test(t)).length === 1, "ficha: legenda com uma linha por BT (BT 1 com duas áreas)");
+  ok(!(await m.$('header [data-clicar="btn-new-fvs"]')), "topo sem o botão “Nova FVS” (fica na barra lateral)");
+
+  await m.click("#modal-close").catch(() => {}); await m.waitForTimeout(400);
+
+  // 2g) v1.37: plantas por disciplina (as antigas contam como forma) e troca de disciplina
+  await irPara(m, "btn-view-plantas");
+  await m.click('[data-filtro-disc="Arquitetura"]');
+  ok((await m.$$("[data-disc-planta]")).length === 1 && await m.$('[data-disc-planta="p2"]') !== null, "plantas: filtro por disciplina (Arquitetura)");
+  await m.click('[data-filtro-disc=""]');
+  await m.selectOption('[data-disc-planta="p1"]', "Elétrica");
+  ok(await esperar(async () => (await db.doc("plantas/p1").get()).data().disciplina === "Elétrica"), "plantas: trocar a disciplina grava no banco");
 
   // 3) excluir FVS = lixeira (continua no banco, some do app)
   await irPara(m, "btn-nav-board");
